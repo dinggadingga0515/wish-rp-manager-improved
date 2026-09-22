@@ -5,9 +5,9 @@
 // @description  장기 RP용 현재상태·날짜로그·연속성 타임라인·캐릭터 설정을 관리하고, 검수형 AI 생성과 필요한 컨텍스트 자동 주입을 지원합니다.
 // @author       User
 // @license      All Rights Reserved
-// @homepageURL  https://github.com/llljjj0601-cpu/rp-manager
-// @updateURL    https://raw.githubusercontent.com/llljjj0601-cpu/rp-manager/main/RP_Manager.user.js
-// @downloadURL  https://raw.githubusercontent.com/llljjj0601-cpu/rp-manager/main/RP_Manager.user.js
+// @homepageURL  https://github.com/dinggadingga0515/wish-rp-manager-improved
+// @updateURL    https://raw.githubusercontent.com/dinggadingga0515/wish-rp-manager-improved/main/%EC%9C%84%EC%8B%9C_RP_Manager_%EA%B0%9C%EC%84%A0.user.js
+// @downloadURL  https://raw.githubusercontent.com/dinggadingga0515/wish-rp-manager-improved/main/%EC%9C%84%EC%8B%9C_RP_Manager_%EA%B0%9C%EC%84%A0.user.js
 // @match        https://crack.wrtn.ai/stories/*/episodes/*
 // @match        https://crack.wrtn.ai/characters/*/chats/*
 // @match        https://crack.wrtn.ai/u/*/c/*
