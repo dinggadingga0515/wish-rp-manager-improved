@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Manager (타임라인 등 개선)
 // @namespace    local.rp.context.manager
-// @version      0.13.7
+// @version      0.13.71
 // @description  장기 RP용 현재상태·날짜로그·연속성 타임라인·캐릭터 설정을 관리하고, 검수형 AI 생성과 필요한 컨텍스트 자동 주입을 지원합니다.
 // @author       User
 // @license      All Rights Reserved
