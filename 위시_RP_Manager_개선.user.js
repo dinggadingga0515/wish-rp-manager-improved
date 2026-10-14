@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         🪽위시 RP Manager 0.17.15(키메라 버전)
 // @namespace    local.rp.context.manager
-// @version      0.17.15
+// @version      0.17.15.2
 // @description  [키메라 버전] 장기 RP의 현재상태·날짜로그·인물·타임라인·자료집을 관리하고, 검수형 AI 생성·컨텍스트 주입·통합 백업·기존 백업 이사를 지원합니다.
 // @author       User
 // @license      All Rights Reserved
@@ -902,13 +902,13 @@ const wrpmFullBackupV2 = (() => {
   // 버전별 키를 쓰면 구버전과 신버전이 동시에 설치됐을 때 둘 다 실행될 수 있습니다.
   // 모든 버전이 공유하는 고정 키로 중복 실행을 막습니다.
   if(window.__WISH_RP_MANAGER_LOADED__){wrpmStartup.status('duplicate','다른 RP Manager가 실행 중입니다. 버전: '+String(window.__WISH_RP_MANAGER_LOADED__.version||'알 수 없음'));return;}
-  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.17.15', loadedAt: Date.now() };
+  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.17.15.2', loadedAt: Date.now() };
   // 같은 페이지에 남아 있는 v0.8.10 복사본이 뒤늦게 시작되는 경우도 차단합니다.
   window.__RP_MANAGER_0810_LOADED__ = true;
 
   const APP = {
     name: '🪽위시 RP Manager',
-    version: '0.17.15',
+    version: '0.17.15.2',
     releaseStage: '키메라 버전',
     dbName: 'RPContextManagerDB',
     dbVersion: 2,
@@ -23661,7 +23661,7 @@ function renderedContextScope(node) {
 
   function isManagerUiNode(node) {
     const element=node?.nodeType===Node.ELEMENT_NODE?node:node?.parentElement;
-    return !!element?.closest?.('[id^="rpcm-"],[id^="wish-rpcore-"],#wish-rpcm-startup-status,script,style,textarea,button,input,select,[role="button"]');
+    return !!element?.closest?.('[id^="rpcm-"],[id^="wish-rpcore-"],#wish-rpcm-startup-status,script,style,textarea,button,input,select,[role="button"],[contenteditable],[role="textbox"],.ProseMirror,.tiptap');
   }
   function renderedContextWalker(root) {
     return document.createTreeWalker(root,NodeFilter.SHOW_ELEMENT|NodeFilter.SHOW_TEXT|NodeFilter.SHOW_COMMENT,{
@@ -23732,8 +23732,152 @@ function renderedContextScope(node) {
     } finally {state.domSanitizing=false;}
     if(renderedContextPendingRoots.size)renderedContextFlushTimer=setTimeout(flushRenderedContextRoots,16);
   }
+
+  async function rpcmReadNativeEditorSource(editor){
+    const host=editor.closest('[data-message-id],[data-message-group-id]'),room=state.currentRoom;
+    const messageId=host?.getAttribute('data-message-id')||host?.getAttribute('data-message-group-id');
+    if(!room||!messageId)throw new Error('수정할 메시지를 확인하지 못했습니다.');
+    const chatId=String(apiChatIdOf(room)),epoch=state.routeEpoch,scopeKey=getRoomScopeKey(chatId);
+    const current=()=>editor.isConnected&&state.currentRoom===room&&state.routeEpoch===epoch&&String(getChatIdFromPath())===chatId&&getRoomScopeKey(chatId)===scopeKey;
+    const message=await fetchMessage(chatId,String(messageId));
+    if(!current()||!message||messageRoleOf(message)!=='assistant')throw new Error('방 또는 수정 대상이 바뀌었습니다.');
+    rpcmAssertReviewedResponseIdle(message,chatId);
+    const raw=messageTextOf(message),parts=splitReviewedResponse(raw);
+    if(parts.malformed||!parts.found)throw new Error('서버에서 완전한 주입 구간을 확인하지 못했습니다.');
+    return {chatId,messageId:String(messageId),original:parts.text,raw,suffix:parts.suffix,current};
+  }
+  // Native edit UI: keep its model untouched. Orphan END needs a verified raw-body editor.
+  function createRpcmNativeContextMask({readSource=rpcmReadNativeEditorSource,saveBody=writeReviewedResponse,afterSave=()=>notify('본문 저장 완료 · 화면에 예전 내용이 남아 있으면 새로고침해 주세요.','ok',7000)}={}){
+    const sessions=new Map();let timer=null,observer=null,running=false;
+    const properties=['height','min-height','max-height','overflow','display'];
+    const showHint=(session,text)=>{if(session.hint.textContent!==text)session.hint.textContent=text;};
+    const manager=el=>!!el?.closest?.('[id^="rpcm-"],[id^="wish-rpcore-"],#wish-rpcm-startup-status');
+    const visible=el=>!!el?.getClientRects?.().length;
+    const saveButton=el=>String(el?.closest?.('button,[role="button"]')?.textContent||'').replace(/\s/g,'')==='수정완료';
+    function panelOf(editor){
+      if(manager(editor)||editor.classList.contains('__chat_input_textarea'))return null;
+      for(let p=editor.parentElement,depth=0;p&&depth<8;p=p.parentElement,depth++){
+        const buttons=[...p.querySelectorAll('button,[role="button"]')].filter(visible);
+        if(buttons.some(saveButton)&&buttons.some(b=>b.textContent.trim()==='취소'))return p;
+      }
+      return null;
+    }
+    function projection(editor){
+      const walker=document.createTreeWalker(editor,NodeFilter.SHOW_TEXT),parts=[];let node,text='';
+      while((node=walker.nextNode())){parts.push({node,start:text.length,end:text.length+node.nodeValue.length});text+=node.nodeValue;}
+      const token='RP_CONTEXT_MANAGER_START',endToken='RP_CONTEXT_MANAGER_END';
+      let start=text.indexOf('<!--'+token);if(start<0)start=text.indexOf(token);
+      const end=text.indexOf(endToken,start<0?0:start);if(start<0||end<start||text.indexOf(token,text.indexOf(token)+token.length)>=0||text.indexOf(endToken,end+endToken.length)>=0)return null;
+      let finish=end+endToken.length;if(text.slice(finish,finish+3)==='-->')finish+=3;
+      if(text.slice(finish).trim())return null;
+      if(start>0&&text[start-1]==='\\')start--;
+      let bodyEnd=start;while(bodyEnd>0&&/\s/.test(text[bodyEnd-1]))bodyEnd--;
+      const point=(offset,next=false)=>{const part=parts.find(p=>next?offset<p.end:offset<=p.end);return part?{node:part.node,offset:Math.max(0,offset-part.start)}:{node:editor,offset:0};};
+      const range=document.createRange();range.selectNodeContents(editor);const boundary=point(bodyEnd);range.setEnd(boundary.node,boundary.offset);
+      const contextBoundary=document.createRange(),contextPoint=point(start,true);contextBoundary.setStart(contextPoint.node,contextPoint.offset);contextBoundary.collapse(true);
+      let bottom=editor.getBoundingClientRect().top;
+      if(bodyEnd){const char=document.createRange(),from=point(bodyEnd-1);char.setStart(from.node,from.offset);char.setEnd(boundary.node,boundary.offset);bottom=char.getBoundingClientRect().bottom;}
+      const style=getComputedStyle(editor),height=Math.max(40,Math.ceil(bottom-editor.getBoundingClientRect().top+(parseFloat(style.paddingBottom)||0)+(parseFloat(style.borderBottomWidth)||0)));
+      return {tail:text.slice(start),range,contextBoundary,height,start,text};
+    }
+    function unclip(session){
+      for(const prop of properties){const prior=session.styles[prop];if(prior.value)session.editor.style.setProperty(prop,prior.value,prior.priority);else session.editor.style.removeProperty(prop);}
+    }
+    function restore(session){
+      unclip(session);
+      session.proxy?.remove();
+      session.hint.remove();for(const [target,type,handler] of session.listeners)target.removeEventListener(type,handler,true);
+      sessions.delete(session.editor);
+    }
+    function beginOrphanEdit(editor,panel){
+      const hint=document.createElement('small');hint.id='rpcm-native-context-'+Math.random().toString(36).slice(2);hint.style.cssText='display:block;padding:4px 10px;color:inherit;font:12px/1.4 system-ui';hint.textContent='수정창의 주입 표지가 빠져 서버 본문을 확인하고 있습니다…';
+      editor.parentElement.insertBefore(hint,editor);
+      const session={editor,panel,hint,source:null,proxy:null,busy:false,styles:Object.fromEntries(properties.map(prop=>[prop,{value:editor.style.getPropertyValue(prop),priority:editor.style.getPropertyPriority(prop)}])),listeners:[]};sessions.set(editor,session);
+      const holdNativeInput=event=>{event.preventDefault();event.stopImmediatePropagation();showHint(session,'서버 원문을 확인 중입니다. 확인 후 표시되는 본문 수정칸을 사용해 주세요.');};
+      for(const type of ['beforeinput','cut','paste']){editor.addEventListener(type,holdNativeInput,true);session.listeners.push([editor,type,holdNativeInput]);}
+      const listener=async event=>{
+        const button=event.target?.closest?.('button,[role="button"]');if(!button)return;
+        if(button.textContent.trim()==='취소'){if(session.busy){event.preventDefault();event.stopImmediatePropagation();showHint(session,'저장 확인 중입니다. 확인이 끝나면 닫을 수 있습니다.');}return;}
+        if(!saveButton(button)){
+          if(session.proxy&&button.textContent.replace(/\s/g,'')==='단어정리'){event.preventDefault();event.stopImmediatePropagation();showHint(session,'본문 전용 수정칸입니다. 이 칸에서 원문을 직접 수정한 뒤 수정 완료를 눌러 주세요.');}return;
+        }
+        event.preventDefault();event.stopImmediatePropagation();
+        if(session.busy)return;
+        if(!session.proxy||!session.source?.current()){showHint(session,'원문 확인이 끝나지 않았거나 방이 바뀌었습니다. 취소하고 다시 열어 주세요.');return;}
+        session.busy=true;session.proxy.readOnly=true;const priorDisabled=button.disabled;button.disabled=true;
+        try{
+          const next=session.proxy.value;
+          const changed=next!==session.source.original;
+          if(changed)await saveBody(session.source.chatId,session.source.messageId,session.source.original,next);
+          if(!session.source.current())throw new Error('저장 확인 후 방이 바뀌었습니다. 현재 서버 내용을 확인해 주세요.');
+          session.busy=false;
+          const cancel=[...panel.querySelectorAll('button,[role="button"]')].find(b=>b.textContent.trim()==='취소');
+          if(cancel){cancel.click();restore(session);}else showHint(session,'저장 확인 완료 · 수정창을 닫아 주세요.');
+          if(changed)afterSave();
+        }catch(error){showHint(session,'저장 보류: '+String(error?.message||error));}
+        finally{session.busy=false;if(session.proxy)session.proxy.readOnly=false;button.disabled=priorDisabled;}
+      };
+      panel.addEventListener('click',listener,true);session.listeners.push([panel,'click',listener]);
+      void (async()=>{
+        try{
+          const source=await readSource(editor);
+          if(sessions.get(editor)!==session||!editor.isConnected||!panelOf(editor))return;
+          if(!source?.current?.())throw new Error('원문 확인 중 수정 대상이 바뀌었습니다.');
+          const proxy=document.createElement('textarea');proxy.id='rpcm-native-body-'+Math.random().toString(36).slice(2);proxy.setAttribute('aria-label','주입정보를 제외한 서버 원문 수정');proxy.spellcheck=false;proxy.value=source.original;
+          proxy.style.cssText='display:block;width:100%;box-sizing:border-box;min-height:140px;resize:vertical;padding:12px;border:1px solid #777;border-radius:8px;background:transparent;color:inherit;font:inherit;line-height:1.6';
+          const resize=()=>{proxy.style.height='auto';proxy.style.height=Math.max(140,proxy.scrollHeight+2)+'px';};proxy.addEventListener('input',resize);
+          session.source=source;session.proxy=proxy;editor.parentElement.insertBefore(proxy,editor);editor.style.setProperty('display','none','important');resize();
+          showHint(session,'주입정보 숨김 · 서버에서 확인한 본문 원문만 편집합니다. 수정 완료 시 주입정보를 보존해 저장합니다.');
+        }catch(error){if(sessions.get(editor)===session)showHint(session,'원문 확인 실패: '+String(error?.message||error)+' · 취소 후 다시 열어 주세요.');}
+      })();
+      return session;
+    }
+    function selectionInTail(editor,projected){
+      const selection=window.getSelection();if(!selection?.rangeCount)return false;
+      const selected=selection.getRangeAt(0);if(!editor.contains(selected.endContainer))return false;
+      const probe=selected.cloneRange();probe.collapse(false);return probe.compareBoundaryPoints(Range.START_TO_START,projected.contextBoundary)>=0;
+    }
+    function refresh(){
+      timer=null;if(!running)return;
+      for(const session of [...sessions.values()])if(!session.editor.isConnected||(!visible(session.editor)&&!visible(session.proxy))||!panelOf(session.editor))restore(session);
+      for(const editor of document.querySelectorAll('.ProseMirror[contenteditable="true"]')){
+        let session=sessions.get(editor);if(session?.source||session?.proxy)continue;
+        if(!visible(editor))continue;const panel=panelOf(editor);if(!panel)continue;
+        if(editor.scrollTop)editor.scrollTop=0;
+        const projected=projection(editor);
+        const raw=editor.textContent||'';
+        if(!projected&&!raw.includes('RP_CONTEXT_MANAGER_START')&&raw.split('RP_CONTEXT_MANAGER_END').length===2&&!raw.slice(raw.indexOf('RP_CONTEXT_MANAGER_END')+'RP_CONTEXT_MANAGER_END'.length).replace(/^-->/,'').trim()){
+          if(!session)beginOrphanEdit(editor,panel);continue;
+        }
+        if(!projected){if(session){unclip(session);showHint(session,'주입정보 범위를 확인하지 못했습니다. 저장 전 수정창을 취소하고 원문을 확인하세요.');}continue;}
+        if(!session){
+          const hint=document.createElement('small');hint.id='rpcm-native-context-'+Math.random().toString(36).slice(2);hint.style.cssText='display:block;padding:4px 10px;color:inherit;opacity:.75;font:12px/1.4 system-ui';hint.textContent='주입정보 숨김 · 편집 원문은 그대로 보존';
+          editor.parentElement.insertBefore(hint,editor);session={editor,panel,hint,tail:projected.tail,styles:Object.fromEntries(properties.map(prop=>[prop,{value:editor.style.getPropertyValue(prop),priority:editor.style.getPropertyPriority(prop)}])),listeners:[]};sessions.set(editor,session);
+          const listen=(target,type,handler)=>{target.addEventListener(type,handler,true);session.listeners.push([target,type,handler]);};
+          listen(editor,'keydown',event=>{if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='a'){const current=projection(editor);if(!current)return;event.preventDefault();event.stopImmediatePropagation();const selection=window.getSelection();selection.removeAllRanges();selection.addRange(current.range.cloneRange());}});
+          const protect=event=>{const current=projection(editor);if(current&&selectionInTail(editor,current)){event.preventDefault();event.stopImmediatePropagation();hint.textContent='주입정보는 보존합니다. 본문만 선택해 수정하세요. Ctrl+A는 본문만 선택합니다.';}};
+          listen(editor,'beforeinput',protect);listen(editor,'cut',protect);listen(editor,'paste',protect);listen(editor,'input',queue);
+          listen(panel,'click',event=>{if(!saveButton(event.target))return;const current=projection(editor);if(!current||current.tail!==session.tail){event.preventDefault();event.stopImmediatePropagation();hint.textContent='주입정보가 편집 중 바뀌어 저장을 보류했습니다. 취소 후 다시 수정하세요.';}});
+        }
+        if(projected.tail!==session.tail){unclip(session);showHint(session,'주입정보 변경 감지 · 저장은 보류됩니다. 취소 후 다시 수정하세요.');continue;}
+        for(const [prop,value] of [['height',projected.height+'px'],['max-height',projected.height+'px'],['min-height','0px'],['overflow','hidden']])if(editor.style.getPropertyValue(prop)!==value||editor.style.getPropertyPriority(prop)!=='important')editor.style.setProperty(prop,value,'important');
+        if(editor.scrollTop)editor.scrollTop=0;
+        const selection=window.getSelection();
+        if(selection?.isCollapsed&&selectionInTail(editor,projected)){const caret=projected.range.cloneRange();caret.collapse(false);selection.removeAllRanges();selection.addRange(caret);}
+      }
+    }
+    function queue(){if(running&&timer===null)timer=setTimeout(refresh,80);}
+    function start(){
+      if(running)return;running=true;observer||=new MutationObserver(queue);observer.observe(document.documentElement||document,{childList:true,subtree:true,characterData:true});document.addEventListener('selectionchange',queue);queue();
+    }
+    function stop(){running=false;clearTimeout(timer);timer=null;observer?.disconnect();document.removeEventListener('selectionchange',queue);}
+    return {start,stop,refresh,projection};
+  }
+  const rpcmNativeContextMask=createRpcmNativeContextMask();
+
   function startRenderedContextObserver() {
     if (document.hidden) return;
+    rpcmNativeContextMask.start();
     const target = document.documentElement || document;
     if (!state.domObserver) {
       state.domObserver = new MutationObserver((mutations) => {
@@ -23765,6 +23909,7 @@ function renderedContextScope(node) {
   }
 
   function pauseRenderedContextObserver() {
+    rpcmNativeContextMask.stop();
     clearTimeout(renderedContextFlushTimer);renderedContextFlushTimer=null;renderedContextPendingRoots.clear();
     state.rpcmContextObserverScannedTarget=null;
     if (!state.domObserver || !state.domObserverActive) return;
