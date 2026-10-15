@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         🪽위시 RP Manager 0.17.15(키메라 버전)
 // @namespace    local.rp.context.manager
-// @version      0.17.15.2
+// @version      0.17.15.4
 // @description  [키메라 버전] 장기 RP의 현재상태·날짜로그·인물·타임라인·자료집을 관리하고, 검수형 AI 생성·컨텍스트 주입·통합 백업·기존 백업 이사를 지원합니다.
 // @author       User
 // @license      All Rights Reserved
@@ -902,13 +902,13 @@ const wrpmFullBackupV2 = (() => {
   // 버전별 키를 쓰면 구버전과 신버전이 동시에 설치됐을 때 둘 다 실행될 수 있습니다.
   // 모든 버전이 공유하는 고정 키로 중복 실행을 막습니다.
   if(window.__WISH_RP_MANAGER_LOADED__){wrpmStartup.status('duplicate','다른 RP Manager가 실행 중입니다. 버전: '+String(window.__WISH_RP_MANAGER_LOADED__.version||'알 수 없음'));return;}
-  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.17.15.2', loadedAt: Date.now() };
+  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.17.15.4', loadedAt: Date.now() };
   // 같은 페이지에 남아 있는 v0.8.10 복사본이 뒤늦게 시작되는 경우도 차단합니다.
   window.__RP_MANAGER_0810_LOADED__ = true;
 
   const APP = {
     name: '🪽위시 RP Manager',
-    version: '0.17.15.2',
+    version: '0.17.15.4',
     releaseStage: '키메라 버전',
     dbName: 'RPContextManagerDB',
     dbVersion: 2,
@@ -16857,7 +16857,7 @@ ${dialogueText}`;
         if(!roomIds.has(source.chatId))continue;scope();
         const current=(await rpcmStrictCoreBackup()).rooms.find(row=>row.chatId===source.chatId);
         if(await wrpmFullBackupV2.digest(current||null)!==await wrpmFullBackupV2.digest(originalRooms.get(source.chatId)||null))throw new Error('복원 준비 후 방 자료가 바뀌었습니다: '+source.chatId);
-        const restored=rpcmPreserveIncomingPending(structuredClone(source),payload);
+        const restored=rpcmStampImportReview(rpcmPreserveIncomingPending(structuredClone(source),payload),choice,source.chatId);
         if(!Array.isArray(restored.lorePacks))restored.lorePacks=[];normalizeRoomSlots(restored);
         restored._rpcmRevision=Number(current?._rpcmRevision||0);
         await saveRestoredRoom(restored,current||null,()=>recordCommitted({store:'rooms',id:source.chatId}));completed.push({store:'rooms',id:source.chatId});
@@ -20294,6 +20294,166 @@ ${dialogueText}`;
     return stored;
   }
 
+  function rpcmOpenBackupRoomPreview(room) {
+    const box=rpcmBackupDialogShell('rpcm-backup-room-preview',String(room.label||'RP')+' · 백업 내용','백업 파일 안의 자료를 표시합니다. 이 화면에서는 현재 기억을 변경하지 않습니다.');
+    const content=box.querySelector('[data-dialog-content]');
+    for(const slot of room.slots||[]){
+      const details=document.createElement('details'),summary=document.createElement('summary'),body=document.createElement('pre');
+      summary.textContent=String(slot.title||slot.id||'기억')+(slot.enabled===false?' · 사용 선택 OFF':'');
+      body.textContent=String(slot.content||'');body.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere';details.append(summary,body);content.append(details);
+    }
+    const details=document.createElement('details'),summary=document.createElement('summary'),raw=document.createElement('pre');
+    summary.textContent='인물·타임라인·자료집·설정을 포함한 방 전체 기록';raw.textContent=JSON.stringify(room,null,2);raw.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere';details.append(summary,raw);content.append(details);
+    return box;
+  }
+
+  async function rpcmReadImportSource(room,control={}) {
+    const id=String(apiChatIdOf(room)||''),rows=[],seen=new Map(),cursors=new Set();
+    if(!id)return {state:'missing-id',complete:false,turns:[]};
+    let cursor='';
+    for(let page=0;page<12;page++){
+      if(control.cancelled)return {state:'skipped',complete:false,turns:[]};
+      const data=await apiRequest('GET',`https://crack-api.wrtn.ai/crack-gen/v3/chats/${encodeURIComponent(id)}/messages?limit=50${cursor?'&cursor='+encodeURIComponent(cursor):''}`);
+      if(control.cancelled)return {state:'skipped',complete:false,turns:[]};
+      const batch=data?.data?.messages||data?.messages;
+      if(!Array.isArray(batch))throw new Error('RP 메시지 목록 형식을 확인하지 못했습니다.');
+      for(const message of batch){
+        const key=String(messageIdOf(message)||'');
+        if(!key)throw new Error('RP 메시지 ID가 빠져 있습니다.');
+        const hash=semanticSourceHash(JSON.stringify(message));
+        if(seen.has(key)){if(seen.get(key)!==hash)throw new Error('조회 중 RP 원문이 바뀌었습니다.');continue;}
+        seen.set(key,hash);rows.push(message);
+      }
+      const next=String(data?.data?.nextCursor||data?.nextCursor||'');
+      if(!next)return {state:'read',complete:true,turns:buildCompletedAiDialogueTurns(rows.slice().reverse()),incomplete:rows.some(isIncompleteAiSourceMessage)};
+      if(!batch.length||next===cursor||cursors.has(next))throw new Error('RP 페이지 연결을 확인하지 못했습니다.');
+      cursors.add(next);cursor=next;
+    }
+    return {state:'partial',complete:false,turns:buildCompletedAiDialogueTurns(rows.slice().reverse())};
+  }
+
+  function rpcmDescribeImportSource(source,observation,mode) {
+    const label=String(source.label||'RP'),messages=[],unresolved=[],blockedAreas=[];
+    const add=(text,issue=true)=>{messages.push(text);if(issue)unresolved.push(text);};
+    if(mode==='clone-current')add('다른 방으로 복사합니다. 원래 방의 자동 처리 위치는 비활성 기록으로 보관하고 새 방에서 시작점을 지정해야 합니다.');
+    if(observation.state==='missing-id')add(`‘${label}’ 방의 ID를 백업에서 확인할 수 없습니다.`);
+    else if(observation.state==='not-found')add(`‘${label}’ 방의 ID를 서버에서 찾을 수 없습니다. 삭제되었거나 현재 접근할 수 없는 방일 수 있습니다.`);
+    else if(observation.state==='skipped')add(`‘${label}’ 방의 원문 확인을 생략했습니다.`);
+    else if(observation.state==='error')add(`‘${label}’ 방의 원문을 조회하지 못했습니다. 로그인·권한·연결 상태를 확인하세요.`);
+    else{
+      const saved=source.rpcmBackupSourceObservation;
+      const known=saved?.format==='RPCM_RP_SOURCE_V1'&&saved.complete===true&&Number.isInteger(saved.totalTurns)&&saved.totalTurns>=0;
+      if(observation.complete&&known){
+        if(saved.totalTurns!==observation.turns.length)add(`턴수가 다릅니다. 백업에 기록된 완료 턴 ${saved.totalTurns}개 · 현재 완료 턴 ${observation.turns.length}개. 백업 이후 진행·수정·삭제 가능성이 있습니다.`);
+        else add(`백업에 기록된 완료 턴과 현재 완료 턴이 ${observation.turns.length}개로 같습니다. 턴 수가 같아도 내용이 같다는 보장은 아닙니다.`,false);
+      }else add(`${known?'백업 기록 '+saved.totalTurns+'턴':'백업 당시 전체 턴 수는 미기록'} · 현재 조회된 완료 턴 ${observation.turns.length}개${observation.complete?'':' (최근 일부만 조회 · 전체 턴 수 미확인)'}.`,!observation.complete);
+      if(observation.incomplete)add('생성 중이거나 완료되지 않은 메시지가 있어 완료 턴 수에 포함하지 않았습니다.');
+    }
+    for(const [area,row]of Object.entries(source.aiMemoryAutomation?.areas||{})){
+      if(!AI_MEMORY_AREAS[area])continue;
+      const key=String(row.cursor||row.baseline||''),proof=source.aiMemorySourceAnchors?.[area];
+      if(!key){if(mode==='clone-current'||!observation.complete)blockedAreas.push(area);continue;}
+      const i=rpcmFindTurnIndex(observation.turns,key),p=rpcmFindTurnIndex(observation.turns,String(proof?.key||'')),turn=observation.turns[i];
+      const v=proof?.fingerprintVersion,legacy=v==null||Number(v)===1;
+      const hash=turn?(legacy?aiMemoryLegacyAnchorFingerprint(turn):aiMemoryAnchorFingerprint(turn)):'';
+      const verified=!!turn&&!!proof&&p===i&&String(proof.chatId||'')===String(apiChatIdOf(source))&&
+        (legacy||Number(v)===2)&&!!String(proof.hash||'')&&hash===proof.hash&&
+        (!proof.sourceKey||rpcmFindTurnIndex(observation.turns,String(proof.sourceKey))===i);
+      if(!verified){blockedAreas.push(area);add(`${AI_MEMORY_AREAS[area].label}: 이전 처리 위치${i<0?'를 조회한 RP에서 찾지 못했습니다': '의 원문 또는 검증 근거가 현재 RP와 일치하지 않습니다'}${observation.complete?'':' (조회 범위 밖일 수도 있습니다)'}.`);}
+    }
+    return {sourceRoomId:String(source.chatId),label,sourceApiChatId:String(apiChatIdOf(source)||''),state:observation.state,complete:observation.complete,
+      currentTurns:observation.turns.length,messages,unresolved,blockedAreas:[...new Set(blockedAreas)]};
+  }
+
+  async function rpcmReviewBackupImport(payload,choice) {
+    const room=state.currentRoom,epoch=state.routeEpoch,digest=await wrpmFullBackupV2.digest(payload);
+    const sources=payload.rooms.filter(row=>choice.roomIds.includes(String(row.chatId)));
+    const report={version:1,mode:choice.mode,checkedAt:nowIso(),rooms:[],libraryCount:choice.libraryIds.length};
+    const box=rpcmBackupDialogShell('rpcm-import-review','백업 가져오기 · 현재 상태 확인','백업 내용을 먼저 확인하고, 미해결 상태를 이해한 뒤 가져올 수 있습니다. 원문 연결 실패만으로 기억 복원을 막지 않습니다.');
+    const body=box.querySelector('[data-dialog-content]'),actions=box.querySelector('[data-dialog-actions]');
+    body.innerHTML='<p data-import-check-progress role="status">선택한 RP 원문을 확인하고 있습니다…</p><div data-import-check-rooms></div><p>미해결 항목이 있어도 백업 기억은 가져올 수 있습니다. 이후 기억의 누락·중복·현재 RP와 다른 내용이 발견되면 원문을 확보한 뒤 자료 관리의 ‘전체 기억 재구축’을 시행해 보시길 권장합니다. 재구축은 가져오기의 필수 조건이 아닙니다. 원래 방이 삭제된 경우 먼저 새 방으로 기억을 복사할 수 있습니다.</p><p data-import-overwrite></p>';
+    body.querySelector('[data-import-overwrite]').textContent=choice.mode==='clone-current'?'계속하면 현재 방의 RP Manager 데이터를 선택한 백업으로 덮어씁니다.': '계속하면 선택한 방·설정집의 기존 RP Manager 데이터를 백업으로 덮어씁니다.';
+    actions.innerHTML='<button type="button" class="rpcm-btn secondary" data-import-check-skip>원문 확인 생략</button><button type="button" class="rpcm-btn primary" data-import-check-approve disabled>확인 중…</button>';
+    const approve=actions.querySelector('[data-import-check-approve]'),skip=actions.querySelector('[data-import-check-skip]'),control={cancelled:false};
+    let ready=false,settled=false,finish;
+    const done=new Promise(resolve=>{finish=resolve;});
+    const close=box._rpcmClose;
+    box._rpcmClose=()=>{if(!settled){settled=true;control.cancelled=true;finish(null);}close();};
+    // The shell's close buttons and Escape remove the element through its original closure.
+    const observer=new MutationObserver(()=>{if(!box.isConnected&&!settled){settled=true;control.cancelled=true;finish(null);}});
+    observer.observe(document.body,{childList:true});
+    const render=()=>{
+      const host=body.querySelector('[data-import-check-rooms]');host.replaceChildren();
+      for(const row of report.rooms){
+        const section=document.createElement('section'),title=document.createElement('h3'),list=document.createElement('ul'),preview=document.createElement('button');
+        title.textContent=row.label;for(const message of row.messages){const item=document.createElement('li');item.textContent=message;list.append(item);}
+        preview.type='button';preview.className='rpcm-btn secondary';preview.textContent='백업 내용 보기';preview.onclick=()=>rpcmOpenBackupRoomPreview(sources.find(source=>String(source.chatId)===row.sourceRoomId));section.append(title,list,preview);host.append(section);
+      }
+    };
+    const complete=()=>{
+      if(settled||ready)return;ready=true;render();skip.disabled=true;
+      const warnings=report.rooms.reduce((n,row)=>n+row.unresolved.length,0);
+      body.querySelector('[data-import-check-progress]').textContent=`선택한 RP ${sources.length}개 · 설정집 ${report.libraryCount}개 · 미해결 안내 ${warnings}건. 이 상태로 진행하시겠습니까?`;
+      approve.disabled=false;approve.textContent=warnings?'미해결 상태를 이해하고 가져오기':'확인한 백업 가져오기';
+    };
+    skip.onclick=()=>{control.cancelled=true;for(const source of sources)if(!report.rooms.some(row=>row.sourceRoomId===String(source.chatId)))report.rooms.push(rpcmDescribeImportSource(source,{state:'skipped',complete:false,turns:[]},choice.mode));complete();};
+    approve.onclick=async()=>{
+      if(!ready||settled)return;approve.disabled=true;
+      try{
+        if(epoch!==state.routeEpoch||room!==state.currentRoom)throw new Error('확인 중 현재 방이 바뀌었습니다. 새 방에서 백업을 다시 선택해 주세요.');
+        if(digest!==await wrpmFullBackupV2.digest(payload))throw new Error('확인한 백업 내용이 바뀌었습니다. 파일을 다시 선택해 주세요.');
+        report.acceptedAt=nowIso();settled=true;control.cancelled=true;finish(report);close();
+      }catch(error){body.querySelector('[data-import-check-progress]').textContent=error.message;}
+    };
+    void(async()=>{
+      for(const source of sources){
+        if(control.cancelled||settled)return;
+        let observation;
+        try{observation=await rpcmReadImportSource(source,control);}
+        catch(error){observation={state:Number(error.rpcmStatus)===404?'not-found':'error',complete:false,turns:[]};}
+        if(control.cancelled||settled)return;
+        report.rooms.push(rpcmDescribeImportSource(source,observation,choice.mode));render();
+      }
+      complete();
+    })().catch(()=>{if(!settled)skip.click();});
+    try{return await done;}finally{observer.disconnect();control.cancelled=true;}
+  }
+
+  function rpcmStampImportReview(room,choice,sourceId) {
+    const incoming=choice.migrationReview?.rooms?.find(row=>row.sourceRoomId===String(sourceId));
+    if(!incoming)return room;
+    room.rpcmImportReview={...structuredClone(incoming),acceptedAt:choice.migrationReview.acceptedAt,mode:choice.mode,targetRoomId:String(room.chatId)};
+    for(const area of incoming.blockedAreas||[]){
+      const row=room.aiMemoryAutomation?.areas?.[area];if(!row)continue;
+      row.status='기준점 확인 필요';row.error=`${AI_MEMORY_AREAS[area]?.label||area}: 백업 기억은 가져왔습니다. 이전 처리 위치는 미해결 상태입니다. ‘시작점’에서 확인해 주세요.`;
+    }
+    return room;
+  }
+
+  function rpcmShowImportResult(payload,choice) {
+    if(!choice.migrationReview)return;
+    const box=rpcmBackupDialogShell('rpcm-import-result','백업 가져오기 완료 · 남은 확인 사항','선택한 기억·설정의 가져오기를 완료했습니다. 아래 원문 연결 상태는 기억 복원 성공과 별도로 관리합니다.');
+    const body=box.querySelector('[data-dialog-content]');
+    for(const row of choice.migrationReview.rooms){
+      const title=document.createElement('h3'),text=document.createElement('p'),preview=document.createElement('button');title.textContent=row.label;
+      text.textContent=(row.unresolved.length?row.unresolved.join(' '):'이번 조회에서 확인한 연결 문제는 없습니다.')+' '+(choice.mode==='clone-current'?'현재 방에 복사했습니다.':'원래 방 ID로 보관했습니다. 원래 방이 삭제되었다면 메인 백업 불러오기에서 현재 방에 복사할 수 있습니다.');
+      preview.type='button';preview.className='rpcm-btn secondary';preview.textContent='가져온 백업 내용 보기';preview.onclick=()=>rpcmOpenBackupRoomPreview(payload.rooms.find(source=>String(source.chatId)===row.sourceRoomId));body.append(title,text,preview);
+    }
+    const next=document.createElement('p');next.textContent='처리 위치가 미해결이면 자동 기억정리의 일부 영역이 보류될 수 있습니다. 기억의 누락·중복·현재 RP와 다른 내용이 발견되면 원문 확보 후 ‘전체 기억 재구축’을 시행해 보시길 권장합니다. 원문을 확보할 수 없다면 가져온 기억을 확인·편집하며 사용할 수 있습니다.';body.append(next);
+  }
+
+  function rpcmRenderImportReviewNotice(overlay,room) {
+    const report=room.rpcmImportReview;if(!report||!Array.isArray(report.unresolved))return;
+    const host=overlay.querySelector('#rpcm-full-rebuild-card')?.parentElement;if(!host)return;
+    const card=document.createElement('section');card.className='rpcm-tool-card';card.id='rpcm-import-followup';
+    const title=document.createElement('h3'),text=document.createElement('p'),button=document.createElement('button');title.textContent='백업 이사 당시 확인 기록';
+    const pending=Object.entries(room.aiMemoryAutomation?.areas||{}).filter(([,row])=>['기준점 확인 필요','방별 시작점 필요'].includes(row.status)).map(([area])=>AI_MEMORY_AREAS[area]?.label||area);
+    text.textContent=(report.unresolved.length?report.unresolved.join(' '):'가져올 당시 확인한 연결 문제는 없습니다.')+
+      (pending.length?' 현재 시작점 확인이 필요한 영역: '+pending.join(', ')+'. 일부 자동 기억정리가 보류될 수 있습니다.':' 현재 시작점 확인 필요 상태인 영역은 없습니다.')+
+      ' 이후 기억의 누락·중복·현재 RP와 다른 내용이 발견되면 원문 확보 후 ‘전체 기억 재구축’을 시행해 보시길 권장합니다.';
+    button.type='button';button.className='rpcm-btn secondary';button.textContent='전체 기억 재구축 위치 보기';button.onclick=()=>{const target=overlay.querySelector('#rpcm-full-rebuild-card');showWorkView(overlay,'tools',true);target?.scrollIntoView({block:'start'});};card.append(title,text,button);host.prepend(card);
+  }
+
   function openBackupImportDialog(data, existingRooms = [], existingLibraries = [], options = {}) {
     return new Promise(resolve => {
       document.querySelector('#rpcm-import-backdrop')?.remove();
@@ -20313,6 +20473,7 @@ ${dialogueText}`;
         <div class="rpcm-import-dialog" role="dialog" aria-modal="true" aria-label="백업 선택 복원">
           <div class="rpcm-lib-dialog-head"><div><div class="rpcm-lib-dialog-title">백업 불러오기</div><div class="rpcm-lib-dialog-desc">${data.exportedAt ? `${new Date(data.exportedAt).toLocaleString('ko-KR')} 생성 · ` : ''}원래 방에 복원하거나, 백업의 RP 하나를 지금 열어 둔 방으로 통째로 복사할 수 있습니다.</div></div><button type="button" class="rpcm-lib-close" aria-label="닫기" data-rpcm-close="icon">✕</button></div>
           ${rpcmLegacyBackupNote(data)?`<p class="rpcm-import-note" role="status">${esc(rpcmLegacyBackupNote(data))}</p>`:''}
+          <div class="rpcm-import-note"><label>백업 내용 확인 <select data-import-preview-room>${rooms.map(room=>`<option value="${esc(room.chatId)}">${esc(room.label||room.chatId)}</option>`).join('')}</select></label><button type="button" class="rpcm-btn secondary" data-import-preview-open ${rooms.length?'':'disabled'}>백업 내용 보기</button><button type="button" class="rpcm-btn secondary" data-import-preview-libraries ${libraries.length?'':'disabled'}>설정집 내용 보기</button></div>
           <div class="rpcm-import-toolbar"><button type="button" class="rpcm-lib-small" data-select-current>현재 방만</button><button type="button" class="rpcm-lib-small" data-select-all>전체 선택</button><button type="button" class="rpcm-lib-small" data-select-none>선택 해제</button><span class="rpcm-lib-selected">0개 선택</span></div>
           <div class="rpcm-import-list">
             <div class="rpcm-import-group-title">RP 채팅방 · ${rooms.length}개</div>
@@ -20333,9 +20494,14 @@ ${dialogueText}`;
           ${hasGlobalOptions?'<label class="rpcm-import-note"><input type="checkbox" data-full-backup-options checked> 전역 설정 복원 · 자료를 선택하지 않으면 설정만 복원 (API 키 제외 · 새로고침 후 적용)</label>':''}
           <label class="rpcm-import-note"><input type="checkbox" data-restore-tabs> 다른 RP매니저 탭을 닫았습니다. 구버전 탭은 새 보호에 참여하지 않습니다.</label>
           <div class="rpcm-import-note">같은 방/설정집 ID에는 선택한 저장본을 덮어쓰므로 복원 자체로 항목이 늘어나지 않습니다. 내용이 다른 사본을 자동 합치거나 삭제하지 않습니다. ‘현재 방에 복사’는 지금 열어 둔 방의 RP Manager 데이터를 덮어씁니다. 활성 주입 상태·AI 맥락 검토 결과·원본 방의 API 비용은 복사하지 않습니다.</div>
+          <p class="rpcm-import-note" data-import-action-status role="status" aria-live="polite"></p>
           <div class="rpcm-lib-dialog-actions"><button type="button" class="rpcm-btn secondary rpcm-import-cancel">취소</button><button type="button" class="rpcm-btn secondary rpcm-import-clone" disabled>선택한 RP를 현재 방에 복사</button><button type="button" class="rpcm-btn primary rpcm-import-apply" disabled>원래 방에 복원</button></div>
         </div>`;
       document.body.appendChild(backdrop);
+      let submitting=false;
+      const importRoom=state.currentRoom,importEpoch=state.routeEpoch;
+      backdrop.querySelector('[data-import-preview-open]').onclick=()=>{const source=rooms.find(row=>String(row.chatId)===backdrop.querySelector('[data-import-preview-room]').value);if(source)rpcmOpenBackupRoomPreview(source);};
+      backdrop.querySelector('[data-import-preview-libraries]').onclick=()=>rpcmOpenBackupRoomPreview({label:'백업 설정집',slots:[],characterLibraries:libraries});
       const boxes = () => [...backdrop.querySelectorAll('input[data-room-id]:not(:disabled),input[data-library-id]:not(:disabled)')];
       const update = () => {
         const count = new Set(boxes().filter(box => box.checked).map(box=>box.dataset.roomId?'room:'+box.dataset.roomId:'library:'+box.dataset.libraryId)).size;
@@ -20345,7 +20511,18 @@ ${dialogueText}`;
         const optionsSelected=hasGlobalOptions&&!!backdrop.querySelector('[data-full-backup-options]')?.checked;
         backdrop.querySelector('.rpcm-import-apply').disabled = (count===0&&!optionsSelected)||restoreBlocked||!backdrop.querySelector('[data-restore-tabs]').checked;
         backdrop.querySelector('.rpcm-import-apply').textContent=count===0&&optionsSelected?'전역 설정만 복원':'원래 방에 복원';
-        backdrop.querySelector('.rpcm-import-clone').disabled = restoreOnly || selectedRoomCount !== 1 || !!state.currentRoom?.pending || !backdrop.querySelector('[data-restore-tabs]').checked;
+        const tabsClosed=backdrop.querySelector('[data-restore-tabs]').checked;
+        const reasons=[];
+        if(restoreOnly)reasons.push('이 메뉴는 원래 방 복원용입니다. 다른 방으로 복사하려면 자료 관리 → 백업 불러오기를 사용하세요.');
+        if(selectedRoomCount!==1)reasons.push('현재 방에 복사하려면 RP 채팅방을 정확히 1개 선택하세요. 설정집만 선택한 경우에는 복사할 RP가 없습니다.');
+        if(state.currentRoom?.pending)reasons.push('현재 방에 복사하려면 현재 방의 주입을 먼저 해제하세요.');
+        if(!tabsClosed)reasons.push('다른 RP매니저 탭을 닫은 뒤 해당 확인란을 체크하세요.');
+        backdrop.querySelector('.rpcm-import-clone').disabled=reasons.length>0;
+        backdrop.querySelector('.rpcm-import-clone').title=reasons.join(' ');
+        const currentSelected=boxes().some(box=>box.checked&&box.dataset.roomId===String(state.currentChatId));
+        backdrop.querySelector('[data-import-action-status]').textContent=
+          (currentSelected?'같은 RP에서 원작 버전 → 키메라로 옮길 때는 ‘원래 방에 복원’을 사용하세요. ':'')+
+          (reasons.length?reasons.join(' '):'RP 1개 선택과 복사 준비를 확인했습니다. ‘현재 방에 복사’는 대상 방의 기억을 덮어쓰고 시작점을 다시 설정하는 기능입니다.');
       };
       const close = value => { backdrop.remove(); resolve(value); };
       backdrop._rpcmClose = () => close(null);
@@ -20362,18 +20539,23 @@ ${dialogueText}`;
       boxes().forEach(box => box.onchange = ()=>{if(box.dataset.libraryId)boxes().filter(other=>other.dataset.libraryId===box.dataset.libraryId).forEach(other=>other.checked=box.checked);update();});
       backdrop.querySelector('[data-restore-tabs]').onchange=update;
       const optionBox=backdrop.querySelector('[data-full-backup-options]');if(optionBox)optionBox.onchange=update;
-      backdrop.querySelector('.rpcm-import-apply').onclick = () => close({
-        mode:'restore-original',
-        includeOptions:!!backdrop.querySelector('[data-full-backup-options]')?.checked,
-        otherTabsClosed:!!backdrop.querySelector('[data-restore-tabs]')?.checked,
-        roomIds: boxes().filter(box => box.checked && box.dataset.roomId).map(box => box.dataset.roomId),
-        libraryIds: [...new Set(boxes().filter(box => box.checked && box.dataset.libraryId).map(box => box.dataset.libraryId))],
-      });
-      backdrop.querySelector('.rpcm-import-clone').onclick = () => close({
-        mode:'clone-current',
-        roomIds: boxes().filter(box => box.checked && box.dataset.roomId).map(box => box.dataset.roomId),
-        libraryIds: [...new Set(boxes().filter(box => box.checked && box.dataset.libraryId).map(box => box.dataset.libraryId))],
-      });
+      const submit=async mode=>{
+        if(submitting)return;
+        const button=backdrop.querySelector(mode==='clone-current'?'.rpcm-import-clone':'.rpcm-import-apply');if(button.disabled)return;
+        submitting=true;
+        try{
+          if(state.currentRoom!==importRoom||state.routeEpoch!==importEpoch)throw new Error('백업 선택 중 현재 방이 바뀌었습니다. 대상 방에서 백업을 다시 선택해 주세요.');
+          const choice={mode,includeOptions:!!backdrop.querySelector('[data-full-backup-options]')?.checked,
+            otherTabsClosed:!!backdrop.querySelector('[data-restore-tabs]').checked,
+            roomIds:boxes().filter(box=>box.checked&&box.dataset.roomId).map(box=>box.dataset.roomId),
+            libraryIds:[...new Set(boxes().filter(box=>box.checked&&box.dataset.libraryId).map(box=>box.dataset.libraryId))]};
+          const migrationReview=await rpcmReviewBackupImport(data,choice);
+          if(migrationReview&&backdrop.isConnected)close({...choice,migrationReview});
+        }catch(error){if(backdrop.isConnected)backdrop.querySelector('[data-import-action-status]').textContent='가져오기 확인 미완료: '+error.message;}
+        finally{submitting=false;}
+      };
+      backdrop.querySelector('.rpcm-import-apply').onclick=()=>submit('restore-original');
+      backdrop.querySelector('.rpcm-import-clone').onclick=()=>submit('clone-current');
       if (data?.backupMode === 'room-transfer') boxes().forEach(box => { box.checked = true; });
       update();
       backdrop.querySelector('.rpcm-lib-close')?.focus();
@@ -29286,7 +29468,38 @@ Existing REF must come from this packet. NEW REF are temporary, and a NEW_P pack
       const sourceIndex=record.sourceKey?rpcmFindTurnIndex(turns,String(record.sourceKey)):-1;
       const index=recordIndex>=0?recordIndex:activeIndex>=0?activeIndex:sourceIndex;
       const turn=index>=0?turns[index]:null;
-      const sameTurn=!!turn&&recordIndex>=0&&
+      // Original .15 proofs use a turn/assistant ID and the v1 fingerprint.
+      // Verify the exact old proof before binding it to the stable USER ID.
+      // A JSON import alone never establishes source identity.
+      if(record.fingerprintVersion == null || Number(record.fingerprintVersion) === 1){
+        const unique=key=>turns.filter(item=>rpcmFindTurnIndex([item],String(key))>=0).length===1;
+        const verified=!!turn && recordIndex>=0 && activeIndex===recordIndex &&
+          (sourceIndex<0&&!record.sourceKey || sourceIndex===recordIndex) &&
+          unique(record.key) && unique(activeKey) &&
+          (!record.sourceKey||unique(record.sourceKey)) &&
+          String(record.chatId||'')===String(apiChatIdOf(room)) &&
+          !!String(turn.userId||'') && !!String(record.hash||'') &&
+          record.hash===aiMemoryLegacyAnchorFingerprint(turn);
+        if(verified){
+          saved.push({area,before:structuredClone(row),evidence:structuredClone(record)});
+          const stable=aiMemoryStableTurnKey(turn);
+          if(row.baseline===activeKey)row.baseline=stable;
+          if(row.cursor===activeKey)row.cursor=stable;
+          room.aiMemorySourceAnchors[area]={...record,...aiMemoryAnchorEvidenceRecord(room,area,turn),
+            ...(Object.hasOwn(record,'supersededCheckpoint')?{supersededCheckpoint:record.supersededCheckpoint}:{})};
+          if(!row.error || row.status==='기준점 확인 필요' && /기준점|검증 근거|동일 턴/.test(String(row.error))){
+            row.error='';row.status='기존 기준점 연결 완료';
+          }
+          changed=true;issues.push({area,type:'verified-legacy-migration',from:activeKey,to:stable});continue;
+        }
+        const errorText=`${AI_MEMORY_AREAS[area].label}: 기존 기준점을 현재 RP 원문과 확인하지 못했습니다. 백업의 기억 자료는 유지됩니다. 원래 RP 방인지 확인한 뒤 ‘시작점’에서 기준 RP를 직접 선택해 주세요.`;
+        if(row.status!=='기준점 확인 필요'||row.error!==errorText){
+          saved.push({area,before:structuredClone(row),evidence:structuredClone(record)});
+          row.status='기준점 확인 필요';row.error=errorText;changed=true;
+        }
+        issues.push({area,type:'unverified-legacy-evidence'});continue;
+      }
+      const sameTurn=Number(record.fingerprintVersion)===2&&!!turn&&recordIndex>=0&&
         ((activeIndex>=0&&recordIndex===activeIndex)||
          (activeIndex<0&&activeKey===String(record.sourceKey||'')))&&
         (sourceIndex<0||sourceIndex===recordIndex)&&
@@ -29355,7 +29568,7 @@ Existing REF must come from this packet. NEW REF are temporary, and a NEW_P pack
   }
   function aiMemoryAnchorReadyForAutomation(room,area){
     const row=aiMemoryConfig(room).areas[area];
-    if(!row||row.status==='기준점 확인 필요')return false;
+    if(!row||['기준점 확인 필요','방별 시작점 필요'].includes(row.status))return false;
     const active=String(row.cursor||row.baseline||'');
     if(!active)return true; // Brand-new areas need no previously committed anchor.
     const proof=room.aiMemorySourceAnchors?.[area];
@@ -38019,7 +38232,7 @@ reason은 각 항목에서 무엇을 줄이거나 합쳤는지와 그 이유를 
       const node=overlay.querySelector(`[data-ai-memory-area="${area}"]`);
       if(!node)continue;
       const count=counts[area];
-      const label=`${aiMemoryProgressLabel(room,area)} · 마지막 AI 적용 ${aiMemoryTurnLabel(room,row.cursor)} · ${row.status} · ${row.autoApply?'자동 반영 ON':'검토 후 적용'}${row.autoApplyError?` · 보류 이유 ${row.autoApplyError.slice(0,90)}`:''}${row.draft?` · 검토 대기 ${row.draft.turnCount}턴`:''}${row.draft?.sharedCallId?' · 현재상태·물품 공유 호출 1회':''}${row.plannedStart?` · 예정 범위 ${aiMemoryTurnLabel(room,row.plannedStart)}~${aiMemoryTurnLabel(room,row.plannedEnd)}`:''}${row.error?` · 실패 ${row.error.slice(0,90)}`:''}`;
+      const label=`${aiMemoryProgressLabel(room,area)} · 마지막 AI 적용 ${aiMemoryTurnLabel(room,row.cursor)} · ${row.status} · ${row.autoApply?'자동 반영 ON':'검토 후 적용'}${row.autoApplyError?` · 보류 이유 ${row.autoApplyError.slice(0,90)}`:''}${row.draft?` · 검토 대기 ${row.draft.turnCount}턴`:''}${row.draft?.sharedCallId?' · 현재상태·물품 공유 호출 1회':''}${row.plannedStart?` · 예정 범위 ${aiMemoryTurnLabel(room,row.plannedStart)}~${aiMemoryTurnLabel(room,row.plannedEnd)}`:''}${row.error?` · ${row.status==='기준점 확인 필요'?'확인 필요':'실패'} ${row.error.slice(0,90)}`:''}`;
       const small=node.querySelector('small');if(small)small.textContent=label;
       const button=node.querySelector('[data-ai-memory-review]');if(button)button.disabled=!row.draft;
       const applyToggle=node.querySelector('[data-ai-memory-auto-apply]');if(applyToggle)applyToggle.checked=row.autoApply;
@@ -41546,37 +41759,42 @@ reason은 각 항목에서 무엇을 줄이거나 합쳤는지와 그 이유를 
         if (!data?._rpContextManagerBackup || !Array.isArray(data.rooms)) throw new Error('🪽위시 RP Manager 백업 파일이 아닙니다.');
         if(data.storageSnapshot)await wrpmFullBackupV2.validate(data);
         const [existingRooms, existingLibraries] = await Promise.all([getAllRooms(), getAllCharacterLibraries()]);
+        if(state.currentRoom!==room)throw new Error('백업 파일을 읽는 중 현재 방이 바뀌었습니다. 대상 방에서 다시 선택해 주세요.');
         const choice = await openBackupImportDialog(data, existingRooms, existingLibraries);
         if (!choice) return;
         if(choice.mode!=='clone-current'){
           const result=await rpcmRestoreFullBackup(data,choice);await ensureCurrentRoom(getChatIdFromPath(),true);
-          notify(data.backupMode==='legacy-import'?'기존 백업 이사 완료 · 방 자료·설정집 복원 · 전역 설정은 현재 값 유지':'검증된 백업 복원 완료 · 주입 복구 정보는 비활성 보존 · 설정은 새로고침 후 적용','success',8000);renderModalIfOpen();return;
+          notify(data.backupMode==='legacy-import'?'기존 백업 이사 완료 · 방 자료·설정집 복원 · 전역 설정은 현재 값 유지':'검증된 백업 복원 완료 · 주입 복구 정보는 비활성 보존 · 설정은 새로고침 후 적용','success',8000);renderModalIfOpen();rpcmShowImportResult(data,choice);return;
         }
 
         const selectedRoomIds = new Set(choice.roomIds.map(String));
         const selectedLibraryIds = new Set(choice.libraryIds.map(String));
         if (choice.mode === 'clone-current') {
+          const copyEpoch=state.routeEpoch,assertCopyScope=()=>{if(state.currentRoom!==room||state.routeEpoch!==copyEpoch)throw new Error('복사 중 현재 방이 바뀌어 추가 저장을 중단했습니다. 복사 전 퇴피 파일과 이미 반영된 설정집을 확인해 주세요.');};
+          assertCopyScope();
           if (room.pending) throw new Error('현재 방의 주입을 먼저 해제해 주세요.');
           if (selectedRoomIds.size !== 1) throw new Error('현재 방으로 복사할 RP를 하나만 선택해 주세요.');
           const sourceRoom = data.rooms.find(item => item?.chatId && selectedRoomIds.has(String(item.chatId)));
           if (!sourceRoom) throw new Error('선택한 RP 데이터를 백업에서 찾지 못했습니다.');
           const sourceLabel = String(sourceRoom.label || `RP ${shortId(sourceRoom.chatId)}`);
           if (!confirm(`‘${sourceLabel}’의 RP Manager 전체 데이터를 현재 방에 복사할까요?\n현재 방의 기존 RP Manager 데이터는 덮어씁니다.`)) return;
-          const oldFull=await rpcmCreateFullBackup();downloadText(wrpmFullBackupV2.fileText(oldFull),'RP_복사전_전체퇴피.json');
+          const oldFull=await rpcmCreateFullBackup();assertCopyScope();downloadText(wrpmFullBackupV2.fileText(oldFull),'RP_복사전_전체퇴피.json');
           if (Array.isArray(data.characterLibraries)) {
             for (const lib of data.characterLibraries) {
               if (!lib?.scopeId || !selectedLibraryIds.has(String(lib.scopeId))) continue;
-              await rpcmWriteRestoredLibrary(structuredClone(lib),existingLibraries.find(row=>row.scopeId===lib.scopeId)||null);
+              assertCopyScope();await rpcmWriteRestoredLibrary(structuredClone(lib),existingLibraries.find(row=>row.scopeId===lib.scopeId)||null);
             }
           }
-          const clonedRoom = cloneBackupRoomIntoCurrent(sourceRoom, room);
+          const clonedRoom = rpcmStampImportReview(cloneBackupRoomIntoCurrent(sourceRoom, room),choice,sourceRoom.chatId);
+          clonedRoom.rpcmBackupRecovery||={};clonedRoom.rpcmBackupRecovery.originalProcessingState={aiMemoryAutomation:structuredClone(sourceRoom.aiMemoryAutomation||null),aiMemorySourceAnchors:structuredClone(sourceRoom.aiMemorySourceAnchors||null),manualUpdateCheckpoints:structuredClone(sourceRoom.manualUpdateCheckpoints||null)};
           if(data.storageSnapshot){clonedRoom.rpcmBackupRecovery||={};clonedRoom.rpcmBackupRecovery.inactiveInputDrafts=rpcmIncomingDraftsForRoom(data,sourceRoom.chatId);}
           if(sourceRoom.pending){clonedRoom.rpcmBackupRecovery||={};clonedRoom.rpcmBackupRecovery.pending=structuredClone(sourceRoom.pending);clonedRoom.rpcmBackupRecovery.sourceChatId=sourceRoom.chatId;}
+          assertCopyScope();
           try { localStorage.removeItem(pendingBackupKey(clonedRoom.chatId)); } catch (_) {}
           await saveRestoredRoom(clonedRoom,oldFull.rooms.find(row=>row.chatId===clonedRoom.chatId)||null);
           state.currentRoom = clonedRoom;
           notify(`현재 방으로 RP Manager 전체 복사 완료 · ${backupRoomSummary(clonedRoom)}`, 'success', 5500);
-          renderModalIfOpen();
+          renderModalIfOpen();rpcmShowImportResult(data,choice);
           return;
         }
 
@@ -41647,6 +41865,7 @@ reason은 각 항목에서 무엇을 줄이거나 합쳤는지와 그 이유를 
 
     state.capacityUiRefresh = refreshStatsOnly;
     assembleWorkSpace(overlay);
+    rpcmRenderImportReviewNotice(overlay,room);
     // The full-rebuild card is created by assembleWorkSpace(), so bind its
     // click handlers only after the card exists in the DOM.
     bindFullRebuildTools(overlay, room);
@@ -41825,7 +42044,7 @@ reason은 각 항목에서 무엇을 줄이거나 합쳤는지와 그 이유를 
     if(!choice)return null;
     const result=await rpcmRestoreFullBackup(payload,choice);
     if(state.currentRoom){try{await ensureCurrentRoom(getChatIdFromPath(),true);renderModalIfOpen();}catch(_){state.fullBackupRestoreNeedsReload=true;}}
-    notify(result.globalOnly?'전역 설정 복원 완료 · 새로고침 후 적용':payload.backupMode==='legacy-import'?'기존 백업 이사 완료 · 전역 설정은 현재 값 유지':'검증된 전체 백업 복원 완료 · 새로고침 후 설정 적용','success',7000);return result;
+    notify(result.globalOnly?'전역 설정 복원 완료 · 새로고침 후 적용':payload.backupMode==='legacy-import'?'기존 백업 이사 완료 · 전역 설정은 현재 값 유지':'검증된 전체 백업 복원 완료 · 새로고침 후 설정 적용','success',7000);rpcmShowImportResult(payload,choice);return result;
   }
   function rpcmChooseVerifiedBackupFile(){
     const input=document.createElement('input');input.type='file';input.accept='.json,application/json';input.hidden=true;
