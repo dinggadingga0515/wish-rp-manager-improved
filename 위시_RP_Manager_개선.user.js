@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         🪽위시 RP Manager 0.17.15(키메라 버전)
 // @namespace    local.rp.context.manager
-// @version      0.17.15.4
+// @version      0.17.15.5
 // @description  [키메라 버전] 장기 RP의 현재상태·날짜로그·인물·타임라인·자료집을 관리하고, 검수형 AI 생성·컨텍스트 주입·통합 백업·기존 백업 이사를 지원합니다.
 // @author       User
 // @license      All Rights Reserved
@@ -902,13 +902,13 @@ const wrpmFullBackupV2 = (() => {
   // 버전별 키를 쓰면 구버전과 신버전이 동시에 설치됐을 때 둘 다 실행될 수 있습니다.
   // 모든 버전이 공유하는 고정 키로 중복 실행을 막습니다.
   if(window.__WISH_RP_MANAGER_LOADED__){wrpmStartup.status('duplicate','다른 RP Manager가 실행 중입니다. 버전: '+String(window.__WISH_RP_MANAGER_LOADED__.version||'알 수 없음'));return;}
-  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.17.15.4', loadedAt: Date.now() };
+  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.17.15.5', loadedAt: Date.now() };
   // 같은 페이지에 남아 있는 v0.8.10 복사본이 뒤늦게 시작되는 경우도 차단합니다.
   window.__RP_MANAGER_0810_LOADED__ = true;
 
   const APP = {
     name: '🪽위시 RP Manager',
-    version: '0.17.15.4',
+    version: '0.17.15.5',
     releaseStage: '키메라 버전',
     dbName: 'RPContextManagerDB',
     dbVersion: 2,
@@ -16024,6 +16024,8 @@ ${dialogueText}`;
   function updateSaveStatusUi(status = state.saveStatus) {
     state.saveStatus = status;
     const el = state.modal?.querySelector('#rpcm-save-status');
+    const retry = state.modal?.querySelector('#rpcm-save-retry');
+    if (retry) retry.hidden = status !== 'error';
     if (!el) return;
     if (status === 'saving') { rpcmClearErrorHelp(el); el.textContent = '로컬 저장 중…'; el.className = 'rpcm-save-status saving'; return; }
     if (status === 'error') {
@@ -23920,7 +23922,8 @@ function renderedContextScope(node) {
     const messageId=host?.getAttribute('data-message-id')||host?.getAttribute('data-message-group-id');
     if(!room||!messageId)throw new Error('수정할 메시지를 확인하지 못했습니다.');
     const chatId=String(apiChatIdOf(room)),epoch=state.routeEpoch,scopeKey=getRoomScopeKey(chatId);
-    const current=()=>editor.isConnected&&state.currentRoom===room&&state.routeEpoch===epoch&&String(getChatIdFromPath())===chatId&&getRoomScopeKey(chatId)===scopeKey;
+    const currentMessageId=()=>{const liveHost=editor.closest('[data-message-id],[data-message-group-id]');return String(liveHost?.getAttribute('data-message-id')||liveHost?.getAttribute('data-message-group-id')||'');};
+    const current=()=>editor.isConnected&&currentMessageId()===String(messageId)&&state.currentRoom===room&&state.routeEpoch===epoch&&String(getChatIdFromPath())===chatId&&getRoomScopeKey(chatId)===scopeKey;
     const message=await fetchMessage(chatId,String(messageId));
     if(!current()||!message||messageRoleOf(message)!=='assistant')throw new Error('방 또는 수정 대상이 바뀌었습니다.');
     rpcmAssertReviewedResponseIdle(message,chatId);
@@ -23928,8 +23931,40 @@ function renderedContextScope(node) {
     if(parts.malformed||!parts.found)throw new Error('서버에서 완전한 주입 구간을 확인하지 못했습니다.');
     return {chatId,messageId:String(messageId),original:parts.text,raw,suffix:parts.suffix,current};
   }
-  // Native edit UI: keep its model untouched. Orphan END needs a verified raw-body editor.
-  function createRpcmNativeContextMask({readSource=rpcmReadNativeEditorSource,saveBody=writeReviewedResponse,afterSave=()=>notify('본문 저장 완료 · 화면에 예전 내용이 남아 있으면 새로고침해 주세요.','ok',7000)}={}){
+  // A verified server edit also updates Crack's current message store, so the
+  // screen can reflect the edit without a full-page reload. No server write here.
+  function rpcmRefreshCrackMessageView(chatId,messageId,raw){
+    if(String(getChatIdFromPath())!==String(chatId))return false;
+    const id=String(messageId),text=String(raw);
+    const nodes=[...document.querySelectorAll('[data-message-id],[data-message-group-id]')].filter(node=>
+      String(node.getAttribute('data-message-id')||node.getAttribute('data-message-group-id')||'')===id);
+    for(const node of nodes){
+      let fiber=null;
+      for(let cursor=node.querySelector?.('.wrtn-markdown')||node,depth=0;cursor&&depth<15;cursor=cursor.parentElement,depth++){
+        try{
+          const rawNode=cursor.wrappedJSObject||cursor;
+          const key=Object.keys(rawNode).find(name=>name.startsWith('__reactFiber$')||name.startsWith('__reactInternalInstance$'));
+          if(key&&rawNode[key]){fiber=rawNode[key];break;}
+        }catch(_){continue;}
+      }
+      for(let depth=0;fiber&&depth<500;fiber=fiber.return,depth++){
+        for(const candidate of [fiber,fiber.alternate]){
+          try{
+            const value=candidate?.memoizedProps?.value;
+            if(!value||typeof value.getState!=='function'||typeof value.subscribe!=='function')continue;
+            const current=value.getState();
+            if(typeof current?.messages?.has!=='function'||!current.messages.has(id)||typeof current.updateMessage!=='function')continue;
+            if(String(getChatIdFromPath())!==String(chatId))return false;
+            current.updateMessage(id,{content:text});
+            return true;
+          }catch(_){continue;}
+        }
+      }
+    }
+    return false;
+  }
+  // Native edit UI: edit verified server body only; preserve the hidden trailer on save.
+  function createRpcmNativeContextMask({readSource=rpcmReadNativeEditorSource,saveBody=writeReviewedResponse,afterSave=(source,saved)=>{let refreshed=false;try{refreshed=rpcmRefreshCrackMessageView(source.chatId,source.messageId,saved.rawContent);}catch(error){console.warn('[RP Manager] 화면 저장소 갱신 실패',error);}notify(refreshed?'본문 저장 완료 · 화면에 반영했습니다.':'본문 저장 완료 · 화면이 이전 내용이면 새로고침해 주세요.','ok',7000);}}={}){
     const sessions=new Map();let timer=null,observer=null,running=false;
     const properties=['height','min-height','max-height','overflow','display'];
     const showHint=(session,text)=>{if(session.hint.textContent!==text)session.hint.textContent=text;};
@@ -23968,13 +24003,38 @@ function renderedContextScope(node) {
     function restore(session){
       unclip(session);
       session.proxy?.remove();
+      session.saveProxy?.remove();
+      if(session.nativeSave){const prior=session.nativeSaveDisplay;if(prior.value)session.nativeSave.style.setProperty('display',prior.value,prior.priority);else session.nativeSave.style.removeProperty('display');}
       session.hint.remove();for(const [target,type,handler] of session.listeners)target.removeEventListener(type,handler,true);
       sessions.delete(session.editor);
     }
-    function beginOrphanEdit(editor,panel){
-      const hint=document.createElement('small');hint.id='rpcm-native-context-'+Math.random().toString(36).slice(2);hint.style.cssText='display:block;padding:4px 10px;color:inherit;font:12px/1.4 system-ui';hint.textContent='수정창의 주입 표지가 빠져 서버 본문을 확인하고 있습니다…';
+    // Textareas normalize CRLF/CR. Track each edit against the raw body so
+    // unchanged line endings and whitespace are preserved outside that edit.
+    function readBodyDraft(session){
+      const value=session.proxy.value,previous=session.displayDraft;
+      if(value===previous)return session.bodyDraft;
+      let prefix=0,suffix=0;
+      while(prefix<previous.length&&prefix<value.length&&previous[prefix]===value[prefix])prefix++;
+      while(suffix<previous.length-prefix&&suffix<value.length-prefix&&previous[previous.length-1-suffix]===value[value.length-1-suffix])suffix++;
+      const rawOffset=offset=>{let raw=0,shown=0;while(raw<session.bodyDraft.length&&shown<offset){raw+=session.bodyDraft[raw]==='\r'&&session.bodyDraft[raw+1]==='\n'?2:1;shown++;}return raw;};
+      const from=rawOffset(prefix),to=rawOffset(previous.length-suffix),ending=session.bodyDraft.match(/\r\n|\r|\n/)?.[0]||'\n';
+      const inserted=value.slice(prefix,value.length-suffix).replace(/\n/g,ending);
+      session.bodyDraft=session.bodyDraft.slice(0,from)+inserted+session.bodyDraft.slice(to);session.displayDraft=value;
+      return session.bodyDraft;
+    }
+    function beginBodyEdit(editor,panel){
+      const hint=document.createElement('small');hint.id='rpcm-native-context-'+Math.random().toString(36).slice(2);hint.style.cssText='display:block;padding:4px 10px;color:inherit;font:12px/1.4 system-ui';hint.textContent='주입정보를 제외한 수정 본문을 확인하고 있습니다…';
       editor.parentElement.insertBefore(hint,editor);
       const session={editor,panel,hint,source:null,proxy:null,busy:false,styles:Object.fromEntries(properties.map(prop=>[prop,{value:editor.style.getPropertyValue(prop),priority:editor.style.getPropertyPriority(prop)}])),listeners:[]};sessions.set(editor,session);
+      // A separate button avoids native disabled/length validation state.
+      // It keeps the site's cancel control and never invokes the native save handler.
+      const nativeSave=[...panel.querySelectorAll('button,[role="button"]')].find(button=>visible(button)&&saveButton(button));
+      if(nativeSave){
+        const saveProxy=nativeSave.cloneNode(false);saveProxy.id='rpcm-native-save-'+Math.random().toString(36).slice(2);saveProxy.textContent='수정 완료';saveProxy.setAttribute('type','button');saveProxy.removeAttribute('onclick');saveProxy.removeAttribute('aria-disabled');saveProxy.removeAttribute('data-disabled');saveProxy.disabled=true;
+        saveProxy.style.setProperty('display','inline-flex','important');saveProxy.style.setProperty('pointer-events','auto','important');
+        session.nativeSave=nativeSave;session.nativeSaveDisplay={value:nativeSave.style.getPropertyValue('display'),priority:nativeSave.style.getPropertyPriority('display')};session.saveProxy=saveProxy;
+        nativeSave.parentElement.insertBefore(saveProxy,nativeSave);nativeSave.style.setProperty('display','none','important');
+      }
       const holdNativeInput=event=>{event.preventDefault();event.stopImmediatePropagation();showHint(session,'서버 원문을 확인 중입니다. 확인 후 표시되는 본문 수정칸을 사용해 주세요.');};
       for(const type of ['beforeinput','cut','paste']){editor.addEventListener(type,holdNativeInput,true);session.listeners.push([editor,type,holdNativeInput]);}
       const listener=async event=>{
@@ -23985,21 +24045,24 @@ function renderedContextScope(node) {
         }
         event.preventDefault();event.stopImmediatePropagation();
         if(session.busy)return;
-        if(!session.proxy||!session.source?.current()){showHint(session,'원문 확인이 끝나지 않았거나 방이 바뀌었습니다. 취소하고 다시 열어 주세요.');return;}
+        if(!session.proxy||!session.source?.current()){if(!session.readError)showHint(session,'원문 확인이 끝나지 않았거나 방이 바뀌었습니다. 취소하고 다시 열어 주세요.');return;}
         session.busy=true;session.proxy.readOnly=true;const priorDisabled=button.disabled;button.disabled=true;
         try{
-          const next=session.proxy.value;
+          const next=readBodyDraft(session);
           const changed=next!==session.source.original;
-          if(changed)await saveBody(session.source.chatId,session.source.messageId,session.source.original,next);
+          const saved=changed?await saveBody(session.source.chatId,session.source.messageId,session.source.original,next):null;
           if(!session.source.current())throw new Error('저장 확인 후 방이 바뀌었습니다. 현재 서버 내용을 확인해 주세요.');
           session.busy=false;
           const cancel=[...panel.querySelectorAll('button,[role="button"]')].find(b=>b.textContent.trim()==='취소');
           if(cancel){cancel.click();restore(session);}else showHint(session,'저장 확인 완료 · 수정창을 닫아 주세요.');
-          if(changed)afterSave();
+          if(changed)afterSave(session.source,saved);
         }catch(error){showHint(session,'저장 보류: '+String(error?.message||error));}
         finally{session.busy=false;if(session.proxy)session.proxy.readOnly=false;button.disabled=priorDisabled;}
       };
       panel.addEventListener('click',listener,true);session.listeners.push([panel,'click',listener]);
+      // Hide the entire native editor, including its BR/layout space. Its model
+      // remains intact, but neither native length gates nor its blank tail are used.
+      editor.style.setProperty('display','none','important');
       void (async()=>{
         try{
           const source=await readSource(editor);
@@ -24007,52 +24070,34 @@ function renderedContextScope(node) {
           if(!source?.current?.())throw new Error('원문 확인 중 수정 대상이 바뀌었습니다.');
           const proxy=document.createElement('textarea');proxy.id='rpcm-native-body-'+Math.random().toString(36).slice(2);proxy.setAttribute('aria-label','주입정보를 제외한 서버 원문 수정');proxy.spellcheck=false;proxy.value=source.original;
           proxy.style.cssText='display:block;width:100%;box-sizing:border-box;min-height:140px;resize:vertical;padding:12px;border:1px solid #777;border-radius:8px;background:transparent;color:inherit;font:inherit;line-height:1.6';
-          const resize=()=>{proxy.style.height='auto';proxy.style.height=Math.max(140,proxy.scrollHeight+2)+'px';};proxy.addEventListener('input',resize);
-          session.source=source;session.proxy=proxy;editor.parentElement.insertBefore(proxy,editor);editor.style.setProperty('display','none','important');resize();
-          showHint(session,'주입정보 숨김 · 서버에서 확인한 본문 원문만 편집합니다. 수정 완료 시 주입정보를 보존해 저장합니다.');
-        }catch(error){if(sessions.get(editor)===session)showHint(session,'원문 확인 실패: '+String(error?.message||error)+' · 취소 후 다시 열어 주세요.');}
+          const resize=()=>{if(session.source)readBodyDraft(session);proxy.style.height='auto';proxy.style.height=Math.min(Math.max(140,Math.floor(window.innerHeight*.65)),Math.max(140,proxy.scrollHeight+2))+'px';};proxy.addEventListener('input',resize);
+          session.source=source;session.proxy=proxy;session.bodyDraft=source.original;session.displayDraft=proxy.value;editor.parentElement.insertBefore(proxy,editor);editor.style.setProperty('display','none','important');resize();
+          if(session.saveProxy)session.saveProxy.disabled=false;
+          showHint(session,'주입정보 숨김 · 본문만 수정합니다. 수정 완료 시 주입정보를 보존해 저장합니다.');
+          proxy.focus({preventScroll:true});
+        }catch(error){if(sessions.get(editor)===session){session.readError=String(error?.message||error);showHint(session,'원문 확인 실패: '+session.readError+' · 취소 후 다시 열어 주세요.');}}
       })();
       return session;
     }
-    function selectionInTail(editor,projected){
-      const selection=window.getSelection();if(!selection?.rangeCount)return false;
-      const selected=selection.getRangeAt(0);if(!editor.contains(selected.endContainer))return false;
-      const probe=selected.cloneRange();probe.collapse(false);return probe.compareBoundaryPoints(Range.START_TO_START,projected.contextBoundary)>=0;
-    }
     function refresh(){
-      timer=null;if(!running)return;
-      for(const session of [...sessions.values()])if(!session.editor.isConnected||(!visible(session.editor)&&!visible(session.proxy))||!panelOf(session.editor))restore(session);
+      clearTimeout(timer);timer=null;if(!running)return;
+      for(const session of [...sessions.values()])if(!session.editor.isConnected||(!visible(session.editor)&&!visible(session.proxy)&&!visible(session.hint))||!panelOf(session.editor))restore(session);
       for(const editor of document.querySelectorAll('.ProseMirror[contenteditable="true"]')){
-        let session=sessions.get(editor);if(session?.source||session?.proxy)continue;
+        if(sessions.has(editor))continue;
         if(!visible(editor))continue;const panel=panelOf(editor);if(!panel)continue;
-        if(editor.scrollTop)editor.scrollTop=0;
-        const projected=projection(editor);
-        const raw=editor.textContent||'';
-        if(!projected&&!raw.includes('RP_CONTEXT_MANAGER_START')&&raw.split('RP_CONTEXT_MANAGER_END').length===2&&!raw.slice(raw.indexOf('RP_CONTEXT_MANAGER_END')+'RP_CONTEXT_MANAGER_END'.length).replace(/^-->/,'').trim()){
-          if(!session)beginOrphanEdit(editor,panel);continue;
-        }
-        if(!projected){if(session){unclip(session);showHint(session,'주입정보 범위를 확인하지 못했습니다. 저장 전 수정창을 취소하고 원문을 확인하세요.');}continue;}
-        if(!session){
-          const hint=document.createElement('small');hint.id='rpcm-native-context-'+Math.random().toString(36).slice(2);hint.style.cssText='display:block;padding:4px 10px;color:inherit;opacity:.75;font:12px/1.4 system-ui';hint.textContent='주입정보 숨김 · 편집 원문은 그대로 보존';
-          editor.parentElement.insertBefore(hint,editor);session={editor,panel,hint,tail:projected.tail,styles:Object.fromEntries(properties.map(prop=>[prop,{value:editor.style.getPropertyValue(prop),priority:editor.style.getPropertyPriority(prop)}])),listeners:[]};sessions.set(editor,session);
-          const listen=(target,type,handler)=>{target.addEventListener(type,handler,true);session.listeners.push([target,type,handler]);};
-          listen(editor,'keydown',event=>{if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='a'){const current=projection(editor);if(!current)return;event.preventDefault();event.stopImmediatePropagation();const selection=window.getSelection();selection.removeAllRanges();selection.addRange(current.range.cloneRange());}});
-          const protect=event=>{const current=projection(editor);if(current&&selectionInTail(editor,current)){event.preventDefault();event.stopImmediatePropagation();hint.textContent='주입정보는 보존합니다. 본문만 선택해 수정하세요. Ctrl+A는 본문만 선택합니다.';}};
-          listen(editor,'beforeinput',protect);listen(editor,'cut',protect);listen(editor,'paste',protect);listen(editor,'input',queue);
-          listen(panel,'click',event=>{if(!saveButton(event.target))return;const current=projection(editor);if(!current||current.tail!==session.tail){event.preventDefault();event.stopImmediatePropagation();hint.textContent='주입정보가 편집 중 바뀌어 저장을 보류했습니다. 취소 후 다시 수정하세요.';}});
-        }
-        if(projected.tail!==session.tail){unclip(session);showHint(session,'주입정보 변경 감지 · 저장은 보류됩니다. 취소 후 다시 수정하세요.');continue;}
-        for(const [prop,value] of [['height',projected.height+'px'],['max-height',projected.height+'px'],['min-height','0px'],['overflow','hidden']])if(editor.style.getPropertyValue(prop)!==value||editor.style.getPropertyPriority(prop)!=='important')editor.style.setProperty(prop,value,'important');
-        if(editor.scrollTop)editor.scrollTop=0;
-        const selection=window.getSelection();
-        if(selection?.isCollapsed&&selectionInTail(editor,projected)){const caret=projected.range.cloneRange();caret.collapse(false);selection.removeAllRanges();selection.addRange(caret);}
+        const projected=projection(editor),raw=editor.textContent||'';
+        const orphan=!raw.includes('RP_CONTEXT_MANAGER_START')&&raw.split('RP_CONTEXT_MANAGER_END').length===2&&!raw.slice(raw.indexOf('RP_CONTEXT_MANAGER_END')+'RP_CONTEXT_MANAGER_END'.length).replace(/^-->/,'').trim();
+        if(projected||orphan)beginBodyEdit(editor,panel);
       }
     }
     function queue(){if(running&&timer===null)timer=setTimeout(refresh,80);}
+    // The observer is debounced. Prepare synchronously on the first keystroke
+    // or save click too, so an early action cannot enter the native save path.
+    function prepareInteraction(event){if(event.target?.closest?.('.ProseMirror[contenteditable="true"]')||saveButton(event.target))refresh();}
     function start(){
-      if(running)return;running=true;observer||=new MutationObserver(queue);observer.observe(document.documentElement||document,{childList:true,subtree:true,characterData:true});document.addEventListener('selectionchange',queue);queue();
+      if(running)return;running=true;observer||=new MutationObserver(queue);observer.observe(document.documentElement||document,{childList:true,subtree:true,characterData:true});document.addEventListener('beforeinput',prepareInteraction,true);document.addEventListener('click',prepareInteraction,true);queue();
     }
-    function stop(){running=false;clearTimeout(timer);timer=null;observer?.disconnect();document.removeEventListener('selectionchange',queue);}
+    function stop(){running=false;clearTimeout(timer);timer=null;observer?.disconnect();document.removeEventListener('beforeinput',prepareInteraction,true);document.removeEventListener('click',prepareInteraction,true);}
     return {start,stop,refresh,projection};
   }
   const rpcmNativeContextMask=createRpcmNativeContextMask();
@@ -29230,7 +29275,9 @@ Existing REF must come from this packet. NEW REF are temporary, and a NEW_P pack
     draft.packet=draft.packet.replace('[RP_MANAGER_TASK]',`[RP_MANAGER_TASK]\nJOB_ID=${jobId}\nRESULT_JOB_ID_REQUIRED=YES`);
     const rule=task==='currentItems'
       ? `결과 식별을 위해 현재상태 결과의 첫 줄에 반드시 JOB_ID=${jobId} 를 한 번 출력합니다. 중요물품 결과에는 반복하지 않아도 됩니다.`
-      : `결과의 첫 줄에 반드시 JOB_ID=${jobId} 를 출력합니다. 작업 ID를 생략하거나 바꾸지 않습니다.`;
+      : task==='personInfo'
+        ? `결과 맨 앞에 반드시 JOB_ID=${jobId} 한 줄을 출력합니다. 이 줄은 작업 식별 메타데이터이며, 인물정보 지침의 첫 줄 [[WISH_PERSON_V1]]은 이 JOB_ID 줄 다음에 오는 본문의 첫 줄을 뜻합니다. 작업 ID를 생략하거나 바꾸지 않습니다.`
+        : `결과의 첫 줄에 반드시 JOB_ID=${jobId} 를 출력합니다. 작업 ID를 생략하거나 바꾸지 않습니다.`;
     draft.packet=draft.packet.replace('[OUTPUT_CONTRACT]',`[OUTPUT_CONTRACT]\n${rule}`);
     return draft;
   }
@@ -31053,7 +31100,7 @@ Existing REF must come from this packet. NEW REF are temporary, and a NEW_P pack
     // Only a person present in the source snapshot can have gone missing.
     // A new person absent from both snapshots is an ordinary addition.
     const previous=new Set(manualPersonExistingRows(draft.existing).flatMap(row=>[manualPersonName(row.person),manualPersonName(row.target)]).filter(Boolean));
-    let parsed;try{parsed=parsePersonStateOutput(stripAiOutputWrapper(String(resultText||'')));}catch{return missing;}
+    let parsed;try{parsed=parsePersonStateOutput(stripAiOutputWrapper(manualStripResultJobId(resultText)));}catch{return missing;}
     for(const entry of parsed.records||[]){
       if(entry.op!=='upsert')continue;
       const label=String(entry.person||'').trim(),key=manualPersonName(label);
@@ -31120,8 +31167,13 @@ Existing REF must come from this packet. NEW REF are temporary, and a NEW_P pack
     if(task==='personInfo')return [String(values.result||''),JSON.stringify((Array.isArray(values.excludedPeople)?values.excludedPeople:[]).map(manualPersonName).sort()),JSON.stringify((Array.isArray(values.restoredPeople)?values.restoredPeople:[]).map(manualPersonName).sort())];
     return [String(values.result || '')];
   }
+  function manualResultJobHeader(value){
+    const text=String(value||'').replace(/^\uFEFF/,'');
+    const match=text.match(/^((?:[ \t]*\r?\n)*(?:```[^\r\n]*\r?\n)?(?:[ \t]*\r?\n)*)JOB_ID[ \t]*=[ \t]*([^\s\r\n]+)[^\r\n]*(?:\r?\n|$)/);
+    return match?{id:match[2],body:match[1]+text.slice(match[0].length)}:{id:'',body:text};
+  }
   function manualStripResultJobId(value){
-    return String(value||'').replace(/^\uFEFF/,'').replace(/(?:^|\r?\n)JOB_ID\s*=\s*[^\r\n]+(?=\r?\n|$)/,'').replace(/^\s*\r?\n/,'');
+    return manualResultJobHeader(value).body;
   }
   function manualResultInputs(task, values) {
     return manualRawResultInputs(task,values).map((value,index)=>task==='personInfo'&&index>0?value:manualStripResultJobId(value));
@@ -31145,12 +31197,12 @@ Existing REF must come from this packet. NEW REF are temporary, and a NEW_P pack
       diffParts.push({ label, before, after, stats:diff.stats, rows:diff.rows });
     };
     if (task === 'currentItems') {
-      const rawState = stripAiOutputWrapper(values.currentState);
+      const rawState = stripAiOutputWrapper(manualStripResultJobId(values.currentState));
       const checked = validateGeneratedCurrentState(rawState);
       if (checked.errors.length) throw new Error(checked.errors.join(' / '));
       if (!checked.sections.length || !rawState.startsWith(CURRENT_STATE_SECTION_RULE + '\n')) throw new Error('현재상태.txt의 첫 줄과 최상위 섹션 구분선을 확인해 주세요.');
       if (draft.guideSource.startsWith('수동 업데이트 기본 지침') && checked.sections[0].title !== '기준 시점 / 진행 단계') throw new Error('현재상태 첫 섹션은 “1. 기준 시점 / 진행 단계”여야 합니다.');
-      const rawItems = stripAiOutputWrapper(values.importantItems);
+      const rawItems = stripAiOutputWrapper(manualStripResultJobId(values.importantItems));
       const parsedItems = parseImportantItemBulkText(rawItems);
       const headings = rawItems.match(/^[-*]\s+\*\*.+?\*\*/gm) || [];
       if (rawItems && !rawItems.startsWith('- **')) throw new Error('중요물품.txt의 첫 줄은 “- **” 상위 물품 불릿이어야 합니다.');
@@ -31187,7 +31239,7 @@ Existing REF must come from this packet. NEW REF are temporary, and a NEW_P pack
         candidate.pending.quickRemovedItems = refresh(candidate.pending.quickRemovedItems);
       }
     } else if (task === 'logSummary') {
-      const raw = stripAiOutputWrapper(values.result);
+      const raw = stripAiOutputWrapper(manualStripResultJobId(values.result));
       const rawBlocks = parseDatedLogBlocks(raw);
       if (rawBlocks.some(block => normalizedLogTimelineKey(logTimelineLabelOfBlock(block)) !== normalizedLogTimelineKey(activeLogTimelineLabel(candidate)))) throw new Error('결과 날짜의 시간선이 현재 활성 시간선과 다릅니다. 다른 시간선 블록을 자동으로 옮기지 않았습니다.');
       const checked = validateGeneratedDateSummary(alignGeneratedLogTimeline(candidate, raw));
@@ -31201,7 +31253,7 @@ Existing REF must come from this packet. NEW REF are temporary, and a NEW_P pack
       summary.push(`결과 ${merged.generatedBlocks.length}개 날짜`, `저장본 ${merged.oldBlocks.length}개 → ${merged.newBlocks.length}개`);
       if (merged.warnings.length) summary.push(`주의 · ${merged.warnings.join(' / ')}`);
     } else if (task === 'personInfo') {
-      const raw = stripAiOutputWrapper(values.result);
+      const raw = stripAiOutputWrapper(manualStripResultJobId(values.result));
       const parsed = parsePersonStateOutput(raw);
       if (parsed.errors.length) throw new Error(parsed.errors.join(' / '));
       const delta=draft.personOutputMode==='DELTA';
@@ -31262,7 +31314,7 @@ Existing REF must come from this packet. NEW REF are temporary, and a NEW_P pack
       summary.push(`유지·갱신 ${changed}개`, `추가 ${added}개`, `종료 ${ended}개`);
       for(const reason of ['deleted','missing','selected']){const entries=skipped.filter(entry=>policy.reason(entry)===reason);if(entries.length)summary.push(`${reason==='deleted'?'삭제 기록에 따라 제외':reason==='missing'?'현재 저장본에 없어 기본 제외':'사용자 선택으로 제외'} ${[...new Set(entries.map(entry=>entry.person))].join(', ')} · ${entries.length}개 결과 · 현재 저장본 유지`);}
     } else if (task === 'timeline') {
-      const source = normalizeLineBreaks(String(values.result || '')).trim();
+      const source = normalizeLineBreaks(manualStripResultJobId(values.result)).trim();
       const fenced = source.match(/^```(?:text|txt|markdown|md|timeline)?[ \t]*\n([\s\S]*?)\n```[ \t]*$/i);
       const raw = fenced ? fenced[1].trim() : source;
       const audit = raw.match(/^\[TIMELINE_AUDIT\][\s\S]*?\[\/TIMELINE_AUDIT\]/i);
@@ -31604,8 +31656,7 @@ Existing REF must come from this packet. NEW REF are temporary, and a NEW_P pack
   function assertManualJobCurrent(room,task,draft,values){
     const job=room.manualPendingJobs?.[task];
     if(!draft.recovery&&job?.id&&draft.jobId&&job.id!==draft.jobId)throw new Error('다른 작업자료가 선택되어 있습니다. 진행 중 작업을 다시 확인해 주세요.');
-    const raw=manualRawResultInputs(task,values).map(value=>String(value||'').replace(/^\uFEFF/,'')).join('\n');
-    const resultJobIds=[...raw.matchAll(/(?:^|\n)JOB_ID\s*=\s*([^\s\r\n]+)/g)].map(match=>match[1]);
+    const resultJobIds=manualRawResultInputs(task,values).map(value=>manualResultJobHeader(value).id).filter(Boolean);
     if(!draft.recovery&&draft.resultJobIdRequired&&!resultJobIds.length)throw new Error('결과에 JOB_ID가 없습니다. 현재 작업자료에서 생성한 결과인지 확인해 주세요.');
     if(!draft.recovery&&draft.jobId&&resultJobIds.some(id=>id!==draft.jobId))throw new Error('결과의 작업 ID가 현재 작업자료와 다릅니다. 올바른 결과를 선택해 주세요.');
   }
@@ -31695,7 +31746,7 @@ Existing REF must come from this packet. NEW REF are temporary, and a NEW_P pack
     const renderPersonSelection=()=>{
       if(!personSelection)return;
       const input=backdrop.querySelector('[data-manual-input="result"]').value;
-      const parsed=parsePersonStateOutput(stripAiOutputWrapper(input));
+      const parsed=parsePersonStateOutput(stripAiOutputWrapper(manualStripResultJobId(input)));
       const provisionalPolicy=manualPersonImportPolicy(room,draft,{result:input,excludedPeople:[...excludedPeople],restoredPeople:[...restoredPeople]});
       const restoreChoices=new Map();
       for(const rawName of room.personDeletedNames||[]){
@@ -33790,11 +33841,16 @@ RP 원문과 사용자 확정 메모를 사실 근거로 삼는다. Crack의 미
 
   const longTermResultReports = new Map();
   function longTermInspectResult(text) {
-    const raw=String(text||'').replace(/\r\n?/g,'\n'),lines=raw.split('\n'),blocks=[],issues=[];let current=null,offset=0;
+    const raw=String(text||'').replace(/\r\n?/g,'\n'),lines=raw.split('\n'),blocks=[],issues=[];let current=null,offset=0,headerSeen=false,openingFenceSeen=false;
     if(raw.length>600000)return {text:raw,blocks:[],issues:[{index:-1,title:'입력 크기',line:1,endLine:1,start:0,end:0,messages:['결과가 600,000자 안전 한도를 넘습니다. 파일과 작업 범위를 확인해 주세요.']}]};
+    const lastContent=lines.findLastIndex(line=>line.trim());
     for(let i=0;i<lines.length;i++){
       const line=lines[i],trim=line.trim();
-      if(/^JOB_ID\s*=/.test(trim)||/^```[^\n]*$/.test(trim)){offset+=line.length+1;continue;}
+      // Only the result header and outer fence are transport syntax. Identical
+      // lines inside a card are body content and must receive the same validation.
+      if(!current&&!blocks.length&&!headerSeen&&/^JOB_ID\s*=/.test(trim)){headerSeen=true;offset+=line.length+1;continue;}
+      if(!current&&!blocks.length&&!openingFenceSeen&&/^```[^\n]*$/.test(trim)){openingFenceSeen=true;offset+=line.length+1;continue;}
+      if(current&&openingFenceSeen&&i===lastContent&&trim==='```'){offset+=line.length+1;continue;}
       const match=line.match(/^\[([^\]\n]+)\]\s*$/);
       if(match){if(current)blocks.push(current);current={title:match[1],summary:'',start:offset,end:raw.length,line:i+1,endLine:i+1};}
       else if(current&&trim){current.summary+=(current.summary?'\n':'')+line;current.endLine=i+1;}
@@ -34112,11 +34168,11 @@ RP 원문과 사용자 확정 메모를 사실 근거로 삼는다. Crack의 미
     if(!packet)throw new Error('먼저 이 방에서 해당 작업자료를 만들어 주세요.');
     if(packet.stale)throw new Error('작업자료의 원문이 변경되었습니다. 작업자료를 다시 만들어 주세요.');
     const normalizedText=String(text||'').replace(/^\uFEFF/,'');
-    const resultJobIds=[...normalizedText.matchAll(/(?:^|\n)JOB_ID\s*=\s*([^\s\r\n]+)/g)].map(match=>match[1]);
-    if(packet.resultJobIdRequired&&!resultJobIds.length)throw new Error('결과에 JOB_ID가 없습니다. 현재 작업자료에서 생성한 결과인지 확인해 주세요.');
-    if(packet.jobId&&resultJobIds.some(id=>id!==packet.jobId))throw new Error('다른 작업자료의 결과입니다. 현재 진행 중 작업을 확인해 주세요.');
+    const resultJobId=manualResultJobHeader(normalizedText).id;
+    if(packet.resultJobIdRequired&&!resultJobId)throw new Error('결과에 JOB_ID가 없습니다. 현재 작업자료에서 생성한 결과인지 확인해 주세요.');
+    if(packet.jobId&&resultJobId&&resultJobId!==packet.jobId)throw new Error('다른 작업자료의 결과입니다. 현재 진행 중 작업을 확인해 주세요.');
     if(String(text||'').length>600000)throw new Error('결과가 안전 한도를 넘습니다.');
-    const cards=longTermParseCards(normalizedText.replace(/(?:^|\r?\n)JOB_ID\s*=\s*[^\r\n]+(?=\r?\n|$)/,'')),inventory=await longTermFetch(room);
+    const cards=longTermParseCards(manualStripResultJobId(normalizedText)),inventory=await longTermFetch(room);
     if(!packet.existingInventory&&longTermInventoryHash(inventory)!==packet.inventoryHash)throw new Error('이전 버전 작업자료의 목록이 바뀌었습니다. 새 작업자료를 만들어 주세요.');
     const originalInventory=packet.existingInventory||inventory;
     const common={externalJobId:String(packet.jobId||''),roomId:String(room.chatId),chatId:String(apiChatIdOf(room)),cards,createdAt:nowIso(),memoHash:packet.memoHash,guideHash:packet.guideHash,inventoryHash:packet.inventoryHash,existingIds:originalInventory.map(longTermId),existingFingerprints:Object.fromEntries(originalInventory.map(item=>[longTermId(item),longTermFingerprint(item)])),savedIds:[]};
@@ -35738,7 +35794,7 @@ RP 원문과 사용자 확정 메모를 사실 근거로 삼는다. Crack의 미
       button.disabled=true;
       try{
         const raw=by('[data-ltm-paste]').value;
-        const text=raw.replace(/^\uFEFF/,'').replace(/(?:^|\r?\n)JOB_ID\s*=\s*[^\r\n]+(?=\r?\n|$)/,'').trim().replace(/^```[^\n]*\n/,'').replace(/\n```$/,'');
+        const text=manualStripResultJobId(raw).trim().replace(/^```[^\n]*\n/,'').replace(/\n```$/,'');
         if(!text)throw new Error('장기기억 결과를 붙여넣어 주세요.');
         const cards=longTermParseCards(text);
         const packet=longTermState(room).drafts.externalPacket;
@@ -36498,7 +36554,7 @@ reason은 각 항목에서 무엇을 줄이거나 합쳤는지와 그 이유를 
       const firstHome=main.querySelector('#rpcm-section-overview');
       if(firstHome){const entry=document.createElement('section');entry.id='rpcm-first-use-entry';entry.className='rpcm-pref-card';entry.innerHTML='<strong>처음 시작·자료 이사</strong><p>기존 백업 JSON을 가져오거나, 백업 없이 RP 로그로 기억을 준비할 수 있습니다.</p><button type="button" class="rpcm-btn secondary" data-first-open>시작 방법 선택</button>';firstHome.prepend(entry);entry.querySelector('[data-first-open]').onclick=()=>{showWorkView(overlay,'tools',true);startCard.scrollIntoView({block:'start'});};}
       const sections = [
-        ['주입 확인', '현재 주입 후보와 원문을 확인합니다.', ['rpcm-preview-btn', 'rpcm-save']],
+        ['주입 확인', '현재 주입 후보와 원문을 확인합니다.', ['rpcm-preview-btn']],
         ['자료 이동·보관', '전체 백업·파일 확인·저장 상태 점검과 선택 복구를 관리합니다.', ['rpcm-room-transfer-backup', 'rpcm-backup', 'rpcm-full-verify', 'rpcm-import', 'rpcm-full-diagnostics', 'rpcm-storage-recovery']],
         ['초기화', '현재 방의 RP 매니저 데이터만 초기화합니다.', ['rpcm-reset']],
       ];
@@ -39426,7 +39482,6 @@ reason은 각 항목에서 무엇을 줄이거나 합쳤는지와 그 이유를 
             <div class="rpcm-tools" id="rpcm-section-tools">
               <div style="flex:1 1 100%">${aiMemorySummary(room)}</div>
               <button class="rpcm-mini" id="rpcm-preview-btn">주입 구성 미리보기</button>
-              <button class="rpcm-mini" id="rpcm-save">현재 편집 저장</button>
               <button class="rpcm-mini" id="rpcm-room-transfer-backup">현재 방 복사용 JSON</button>
               <button class="rpcm-mini" id="rpcm-backup">전체 백업 JSON</button>
               <button class="rpcm-mini" id="rpcm-storage-recovery" title="사용량 확인, 전체 백업과 선택 복구, 용량 관리를 한곳에서 합니다.">저장소 점검·복구</button><button class="rpcm-mini" id="rpcm-full-diagnostics" title="${esc(rpcmStorageDiagnosticHelp())}">저장 상태 확인</button><button class="rpcm-mini" id="rpcm-full-verify" title="${esc(rpcmBackupFileHelp())}">백업 파일 확인</button>
@@ -39438,7 +39493,7 @@ reason은 각 항목에서 무엇을 줄이거나 합쳤는지와 그 이유를 
           </div>
         <div class="rpcm-footer">
           <div class="rpcm-footer-actions"><button class="rpcm-btn rpcm-footer-arm${pending ? ' is-armed' : ''}" id="rpcm-arm" ${armDisabledReason ? `disabled title="${esc(armDisabledReason)}"` : pending ? 'title="현재 주입 해제"' : 'title="주입 시작 · Ctrl+Enter"'}><span class="rpcm-footer-dot" aria-hidden="true"></span><span class="rpcm-footer-arm-label">${pending ? pending.reanchorRetry ? '복구 대기' : pending.verified ? '주입 중' : '서버 확인 필요' : '주입 시작'}</span></button><button type="button" class="rpcm-btn secondary rpcm-footer-preview" id="rpcm-footer-preview">${rpcmUiIcon('eye')}<span>미리보기</span></button></div>
-          <div class="rpcm-footer-status"><span class="rpcm-arm-reason" id="rpcm-arm-reason" ${armDisabledReason ? '' : 'hidden'}>${esc(armDisabledReason)}</span><span class="rpcm-save-status saved" id="rpcm-save-status">로컬 저장됨</span><span class="rpcm-carrier-status idle" id="rpcm-carrier-status" role="status" ${pending ? '' : 'hidden'}>현재 주입 유지 중</span>${pending ? '' : '<span class="rpcm-footer-off">주입 OFF · 기억은 그대로</span>'}</div>
+          <div class="rpcm-footer-status"><span class="rpcm-arm-reason" id="rpcm-arm-reason" ${armDisabledReason ? '' : 'hidden'}>${esc(armDisabledReason)}</span><span class="rpcm-save-status saved" id="rpcm-save-status">로컬 저장됨</span><button type="button" class="rpcm-mini" id="rpcm-save-retry" hidden>저장 다시 시도</button><span class="rpcm-carrier-status idle" id="rpcm-carrier-status" role="status" ${pending ? '' : 'hidden'}>현재 주입 유지 중</span>${pending ? '' : '<span class="rpcm-footer-off">주입 OFF · 기억은 그대로</span>'}</div>
         </div>
         </div>
       </div>`);
@@ -41625,12 +41680,16 @@ reason은 각 항목에서 무엇을 줄이거나 합쳤는지와 그 이유를 
 
     overlay.querySelector('#rpcm-close').onclick = closeModal;
     overlay.querySelector('#rpcm-auto-start-now')?.addEventListener('click', () => openAutoStartDialog(room));
-    overlay.querySelector('#rpcm-save').onclick = async () => {
-      readModalIntoRoom();
-      updateSaveStatusUi('saving');
-      await saveRoom(room);
-      notify('🪽위시 RP Manager 저장 완료', 'success');
-      renderModalIfOpen();
+    overlay.querySelector('#rpcm-save-retry').onclick = async () => {
+      try {
+        readModalIntoRoom();
+        updateSaveStatusUi('saving');
+        await saveRoom(room);
+      } catch (error) {
+        state.lastSaveError = String(error?.message || error || '저장 실패');
+        updateSaveStatusUi('error');
+        notify('로컬 저장 실패: ' + state.lastSaveError, 'error', 7000);
+      }
     };
 
     overlay.querySelector('#rpcm-arm').onclick = async () => {
