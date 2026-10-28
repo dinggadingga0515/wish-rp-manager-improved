@@ -1,0 +1,10 @@
+name: Chimera 0.17.30.1 staging preflight
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "staging only; no release applied"
