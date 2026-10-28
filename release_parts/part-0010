@@ -1,0 +1,1000 @@
+    return `<svg class="ic ic-${name}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ''}</svg>`;
+  }
+  function personCoreButton(label, action, arg = '', cls = 'mini') {
+    const icon = action === 'addActor' || action === 'addFact' || action === 'addSpeech' || action === 'addRelationship' ? 'plus' : action === 'editFact' || action === 'editSpeech' || action === 'editRelationship' ? 'edit' : '';
+    return `<button type="button" class="m3-btn ${cls}" data-person-core-action="${action}" data-person-core-arg="${esc(arg)}">${icon ? personCoreIcon(icon) : ''}<span>${esc(label)}</span></button>`;
+  }
+
+  // Keep Wish's original per-person detail renderer below Core's actor rail.
+  // Render from a copy: opening a profile must never normalize or rewrite DB rows.
+  function personReaderRelationshipLabel(record){
+    const text=String(record.official||'').trim();
+    return text&&!/[\n\r.!?。！？;:]/.test(text)&&text.split(/\s+/).length<=3&&Array.from(text).length<=18?text:'';
+  }
+  function personReaderTabs(pane,reviewCount){
+    return `<nav class="rpcm-person-reader-tabs" aria-label="인물 상세 종류"><div role="tablist">${[['relationship','관계'],['knowledge','인지'],['speech','호칭']].map(([key,label])=>`<button type="button" role="tab" aria-selected="${pane===key}" data-person-core-tab="${key}">${label}</button>`).join('')}</div><button type="button" data-person-core-tab="review" aria-pressed="${pane==='review'}">이전 검토 ${reviewCount}</button></nav>`;
+  }
+  function renderPersonProfileOverview(room,overlay,selected,pane='relationship'){
+    const host=overlay.querySelector('#rpcm-person-profiles');if(!host)return;
+    // Drawing a reader must not normalize, save, or send any request.
+    const vm=personCoreViewModel(room),norm=manualPersonName,isActor=value=>norm(value)===norm(selected);
+    const actor=vm.actors.find(row=>isActor(row.name))||{name:selected,aliases:[]};
+    const records=vm.records.filter(row=>isActor(row.person)||isActor(row.target));
+    const partners=new Map();
+    for(const record of records){const name=isActor(record.person)?String(record.target||''):String(record.person||'');if(!name||isActor(name))continue;const key=norm(name);if(!partners.has(key))partners.set(key,{name,records:[]});partners.get(key).records.push(record);}
+    const actorRank=new Map(vm.actors.map((actor,index)=>[norm(actor.name),index]));
+    const ordered=[...partners.values()].sort((a,b)=>(actorRank.get(norm(a.name))??9999)-(actorRank.get(norm(b.name))??9999));
+    const escapeValue=value=>esc(String(value||''));
+    const edit=(kind,id)=>`<button type="button" class="rpcm-person-reader-edit" data-profile-edit="${kind}" data-profile-id="${escapeValue(id)}">편집</button>`;
+    const fold=(label,value,cls='')=>value?`<details class="rpcm-person-reader-fold ${cls}"><summary>${label}</summary><p>${escapeValue(value)}</p></details>`:'';
+    const field=(label,value)=>!String(value||'').trim()?'':String(value).length>240||String(value).split('\n').length>4?fold(label,value):`<div class="rpcm-person-reader-field"><small>${label}</small><p>${escapeValue(value)}</p></div>`;
+    const recordHtml=(record,kind)=>`<section class="rpcm-person-reader-record" data-new-person-id="${escapeValue(record.id)}">${kind==='relationship'?field('현재 관계',record.official)+field('현재 태도',record.stance)+field('남은 쟁점',record.conflict)+fold('관계 변화',record.trajectory):field('호칭',record.address)+field('말투',record.tone)+field('적용 조건',record.context)}<div class="rpcm-person-reader-foot">${fold('확인 근거',record.evidence)}${edit(kind,record.id)}</div></section>`;
+    const direction=(target,kind,outbound)=>{
+      const from=outbound?selected:target.name,to=outbound?target.name:selected;
+      const rows=target.records.filter(row=>row.type===kind&&(outbound?isActor(row.person):isActor(row.target)));
+      return `<div class="rpcm-person-reader-direction"><h4>${escapeValue(from)} <span>→</span> ${escapeValue(to)}</h4>${rows.map(row=>recordHtml(row,kind)).join('')||'<p class="rpcm-person-reader-empty">이 방향의 저장된 기록이 없습니다.</p>'}</div>`;
+    };
+    const partnerHtml=(target,index,kind)=>{
+      const relations=target.records.filter(row=>row.type===kind),preview=relations.find(row=>isActor(row.person))||relations[0];
+      const label=kind==='relationship'?relations.map(personReaderRelationshipLabel).find(Boolean):'호칭·말투';
+      const teaser=kind==='relationship'?preview?.stance||preview?.official:preview?.address||preview?.tone;
+      const speech=kind==='relationship'&&target.records.some(row=>row.type==='speech');
+      return `<details class="rpcm-person-reader-partner" data-person-partner="${escapeValue(target.name)}" ${index===0?'open':''}><summary>${personPinButton(room,target.name,vm.actors.find(row=>manualPersonName(row.name)===manualPersonName(target.name)))}<span><strong>${escapeValue(target.name)}</strong>${label?`<em>${escapeValue(label)}</em>`:''}</span><p>${escapeValue(teaser||'저장된 양방향 기록을 확인하세요.')}</p></summary><div class="rpcm-person-reader-directions">${direction(target,kind,true)}${direction(target,kind,false)}</div>${speech?`<details class="rpcm-person-reader-speech"><summary>서로 쓰는 호칭·말투</summary><div class="rpcm-person-reader-directions">${direction(target,'speech',true)}${direction(target,'speech',false)}</div></details>`:''}</details>`;
+    };
+    const facts=vm.facts,knownFacts=facts.filter(fact=>fact.cards.some(card=>isActor(card.person)));
+    const factHtml=fact=>{
+      const status=vm.statusFor(fact,actor),own=fact.cards.filter(card=>isActor(card.person));
+      const chips=vm.actors.map(person=>{const state=vm.statusFor(fact,person);return rpcmKnowledgeStatusControl(fact,person.name,state);}).join('');
+      const ownText=own.map(card=>`<section class="rpcm-person-reader-record">${field(card.status==='knows-part'?'인지 대상 사실':'이 인물이 인지한 범위',card.fact)}${card.status==='knows-part'?field('실제로 아는 부분',card.knownPart):''}${card.status==='mistaken'?field('확인된 실제 사실',card.actualFact):''}<div class="rpcm-person-reader-foot">${fold('확인 근거',card.evidence)}${edit('knowledge',card.id)}</div></section>`).join('');
+      const secrets=fact.concealments.map(row=>`<p class="rpcm-person-reader-secret"><b>${escapeValue(row.holder)} → ${escapeValue(row.target)}</b>에게 숨김${row.scope?` · ${escapeValue(row.scope)}`:''}${row.publicVersion?`<br>공개된 설명 · ${escapeValue(row.publicVersion)}`:''}</p>`).join('');
+      return `<details class="rpcm-person-reader-fact" data-new-knowledge-ids="${escapeValue(JSON.stringify(fact.cards.map(card=>String(card.id))))}"><summary><strong>${escapeValue(fact.title)}</strong>${rpcmKnowledgeStatusControl(fact,selected,status)}</summary><div class="rpcm-person-reader-fact-body">${ownText||'<p class="rpcm-person-reader-empty">이 인물의 인지 근거는 저장되지 않았습니다.</p>'}${secrets}<div class="rpcm-person-reader-gap"><small>같은 정보에 대한 인물별 인지</small><div>${chips}</div></div></div></details>`;
+    };
+    const archived=[...(room.knowledgeCards||[]).filter(row=>row.archived&&isActor(row.person)).map(row=>({row,kind:'knowledge',title:row.fact})),...(room.personStateRecords||[]).filter(row=>row.active===false&&(isActor(row.person)||isActor(row.target))).map(row=>({row,kind:row.type,title:`${row.person} → ${row.target}`}))];
+    const reviewHtml=archived.map(({row,kind,title})=>`<article class="rpcm-person-reader-archived"><strong>${escapeValue(title)}</strong>${fold('확인 근거',row.evidence)}<button type="button" class="rpcm-person-reader-edit" data-profile-restore="${escapeValue(row.id)}" data-profile-kind="${kind}">다시 활성화</button></article>`).join('');
+    const relational=ordered.filter(target=>target.records.some(row=>row.type==='relationship')),speaking=ordered.filter(target=>target.records.some(row=>row.type==='speech'));
+    const active=activePendingItems(room.pending).some(item=>item.slotId==='person:'+encodeURIComponent(selected));
+    const empty=text=>`<p class="rpcm-person-reader-empty">${text}</p>`;
+    const body=pane==='knowledge'?`<div class="rpcm-person-reader-caption"><span>기록 있는 정보 ${knownFacts.length} · 전체 정보 ${facts.length}</span><small>이 인물의 카드가 없으면 확인 안 됨으로 표시합니다.</small></div>${facts.map(factHtml).join('')||empty('저장된 인지 정보가 없습니다.')}`:pane==='speech'?speaking.map((target,index)=>partnerHtml(target,index,'speech')).join('')||empty('저장된 호칭·말투가 없습니다.'):pane==='review'?reviewHtml||empty('이전에 종료한 기록이 없습니다.'):relational.map((target,index)=>partnerHtml(target,index,'relationship')).join('')||empty('저장된 관계 정보가 없습니다. 호칭 탭에서 서로 쓰는 호칭·말투를 확인할 수 있습니다.');
+    host.dataset.pane=pane;host.dataset.personName=selected;
+    host.innerHTML=`<section class="rpcm-person-reader" data-person-name="${escapeValue(selected)}"><header class="rpcm-person-reader-head"><span class="rpcm-person-reader-avatar">${escapeValue(Array.from(selected)[0]||'?')}</span><div class="rpcm-person-reader-head-copy"><h3>${escapeValue(selected)}</h3><p>${escapeValue(actor.aliases.join(' · '))}${actor.aliases.length?' · ':''}관계 ${relational.length} · 인지 ${knownFacts.length}</p></div><div class="rpcm-person-reader-head-actions">${active?'<span class="rpcm-person-reader-status" data-status="aware">지금 주입</span>':''}<details class="rpcm-person-reader-settings"><summary>주입 설정</summary><div><label><input id="rpcm-person-bundle-enabled" type="checkbox" ${room.knowledgeInjectionEnabled&&room.personStateInjectionEnabled?'checked':''}> 인물 세트 자동 주입</label></div></details></div></header>${personReaderTabs(pane,archived.length)}<div class="rpcm-person-reader-body" role="tabpanel" aria-label="${{relationship:'관계',knowledge:'인지',speech:'호칭·말투',review:'이전 검토'}[pane]}">${body}</div></section>`;
+    const bundleInput=host.querySelector('#rpcm-person-bundle-enabled');
+    if(bundleInput)bundleInput.onchange=async event=>{const enabled=event.target.checked;room.knowledgeInjectionEnabled=enabled;room.personStateInjectionEnabled=enabled;if(enabled&&room.pending)room.pending.quickRemovedItems=quickRemovedPendingItems(room.pending).filter(item=>!isKnowledgePendingItem(item));try{await saveRoom(room);await rebuildPendingKnowledgeItem(room);renderPersonCoreUi(room,overlay);}catch(error){notify('인물 세트 주입 갱신 실패: '+error.message,'error');}};
+    host.onclick=event=>{
+      const pin=event.target.closest('[data-person-pin]');if(pin){event.preventDefault();void personTogglePin(room,overlay,pin.dataset.personPin);return;}
+      const edit=event.target.closest('[data-profile-edit]');if(edit){openPersonCoreCardEditor(room,overlay,edit.dataset.profileEdit,edit.dataset.profileId);return;}
+      const restore=event.target.closest('[data-profile-restore]');if(!restore)return;
+      const kind=restore.dataset.profileKind,id=restore.dataset.profileRestore;
+      const row=(kind==='knowledge'?room.knowledgeCards:room.personStateRecords||[]).find(record=>String(record.id)===id);if(!row)return;
+      if(kind==='knowledge')row.archived=false;else row.active=true;
+      void saveRoom(room).then(()=>rebuildPendingKnowledgeItem(room)).then(()=>renderPersonCoreUi(room,overlay)).catch(error=>notify('인물정보 복원 실패: '+error.message,'error',6000));
+    };
+    rpcmNewBadgeSchedule();
+  }
+
+  const relationshipMapNorm = value => String(value || '').trim().toLocaleLowerCase('ko-KR').replace(/\s+/g,' ');
+  function normalizeRelationshipGraph(raw,person,target){
+    if(!raw||typeof raw!=='object'||Array.isArray(raw))return null;
+    const kind=['family','hierarchy','peer','romance','other'].includes(raw.kind)?raw.kind:'other';
+    const short=value=>{const text=String(value||'').trim();return text&&!/[\n\r.!?。！？;:]/.test(text)&&text.split(/\s+/).length<=3&&Array.from(text).length<=18?text:'';};
+    const endpoint=value=>[person,target].find(name=>relationshipMapNorm(name)===relationshipMapNorm(value))||'';
+    return {label:short(raw.label),kind,parent:kind==='family'?endpoint(raw.parent):'',superior:kind==='hierarchy'?endpoint(raw.superior):'',group:String(raw.group||'').trim().slice(0,60),members:[...new Set((Array.isArray(raw.members)?raw.members:[]).filter(x=>typeof x==='string').map(x=>x.trim()).filter(Boolean))].slice(0,50)};
+  }
+
+  function renderPersonCoreUi(room, overlay) {
+    rpcmNewBadgeSchedule();
+    const host = overlay.querySelector('#rpcm-person-core'); if (!host) return;
+    const roomKey = String(room.chatId || '');
+    if (state.personCoreRailRoomId !== roomKey) {
+      state.personCoreRailRoomId = roomKey; state.personCoreRailScroll = 0;
+      try { state.personCoreSelectedActor = localStorage.getItem(`rpcm-person-selected:${roomKey}`) || ''; }
+      catch (_) { state.personCoreSelectedActor = ''; }
+    }
+    const oldRail = host.querySelector('.m3-people')?.scrollLeft ?? state.personCoreRailScroll ?? 0;
+    const oldDetail = host.querySelector('#rpcm-person-profiles');
+    const previousDetailOpen = oldDetail?.dataset.personName === state.personCoreSelectedActor ? oldDetail.querySelector('.rpcm-profile')?.open ?? null : null;
+    const vm = personCoreViewModel(room);
+    const hiddenActors=new Set((room.personHiddenActors||[]).map(value=>String(value).trim().toLocaleLowerCase('ko-KR')));
+    const visibleActors=vm.actors.filter(actor=>!hiddenActors.has(actor.name.toLocaleLowerCase('ko-KR')));
+    const selected = visibleActors.some(actor => actor.name === state.personCoreSelectedActor) ? state.personCoreSelectedActor : '';
+    state.personCoreSelectedActor = selected;
+    const pane = ['knowledge','speech','relationship','review'].includes(state.personCorePane) ? state.personCorePane : 'relationship';
+    state.personCorePane = pane;
+    const badge = (text, variant = '') => `<span class="m3-kind ${variant}">${esc(text)}</span>`;
+    const empty = text => `<div class="m3-empty">${esc(text)}</div>`;
+    const factPanel = fact => {
+      const included = fact.cards.filter(card => card.inject === true).length;
+      const chips = rpcmKnowledgeGroupedChips(fact,vm);
+      const concealments = fact.concealments.map(row => `<div class="m3-secret">${personCoreIcon('eye')}<span><b>${esc(row.holder)}</b>는 <b>${esc(row.target)}</b>에게 숨김${row.scope ? ` · ${esc(row.scope)}` : ''}${row.publicVersion ? ` · 공개용 “${esc(row.publicVersion)}”` : ''}</span></div>`).join('');
+      const mistaken = fact.cards.filter(card => card.status === 'mistaken' && String(card.actualFact || '').trim()).map(card => `<div class="m3-secret">${personCoreIcon('eye')}<span><b>${esc(card.person)}</b>의 오해: ${esc(card.fact)}<br>실제 사실: ${esc(card.actualFact)}</span></div>`).join('');
+      return `<section class="m3-panel" data-key="ft-${esc(fact.id)}" data-new-knowledge-ids="${esc(JSON.stringify(fact.cards.map(card=>String(card.id))))}" style="--cc:var(--m3-accent)"><div class="m3-row">${badge('정보')}<b class="m3-grow">${esc(fact.title)}</b>${included ? badge(`주입 포함 ${included}개`,'is-on') : ''}</div><p>${esc(fact.content)}</p><div class="m3-know">${chips}</div>${concealments}${mistaken}<div class="m3-row m3-card-actions">${personCoreButton('편집','editFact',fact.id)}</div></section>`;
+    };
+    const speechPanel = record => `<section class="m3-panel m3-speech" data-key="sp-${esc(record.id)}" data-new-person-id="${esc(record.id)}" style="--cc:var(--m3-accent)"><div class="m3-row"><b class="m3-grow">${esc(record.person)}<span class="m3-arrow"> → </span>${esc(record.target)}</b>${record.inject ? badge('주입 포함') : badge('보관만')}</div><p class="m3-say">${record.address ? `“${esc(record.address)}”라고 부름` : '호칭 미확정 · 말투만 기록'}${record.tone ? `<small>${esc(record.tone)}</small>` : ''}${record.context ? `<small>${esc(record.context)}</small>` : ''}</p>${record.evidence ? `<details class="m3-fold2"><summary>확인 근거 ${personCoreIcon('chev')}</summary><div class="m3-fb">${esc(record.evidence)}</div></details>` : ''}<div class="m3-row m3-card-actions">${personCoreButton('편집','editSpeech',record.id)}</div></section>`;
+    const relationPanel = record => `<section class="m3-panel" data-key="rel-${esc(record.id)}" data-new-person-id="${esc(record.id)}" style="--cc:var(--m3-accent)"><div class="m3-row"><b class="m3-grow">${esc(record.person)} → ${esc(record.target)}</b>${record.inject ? badge('주입 포함') : badge('보관만')}</div>${record.official ? `<p><b>공식 관계</b><br>${esc(record.official)}</p>` : ''}${record.stance ? `<p><b>현재 의미·태도</b><br>${esc(record.stance)}</p>` : ''}${record.conflict ? `<p><b>남은 쟁점</b><br>${esc(record.conflict)}</p>` : '<p class="m3-muted">기록된 남은 쟁점 없음</p>'}${record.trajectory ? `<details class="m3-fold2 rpcm-profile-trajectory"><summary>핵심 전환 · ${String(record.trajectory).length}자 ${personCoreIcon('chev')}</summary><div class="m3-fb">${esc(record.trajectory)}</div></details>` : ''}${record.evidence ? `<details class="m3-fold2"><summary>최근 대표 근거 ${personCoreIcon('chev')}</summary><div class="m3-fb">${esc(record.evidence)}</div></details>` : ''}<div class="m3-row m3-card-actions">${personCoreButton('편집','editRelationship',record.id)}</div></section>`;
+    const reviewPanel = row => `<section class="m3-panel" data-key="rv-${esc(row.id)}" style="--cc:var(--m3-accent)"><div class="m3-row">${badge(row.kind === 'knowledge' ? '인지' : row.kind === 'speech' ? '호칭·말투' : '관계·감정선')}<b class="m3-grow">${esc(row.title)}</b></div>${row.evidence ? `<blockquote class="m3-quote">${esc(row.evidence)}</blockquote>` : ''}${row.at ? `<p class="m3-muted">마지막 기록 · ${esc(row.at)}</p>` : ''}<div class="m3-row m3-card-actions">${personCoreButton('다시 활성화','restore',`${row.kind}|${row.id}`)}</div></section>`;
+    const tabHtml = selected?'':personReaderTabs(pane,vm.archived.length);
+    const actorsHtml = `<div class="m3-sechead"><span class="m3-person-heading"><b>인물 ${visibleActors.length}${hiddenActors.size?` · 숨김 ${hiddenActors.size}`:''}</b><small class="m3-muted">고정 우선 · ${personAppearanceCounts.has(roomKey)?'RP 등장 턴 빈도순':'기록 빈도순 · RP 확인 후 자동 정렬'}</small></span><span class="m3-actions">${hiddenActors.size?personCoreButton(`숨긴 인물 ${hiddenActors.size}명`,'manageHidden'):''}${personCoreButton('전체 보기','selectActor','','mini' + (selected ? '' : ' is-on'))}${personCoreButton('인물 추가','addActor')}${personCoreButton(`인지 주입 ${room.knowledgeInjectionEnabled ? 'ON' : 'OFF'}`,'toggleInjection','knowledge',room.knowledgeInjectionEnabled ? 'mini is-on' : 'mini')}</span></div><div class="m3-people" role="list" aria-label="인물 선택">${visibleActors.map(actor => `<div class="m3-who${selected === actor.name ? ' is-selected' : ''}" data-key="who-${esc(actor.name)}" data-new-actor="${esc(actor.name)}" role="listitem">${actor.pc ? '<span class="m3-me">PC</span>' : ''}${personPinButton(room,actor.name,actor)}<button type="button" class="m3-person-open" data-person-core-action="selectActor" data-person-core-arg="${esc(actor.name)}" aria-pressed="${selected === actor.name}"><span class="m3-av">${esc(Array.from(actor.name)[0] || '?')}</span><b>${esc(actor.name)}</b><small>${esc(actor.aliases.join(' · ') || '별칭 없음')}</small></button><button type="button" class="m3-person-meta" data-person-core-action="editActor" data-person-core-arg="${esc(actor.name)}" aria-label="${esc(actor.name)} 표시 정보 편집">${personCoreIcon('edit')}</button></div>`).join('') || '<p class="m3-muted">등록된 인물이 없습니다.</p>'}</div>`;
+    // UI-only windowing: the complete vm.facts is still available to memory search,
+    // source verification, editing, and injection; only DOM construction is paged.
+    const readerWindowed = !selected && pane === 'knowledge';
+    const factPageSize = 18;
+    const factPageCount = Math.max(1,Math.ceil(vm.facts.length/factPageSize));
+    const factPage = Math.max(0,Math.min(factPageCount-1, Number(state.personCoreFactPage)||0));
+    state.personCoreFactPage = factPage;
+    const factStart = factPage*factPageSize;
+    const factEnd = Math.min(vm.facts.length,factStart+factPageSize);
+    const factNavigation = readerWindowed && vm.facts.length>factPageSize
+      ? `<nav class="m3-fact-page-nav" aria-label="인지 카드 구간 이동"><button type="button" data-person-core-action="factPage" data-person-core-arg="${factPage-1}" ${factPage===0?'disabled':''}>이전</button><span>전체 ${vm.facts.length}개 중 ${factStart+1}~${factEnd}개 표시 · ${factPage+1}/${factPageCount}쪽</span><button type="button" data-person-core-action="factPage" data-person-core-arg="${factPage+1}" ${factPage+1>=factPageCount?'disabled':''}>다음</button></nav>` : '';
+    const factsHtml = readerWindowed ? `<div class="m3-sechead"><span class="m3-title-help"><b>인지 현황</b><small class="m3-muted">정보 ${vm.facts.length}개 · 주입 포함 ${vm.facts.filter(fact => fact.cards.some(card => card.inject === true)).length}개</small></span>${personCoreButton('정보 추가','addFact')}</div><p class="m3-muted">노란 정보격차는 누가 누구에게 해당 사실을 실제로 숨기는지 기록한 내용입니다. ‘모름’ 상태만으로 은폐를 추정하지 않습니다. 정보 편집에서 숨기는 대상과 설명을 기록할 수 있습니다.</p>${factNavigation}${vm.facts.slice(factStart,factEnd).map(factPanel).join('') || empty('인지 정보가 없습니다.')}${factNavigation}` : '';
+    const speech = vm.records.filter(record => record.type === 'speech');
+    const relations = vm.records.filter(record => record.type === 'relationship');
+    state.personCoreListPages=state.personCoreListPages||{};
+    const listPageKey=roomKey+'|'+pane;
+    const listed = pane==='speech'?speech:pane==='relationship'?relations:vm.archived;
+    const maxListPage=Math.max(1,Math.ceil(listed.length/factPageSize));
+    const listPage=Math.max(0,Math.min(maxListPage-1,Number(state.personCoreListPages[listPageKey])||0));
+    state.personCoreListPages[listPageKey]=listPage;
+    const renderShortList=(items,renderer,message)=>{
+      if(!items.length)return empty(message);
+      const start=listPage*factPageSize,end=Math.min(items.length,start+factPageSize);
+      const nav=items.length>factPageSize?`<nav class="m3-fact-page-nav" aria-label="${esc(pane)} 목록 구간 이동"><button type="button" data-person-core-action="listPage" data-person-core-arg="${listPage-1}" ${listPage===0?'disabled':''}>이전</button><span>전체 ${items.length}개 중 ${start+1}~${end}개 표시 · ${listPage+1}/${maxListPage}쪽</span><button type="button" data-person-core-action="listPage" data-person-core-arg="${listPage+1}" ${listPage+1>=maxListPage?'disabled':''}>다음</button></nav>`:'';
+      return nav+items.slice(start,end).map(renderer).join('')+nav;
+    };
+    const content = selected ? '<div id="rpcm-person-profiles" class="rpcm-person-profiles"></div>'
+      : pane === 'knowledge' ? factsHtml : pane === 'speech' ? `<div class="m3-toolbar"><span class="m3-muted m3-grow">현재 호칭·말투 ${speech.length}쌍</span><div class="m3-actions">${personCoreButton('추가','addSpeech')}${personCoreButton(`호칭·말투 주입 ${room.personStateInjectionEnabled ? 'ON' : 'OFF'}`,'toggleInjection','person',room.personStateInjectionEnabled ? 'mini is-on' : 'mini')}</div></div>${renderShortList(speech,speechPanel,'아직 호칭·말투 기록이 없습니다.')}` : pane === 'relationship' ? `<div class="m3-toolbar"><span class="m3-muted m3-grow">관계·감정선 ${relations.length}방향</span><div class="m3-actions">${personCoreButton('추가','addRelationship')}${personCoreButton(`관계 주입 ${room.personStateInjectionEnabled ? 'ON' : 'OFF'}`,'toggleInjection','person',room.personStateInjectionEnabled ? 'mini is-on' : 'mini')}</div></div>${renderShortList(relations,relationPanel,'아직 관계 기록이 없습니다.')}` : `<div class="m3-sechead"><span class="m3-muted">종료한 인지·호칭·관계 기록을 확인합니다.</span></div>${room.personLastImportSummary ? `<p class="m3-muted">최근 가져오기 · ${esc(room.personLastImportSummary)}</p>` : ''}${renderShortList(vm.archived,reviewPanel,'검토할 항목이 없습니다.')}`;
+    host.innerHTML = `${actorsHtml}${tabHtml}<div class="m3-sub" data-key="cog-${pane}">${content}</div>`;
+    host.querySelectorAll('.m3-who [data-person-pin]').forEach(button=>button.onclick=()=>personTogglePin(room,overlay,button.dataset.personPin));
+    if (selected) renderPersonProfileOverview(room,overlay,selected,pane,previousDetailOpen);
+    rpcmBindKnowledgeQuickButtons(room,overlay,host);
+    const rail = host.querySelector('.m3-people');
+    if (rail) { rail.scrollLeft = oldRail; rail.onscroll = () => { state.personCoreRailScroll = rail.scrollLeft; }; }
+    host.querySelectorAll('[data-person-core-tab]').forEach(button => button.onclick = () => { state.personCorePane = button.dataset.personCoreTab; renderPersonCoreUi(room,overlay); });
+    host.querySelectorAll('[data-person-core-action]').forEach(button => button.onclick = async () => {
+      const action = button.dataset.personCoreAction, arg = button.dataset.personCoreArg || '';
+      if (action === 'listPage') {
+        const nextPage=Number(arg);
+        if(Number.isInteger(nextPage)&&nextPage>=0&&nextPage<maxListPage){
+          state.personCoreListPages[listPageKey]=nextPage;
+          renderPersonCoreUi(room,overlay);
+          overlay.querySelector('#rpcm-person-core .m3-fact-page-nav')?.scrollIntoView({block:'nearest'});
+        }
+        return;
+      }
+      if (action === 'factPage') {
+        const nextPage=Number(arg);
+        if (Number.isInteger(nextPage) && nextPage>=0 && nextPage<Math.max(1,Math.ceil(vm.facts.length/factPageSize))) {
+          state.personCoreFactPage=nextPage;
+          renderPersonCoreUi(room,overlay);
+          overlay.querySelector('#rpcm-person-core .m3-fact-page-nav')?.scrollIntoView({block:'nearest'});
+        }
+        return;
+      }
+      if (action === 'selectActor') {
+        state.personCoreSelectedActor = arg;
+        try { localStorage.setItem(`rpcm-person-selected:${roomKey}`, arg); } catch (_) { /* UI preference only */ }
+        renderPersonCoreUi(room,overlay);
+        return;
+      }
+      if (action === 'manageHidden') { openPersonHiddenDialog(room,overlay); return; }
+      if (action === 'addActor' || action === 'editActor') { openPersonCoreActorDialog(room,overlay,action === 'editActor' ? arg : ''); return; }
+      if (action === 'toggleInjection') {
+        const enabled = arg === 'knowledge' ? !room.knowledgeInjectionEnabled : !room.personStateInjectionEnabled;
+        room.knowledgeInjectionEnabled = enabled; room.personStateInjectionEnabled = enabled;
+        if (enabled && room.pending) room.pending.quickRemovedItems = quickRemovedPendingItems(room.pending).filter(item => !isKnowledgePendingItem(item));
+        try { await saveRoom(room); await rebuildPendingKnowledgeItem(room); renderPersonCoreUi(room,overlay); }
+        catch (error) { notify(`인물정보 주입 갱신 실패: ${error.message}`,'error',6000); }
+        return;
+      }
+      if (action === 'restore') {
+        const [kind,id] = arg.split('|');
+        const card = kind === 'knowledge' ? (room.knowledgeCards || []).find(item => String(item.id) === id) : (room.personStateRecords || []).find(item => String(item.id) === id);
+        if (!card) return;
+        if (kind === 'knowledge') card.archived = false; else card.active = true;
+        try { await saveRoom(room); await rebuildPendingKnowledgeItem(room); renderPersonPanel(room,overlay); }
+        catch (error) { notify(`인물정보 복원 실패: ${error.message}`,'error',6000); }
+        return;
+      }
+      const kind = action === 'addFact' || action === 'editFact' ? 'knowledge' : action === 'addSpeech' || action === 'editSpeech' ? 'speech' : 'relationship';
+      const fact = kind === 'knowledge' ? vm.facts.find(row => row.id === arg) : null;
+      openPersonCoreCardEditor(room,overlay,kind,action.startsWith('add') ? '' : fact ? fact.cards.map(card => String(card.id || '')) : arg);
+    });
+  }
+
+  function openPersonCoreCardEditor(room,overlay,kind,id = '') {
+    state.personAdvancedOpen = true;
+    state.personPane = kind;
+    const ids = Array.isArray(id) ? id.filter(Boolean) : id ? [id] : [];
+    const source = kind === 'knowledge' ? (room.knowledgeCards || []).find(card => String(card.id) === ids[0]) : (room.personStateRecords || []).find(record => String(record.id) === ids[0]);
+    // A Core fact card represents every actor's state. Keep all matching Wish
+    // cards visible when its edit button opens the existing detailed editor.
+    state.personFilter = ids.length > 1 ? '' : String(source?.person || '');
+    const advanced = overlay.querySelector('.rpcm-person-advanced');
+    if (!advanced) return;
+    advanced.hidden = false; advanced.open = true;
+    renderPersonPanel(room,overlay);
+    if (!ids.length) {
+      const add = kind === 'knowledge' ? overlay.querySelector('#rpcm-knowledge-add') : overlay.querySelector(`#rpcm-person-${kind} .rpcm-person-add`);
+      add?.click();
+      return;
+    }
+    const items = kind === 'knowledge' ? [...overlay.querySelectorAll('.rpcm-knowledge-card')].filter(node => ids.includes(node.dataset.knowledgeId)) : [...overlay.querySelectorAll('.rpcm-person-record')].filter(node => ids.includes(node.dataset.personRecord));
+    for (const item of items) {
+      item.open = true;
+      const fields = item.querySelector('.rpcm-knowledge-fields,.rpcm-person-fields');
+      const read = item.querySelector('.rpcm-knowledge-read,.rpcm-person-read');
+      if (fields) fields.hidden = false;
+      if (read) read.hidden = true;
+    }
+    items[0]?.scrollIntoView({ behavior:'smooth', block:'center' });
+  }
+
+  function openPersonDeleteConfirm(room,overlay,name,closeEditor){
+    const player=currentPersonPlayerName(room);
+    if(!name||name===player||personCoreViewModel(room).actors.find(actor=>actor.name===name)?.pc){
+      notify('현재 PC 인물은 삭제할 수 없습니다.','warn');return;
+    }
+    const key=value=>String(value||'').trim().toLocaleLowerCase('ko-KR');
+    const same=value=>key(value)===key(name);
+    const ownKnowledge=(room.knowledgeCards||[]).filter(card=>same(card.person)).length;
+    const ownRecords=(room.personStateRecords||[]).filter(row=>same(row.person)).length;
+    const incoming=(room.personStateRecords||[]).filter(row=>!same(row.person)&&same(row.target)).length;
+    const profiles=(room.slots||[]).filter(slot=>slot.group==='character'&&same(slot.title)).length;
+    const old=document.querySelector('#rpcm-person-delete-dialog');old?.remove();
+    const backdrop=document.createElement('div');backdrop.id='rpcm-person-delete-dialog';
+    backdrop.innerHTML=`<div class="rpcm-person-dialog-card m3-ui" role="dialog" aria-modal="true" aria-label="인물 삭제 확인"><div class="m3-sheet"><header><div class="m3-t"><b>${esc(name)} · 인물 삭제</b><small>삭제 범위를 확인한 뒤 완료하세요.</small></div><button type="button" class="m3-btn" data-delete-close aria-label="닫기" data-rpcm-close="icon">×</button></header><div class="m3-dialog-body"><p>인물 표시·별칭과 캐릭터 설정 ${profiles}개, 해당 인물이 주체인 인지 ${ownKnowledge}개·호칭/관계 ${ownRecords}개를 삭제합니다.</p><p>다른 인물이 이 인물을 대상으로 가진 정보 ${incoming}개는 기본으로 유지합니다. 현재상태·날짜로그·타임라인·물품·자료집·장기기억의 본문도 유지합니다.</p><label class="m3-toggle"><span>다른 인물의 대상 카드 ${incoming}개도 함께 삭제</span><input type="checkbox" data-delete-incoming></label></div><footer><button type="button" class="m3-btn" data-delete-close>취소</button><button type="button" class="m3-btn primary" data-delete-confirm>삭제 완료</button></footer></div></div>`;
+    const close=()=>backdrop.remove();
+    backdrop.querySelectorAll('[data-delete-close]').forEach(button=>button.onclick=close);
+    backdrop.onclick=event=>{if(event.target===backdrop)close();};
+    backdrop.onkeydown=event=>{if(event.key==='Escape')close();};
+    backdrop.querySelector('[data-delete-confirm]').onclick=async()=>{
+      const button=backdrop.querySelector('[data-delete-confirm]');button.disabled=true;
+      const cascade=backdrop.querySelector('[data-delete-incoming]').checked;
+      const before=JSON.stringify(room),candidate=structuredClone(room);
+      const removedIds=new Set((candidate.slots||[]).filter(slot=>slot.group==='character'&&same(slot.title)).map(slot=>String(slot.id)));
+      candidate.slots=(candidate.slots||[]).filter(slot=>!(slot.group==='character'&&same(slot.title)));
+      candidate.personUiActors=(candidate.personUiActors||[]).filter(actor=>!same(actor.name));
+      candidate.personHiddenActors=(candidate.personHiddenActors||[]).filter(value=>!same(value));
+      candidate.personDeletedNames=[...new Set([...(candidate.personDeletedNames||[]),name])];
+      candidate.knowledgeCards=(candidate.knowledgeCards||[]).filter(card=>!same(card.person));
+      candidate.personStateRecords=(candidate.personStateRecords||[]).filter(row=>!same(row.person)&&!(cascade&&same(row.target)));
+      if(candidate.pending){
+        const keep=item=>!removedIds.has(String(item.slotId||''))&&String(item.slotId||'')!==`person:${encodeURIComponent(name)}`;
+        candidate.pending.items=(candidate.pending.items||[]).filter(keep);
+        candidate.pending.quickRemovedItems=(candidate.pending.quickRemovedItems||[]).filter(keep);
+      }
+      try{
+        if(JSON.stringify(room)!==before)throw new Error('인물 정보가 변경되었습니다. 삭제 범위를 다시 확인해 주세요.');
+        await saveRoom(candidate);
+        const stored=await readManualStoredRoom(room);
+        const fields=data=>JSON.stringify([data.slots,data.personUiActors,data.personHiddenActors,data.personDeletedNames,data.knowledgeCards,data.personStateRecords]);
+        if(!stored||fields(stored)!==fields(candidate))throw new Error('삭제 후 로컬 저장본 확인에 실패했습니다. 새로고침 후 확인해 주세요.');
+        if(JSON.stringify(room)!==before)throw new Error('삭제 중 방 데이터가 바뀌었습니다. 새로고침 후 확인해 주세요.');
+        rpcmReplaceRoomObject(room,stored);state.personCoreSelectedActor='';state.personFilter='';
+        close();closeEditor();renderPersonCoreUi(room,overlay);renderPersonPanel(room,overlay);
+        if(room.pending)try{await syncPendingCarrier(room,'person-delete');}catch(error){notify(`인물은 로컬에서 삭제됐지만 현재 주입 갱신에 실패했습니다: ${error.message}`,'error');}
+        notify(`${name} 인물 삭제를 저장했습니다.`,'success');
+      }catch(error){notify(`인물 삭제 실패: ${error.message}`,'error');button.disabled=false;}
+    };
+    document.body.appendChild(backdrop);
+  }
+
+  function openPersonHiddenDialog(room,overlay){
+    document.querySelector('#rpcm-person-hidden-dialog')?.remove();
+    const hidden=(room.personHiddenActors||[]).filter(name=>personCoreViewModel(room).actors.some(actor=>actor.name===name));
+    const backdrop=document.createElement('div');backdrop.id='rpcm-person-hidden-dialog';
+    backdrop.innerHTML=`<div class="rpcm-person-dialog-card m3-ui" role="dialog" aria-modal="true" aria-label="숨긴 인물 관리"><div class="m3-sheet"><header><div class="m3-t"><b>숨긴 인물 관리</b><small>상단 인물 선택 카드만 숨겼습니다. 저장된 인지·관계·호칭과 주입은 유지됩니다.</small></div><button type="button" class="m3-btn" data-hidden-close aria-label="닫기" data-rpcm-close="icon">×</button></header><div class="m3-dialog-body">${hidden.map(name=>`<div class="m3-row"><strong class="m3-grow">${esc(name)}</strong><button type="button" class="m3-btn" data-hidden-show="${esc(name)}">다시 표시</button></div>`).join('')||'<p>숨긴 인물이 없습니다.</p>'}</div><footer><button type="button" class="m3-btn" data-hidden-all>모두 표시</button><button type="button" class="m3-btn primary" data-hidden-close>완료</button></footer></div></div>`;
+    const close=()=>backdrop.remove();
+    backdrop.querySelectorAll('[data-hidden-close]').forEach(button=>button.onclick=close);
+    backdrop.onclick=event=>{if(event.target===backdrop)close();};
+    backdrop.onkeydown=event=>{if(event.key==='Escape')close();};
+    backdrop.querySelectorAll('[data-hidden-show]').forEach(button=>button.onclick=async()=>{
+      const prior=[...(room.personHiddenActors||[])];
+      room.personHiddenActors=prior.filter(value=>value!==button.dataset.hiddenShow);
+      try{await saveRoom(room);close();renderPersonCoreUi(room,overlay);}
+      catch(error){room.personHiddenActors=prior;notify(`인물 카드 표시 실패: ${error.message}`,'error');}
+    });
+    backdrop.querySelector('[data-hidden-all]').onclick=async()=>{
+      const prior=[...(room.personHiddenActors||[])];room.personHiddenActors=[];
+      try{await saveRoom(room);close();renderPersonCoreUi(room,overlay);}
+      catch(error){room.personHiddenActors=prior;notify(`인물 카드 표시 실패: ${error.message}`,'error');}
+    };
+    document.body.appendChild(backdrop);
+  }
+
+  function openPersonCoreActorDialog(room,overlay,name = '') {
+    document.querySelector('#rpcm-person-core-dialog')?.remove();
+    const existing = personCoreViewModel(room).actors.find(actor => actor.name === name);
+    const backdrop = document.createElement('div'); backdrop.id = 'rpcm-person-core-dialog';
+    backdrop.innerHTML = `<div class="rpcm-person-dialog-card m3-ui" role="dialog" aria-modal="true" aria-label="인물 ${existing ? '편집' : '추가'}"><div class="m3-sheet"><header><div class="m3-t"><b>인물 ${existing ? '편집' : '추가'}</b><small>인물 카드 표시 정보 · 인지·관계 원문은 변경하지 않습니다.</small></div><button type="button" class="m3-btn" data-core-close aria-label="닫기" data-rpcm-close="icon">×</button></header><div class="m3-dialog-body"><label class="m3-fld"><span>이름</span><input data-core-name value="${esc(existing?.name || '')}" ${existing ? 'readonly' : ''} placeholder="인물 이름"></label><label class="m3-fld"><span>별칭</span><input data-core-aliases value="${esc(existing?.aliases.join(', ') || '')}" placeholder="쉼표로 구분"></label><label class="m3-fld"><span>소속·모임</span><input data-core-group value="${esc((room.personUiActors||[]).find(row=>row.name===existing?.name)?.groupName||'')}" placeholder="명시된 팀·가족·조직·친구 모임"></label><label class="m3-toggle"><span>PC</span><input type="checkbox" data-core-pc ${existing?.pc ? 'checked' : ''}></label><label class="m3-toggle"><span>주요·고정 인물</span><input type="checkbox" data-core-pinned ${existing?.pinned ? 'checked' : ''}></label></div><footer>${existing?'<button type="button" class="m3-btn" data-core-hide>상단 카드 숨기기</button>':''}${existing&&!existing.pc?'<button type="button" class="m3-btn" data-core-delete>인물 삭제</button>':''}<button type="button" class="m3-btn" data-core-close>취소</button><button type="button" class="m3-btn primary" data-core-save>저장</button></footer></div></div>`;
+    const close = () => backdrop.remove();
+    backdrop.querySelector('[data-core-delete]')?.addEventListener('click',()=>openPersonDeleteConfirm(room,overlay,existing?.name||'',close));
+    backdrop.querySelector('[data-core-hide]')?.addEventListener('click',async()=>{
+      if(!existing)return;
+      const prior=[...(room.personHiddenActors||[])];
+      room.personHiddenActors=[...new Set([...prior,existing.name])];
+      try{await saveRoom(room);close();state.personCoreSelectedActor='';renderPersonCoreUi(room,overlay);notify(`${existing.name} 상단 카드만 숨겼습니다.`,'success');}
+      catch(error){room.personHiddenActors=prior;notify(`인물 카드 숨기기 실패: ${error.message}`,'error');}
+    });
+    backdrop.querySelectorAll('[data-core-close]').forEach(button => button.onclick = close);
+    backdrop.onclick = event => { if (event.target === backdrop) close(); };
+    backdrop.onkeydown = event => { if (event.key === 'Escape') close(); };
+    backdrop.querySelector('[data-core-save]').onclick = async () => {
+      const actorName = String(backdrop.querySelector('[data-core-name]').value || '').trim();
+      if (!actorName) { notify('인물 이름을 입력해 주세요.','warn'); return; }
+      if (!existing && personCoreViewModel(room).actors.some(actor => actor.name.toLocaleLowerCase('ko-KR') === actorName.toLocaleLowerCase('ko-KR'))) { notify('같은 이름의 인물이 이미 있습니다.','warn'); return; }
+      const aliases = [...new Set(String(backdrop.querySelector('[data-core-aliases]').value || '').split(',').map(value => value.trim()).filter(Boolean))];
+      const groupName=String(backdrop.querySelector('[data-core-group]').value||'').trim();
+      const pinned = backdrop.querySelector('[data-core-pinned]').checked;
+      const pc = backdrop.querySelector('[data-core-pc]').checked;
+      const prior = structuredClone(room.personUiActors || []), priorPlayer = room.personPlayerName, priorDeleted=structuredClone(room.personDeletedNames||[]);
+      room.personUiActors = Array.isArray(room.personUiActors) ? room.personUiActors : [];
+      const row = room.personUiActors.find(item => String(item.name || '').toLocaleLowerCase('ko-KR') === actorName.toLocaleLowerCase('ko-KR'));
+      if (row) { row.aliases = aliases; row.pinned = pinned; row.groupName=groupName; }
+      else room.personUiActors.push({ name:actorName, aliases, pinned, groupName });
+      room.personDeletedNames=(room.personDeletedNames||[]).filter(value=>value.toLocaleLowerCase('ko-KR')!==actorName.toLocaleLowerCase('ko-KR'));
+      if (pc) room.personPlayerName = actorName;
+      else if (String(room.personPlayerName || '').toLocaleLowerCase('ko-KR') === actorName.toLocaleLowerCase('ko-KR')) room.personPlayerName = '';
+      try { await saveRoom(room); }
+      catch (error) { room.personUiActors = prior; room.personPlayerName = priorPlayer; room.personDeletedNames=priorDeleted; notify(`인물 표시 정보 저장 실패: ${error.message}`,'error',6000); return; }
+      close(); renderPersonCoreUi(room,overlay);
+      if (room.pending && priorPlayer !== room.personPlayerName) {
+        try { await rebuildPendingKnowledgeItem(room); }
+        catch (error) { notify(`인물 표시 정보는 저장됐지만 주입 갱신에 실패했습니다: ${error.message}`,'error',6000); }
+      }
+    };
+    document.body.appendChild(backdrop);
+    backdrop.querySelector('[data-core-name]')?.focus();
+  }
+
+  function relationshipGraphFieldsHtml(record){
+    const graph=normalizeRelationshipGraph(record.graph,record.person,record.target)||{kind:'',label:'',parent:'',superior:'',group:'',members:[]};
+    return `<details class="rpcm-person-graph-editor"><summary>관계도 표시 설정</summary><p>부모·상관은 실제 인물을 지정하세요. 친구·연인과 인물 방향만으로 상하 관계를 만들지 않습니다.</p><label>짧은 관계명<input data-person-graph="label" maxlength="18" value="${esc(graph.label)}" placeholder="친구, 연인, 양부·양녀"></label><label>관계 형태<select data-person-graph="kind">${[['','기존 관계 기록에서 표시'],['family','가족'],['hierarchy','지휘·고용 관계'],['peer','친구·동료·협력'],['romance','연인·배우자'],['other','기타']].map(([value,label])=>`<option value="${value}" ${graph.kind===value?'selected':''}>${label}</option>`).join('')}</select></label><label>부모 또는 상관<select data-person-graph="anchor"><option value="">해당 없음·미확인</option>${[record.person,record.target].map(name=>`<option value="${esc(name)}" ${(graph.parent||graph.superior)===name?'selected':''}>${esc(name)}</option>`).join('')}</select></label><label>명시된 소속·모임<input data-person-graph="group" value="${esc(graph.group)}"></label><label>확인된 구성원<input data-person-graph="members" value="${esc(graph.members.join(', '))}" placeholder="쉼표로 구분 · 실제 소속 인물만"></label></details>`;
+  }
+
+  function renderPersonPanel(room, overlay) {
+    rpcmNewBadgeSchedule();
+    const section = overlay.querySelector('#rpcm-section-people');
+    if (!section) return;
+    const records = normalizePersonStateRecords(room);
+    const knowledge = normalizeKnowledgeCards(room);
+    const names = [...new Set([...knowledge.filter(card => !card.archived).map(card => card.person.trim()), ...records.filter(record => record.active).map(record => record.person.trim())].filter(Boolean))].sort((a,b) => a.localeCompare(b,'ko'));
+    const pane = ['knowledge','speech','relationship','review'].includes(state.personPane) ? state.personPane : 'knowledge';
+    state.personPane = pane;
+    const filter = names.includes(state.personFilter) ? state.personFilter : '';
+    const editContext = section.querySelector('#rpcm-person-edit-context');
+    const returnSource = state.personReturnSource?.chatId === String(room.chatId) ? state.personReturnSource : null;
+    if (editContext) {
+      editContext.hidden = !returnSource;
+      if (returnSource) {
+        const kind = { knowledge:'인지', speech:'호칭·말투', relationship:'관계·감정선', review:'이전 검토' }[pane] || '인물정보';
+        editContext.querySelector('strong').textContent = `${filter || returnSource.name || '인물'} · ${kind} 편집 중`;
+        editContext.querySelector('button').onclick = () => {
+          const record = returnSource.kind === 'knowledge'
+            ? (room.knowledgeCards || []).find(item => String(item.id) === returnSource.id)
+            : (room.personStateRecords || []).find(item => String(item.id) === returnSource.id);
+          const name = String(record?.person || returnSource.name || '').trim();
+          state.personReturnSource = null;
+          state.personAdvancedOpen = false;
+          const advanced = section.querySelector('.rpcm-person-advanced');
+          advanced.open = false; advanced.hidden = true;
+          renderPersonCoreUi(room, overlay);
+          const actor = [...section.querySelectorAll('.m3-who')].find(node => node.querySelector('[data-person-core-arg]')?.dataset.personCoreArg === name);
+          actor?.scrollIntoView({ behavior:'smooth', block:'center' });
+          editContext.hidden = true;
+        };
+      }
+    }
+    const applyFilter = () => {
+      section.querySelectorAll('#rpcm-knowledge-panel .rpcm-knowledge-card').forEach(card => {
+        const match = knowledge.find(item => item.id === card.dataset.knowledgeId);
+        card.hidden = !!filter && match?.person.trim() !== filter;
+      });
+      section.querySelectorAll('.rpcm-person-group').forEach(group => { group.hidden = !!filter && group.dataset.person !== filter; });
+    };
+    section.querySelectorAll('[data-person-pane]').forEach(button => {
+      const active = button.dataset.personPane === pane;
+      button.setAttribute('aria-selected', String(active));
+      button.tabIndex = active ? 0 : -1;
+      button.onclick = () => { state.personPane = button.dataset.personPane; renderPersonPanel(room, overlay); };
+    });
+    section.querySelectorAll('[data-person-content]').forEach(node => { node.hidden = node.dataset.personContent !== pane; });
+    let picker = section.querySelector('.rpcm-person-filter');
+    if (!picker) {
+      picker = document.createElement('label');
+      picker.className = 'rpcm-person-filter';
+      picker.innerHTML = '<span>인물</span><select id="rpcm-person-filter"></select>';
+      section.querySelector('.rpcm-person-tabs').after(picker);
+    }
+    picker.querySelector('select').innerHTML = '<option value="">전체 인물</option>' + names.map(name => `<option value="${esc(name)}"${filter === name ? ' selected' : ''}>${esc(name)}</option>`).join('');
+    picker.querySelector('select').onchange = event => { state.personFilter = event.target.value; renderPersonPanel(room, overlay); };
+
+    const editorShell=section.querySelector('.rpcm-person-advanced');
+    const buildEditor=!!editorShell && !editorShell.hidden && editorShell.open;
+    if (buildEditor) renderKnowledgePanel(room,overlay);
+    const label = type => type === 'speech' ? '호칭·말투' : '관계·감정선';
+    if (buildEditor) {
+    for (const type of ['speech','relationship']) {
+      const parent = section.querySelector('#rpcm-person-' + type);
+      const active = records.filter(record => record.type === type && record.active);
+      const grouped = new Map();
+      for (const record of active) {
+        const name = record.person.trim() || '이름 미입력';
+        if (!grouped.has(name)) grouped.set(name, []);
+        grouped.get(name).push(record);
+      }
+      const editing = new Set([...parent.querySelectorAll('.rpcm-person-fields:not([hidden])')].map(node => node.closest('[data-person-record]')?.dataset.personRecord));
+      parent.innerHTML = `<div class="rpcm-person-type-head"><div><strong>${label(type)} · ${active.length}개</strong><span>${type === 'speech' ? '누가 누구를 어떻게 부르는지, 상황별 말투를 구분합니다.' : '공식 관계와 각 인물의 감정·경계를 방향별로 구분합니다.'}</span></div><label><input type="checkbox" class="rpcm-person-injection" ${room.personStateInjectionEnabled ? 'checked' : ''}> 호칭·관계 주입 ${room.personStateInjectionEnabled ? 'ON' : 'OFF'}</label><button type="button" class="rpcm-add-btn rpcm-person-add">＋ 카드</button></div>`
+        + ([...grouped].map(([name, entries]) => `<div class="rpcm-person-group" data-person="${esc(name)}"><h3>👤 ${esc(name)} <small>${entries.length}개</small></h3>${entries.map(record => {
+          const detail = record.type === 'speech' ? [record.address && '호칭 ' + record.address, record.tone && '말투 ' + record.tone, record.context && '조건 ' + record.context].filter(Boolean).join(' · ') : [record.official && '공식 ' + record.official, record.stance && '태도 ' + record.stance, record.conflict && '갈등 ' + record.conflict, record.trajectory && `핵심 전환 ${record.trajectory.length}자`].filter(Boolean).join(' · ');
+          const fields = record.type === 'speech' ? `<label>호칭<input data-person-field="address" value="${esc(record.address)}"></label><label>말투<input data-person-field="tone" value="${esc(record.tone)}"></label><label>적용 조건<input data-person-field="context" value="${esc(record.context)}"></label>` : `<label>공식 관계<input data-person-field="official" value="${esc(record.official)}"></label><label>이 인물의 태도<textarea data-person-field="stance" rows="2">${esc(record.stance)}</textarea></label><label>남은 갈등·경계<textarea data-person-field="conflict" rows="2">${esc(record.conflict)}</textarea></label><label>핵심 전환<textarea data-person-field="trajectory" rows="3">${esc(record.trajectory || '')}</textarea></label>`;
+          return `<details class="rpcm-person-record" data-person-record="${esc(record.id)}"><summary><strong>${esc(record.person || '인물')} → ${esc(record.target || '상대')}</strong><span>${esc(detail || '내용 입력')}</span><em>${record.inject ? '주입 포함' : '보관만'}</em></summary><div class="rpcm-person-read"><p>${esc(detail || '내용 입력')}</p><small>${esc(record.evidence || '근거 미기록')}</small><button type="button" data-person-action="edit">편집</button></div><div class="rpcm-person-fields" hidden><label>인물<input data-person-field="person" value="${esc(record.person)}"></label><label>상대<input data-person-field="target" value="${esc(record.target)}"></label>${fields}${record.type==='relationship'?relationshipGraphFieldsHtml(record):''}<label>확인 근거<textarea data-person-field="evidence" rows="2">${esc(record.evidence)}</textarea></label><div class="rpcm-person-record-actions"><label><input data-person-field="inject" type="checkbox" ${record.inject ? 'checked' : ''}> 주입에 포함</label><button type="button" data-person-action="archive">종료 · 보관</button><button type="button" data-person-action="close">접기</button></div></div></details>`;
+        }).join('')}</div>`).join('') || '<div class="rpcm-person-empty">등록된 카드가 없습니다. 전용 방 결과물을 가져오거나 직접 추가하세요.</div>');
+      for (const node of parent.querySelectorAll('.rpcm-person-record')) {
+        if (editing.has(node.dataset.personRecord)) { node.open = true; node.querySelector('.rpcm-person-fields').hidden = false; node.querySelector('.rpcm-person-read').hidden = true; }
+      }
+      parent.querySelector('.rpcm-person-injection').onchange = async event => {
+        room.personStateInjectionEnabled = event.target.checked;
+        room.knowledgeInjectionEnabled = event.target.checked;
+        if (room.personStateInjectionEnabled && room.pending) room.pending.quickRemovedItems = quickRemovedPendingItems(room.pending).filter(item => !isKnowledgePendingItem(item));
+        await saveRoom(room);
+        try { await rebuildPendingKnowledgeItem(room); } catch (error) { notify(`인물정보 주입 갱신 실패: ${error.message}`, 'error', 5400); }
+        renderModalIfOpen();
+      };
+      parent.querySelector('.rpcm-person-add').onclick = async () => {
+        const record = {id:'ps_' + Date.now().toString(36) + Math.random().toString(36).slice(2,8),key:'',type,person:filter,target:'',address:'',tone:'',context:'',official:'',stance:'',conflict:'',trajectory:'',evidence:'',active:true,inject:false};
+        room.personStateRecords.push(record);
+        await saveRoom(room);
+        renderModalIfOpen();
+        const card = [...overlay.querySelectorAll('.rpcm-person-record')].find(node => node.dataset.personRecord === record.id);
+        if (card) { card.open = true; card.querySelector('.rpcm-person-fields').hidden = false; card.querySelector('.rpcm-person-read').hidden = true; card.querySelector('[data-person-field="person"]')?.focus(); }
+      };
+      parent.onclick = event => {
+        const action = event.target.closest('[data-person-action]');
+        if (!action) return;
+        const node = action.closest('.rpcm-person-record');
+        const record = records.find(item => item.id === node?.dataset.personRecord);
+        if (!record) return;
+        if (action.dataset.personAction === 'edit' || action.dataset.personAction === 'close') {
+          const show = action.dataset.personAction === 'edit';
+          node.querySelector('.rpcm-person-read').hidden = show;
+          node.querySelector('.rpcm-person-fields').hidden = !show;
+          if (show) node.querySelector('[data-person-field="person"]')?.focus();
+        } else if (action.dataset.personAction === 'archive' && confirm('이 카드를 주입에서 제외하고 이전 검토로 보낼까요?')) {
+          record.active = false; record.inject = false;
+          void saveRoom(room).then(() => rebuildPendingKnowledgeItem(room)).then(() => renderModalIfOpen()).catch(error => notify(error.message,'error'));
+        }
+      };
+      const update = event => {
+        const field = event.target.closest('[data-person-field],[data-person-graph]');
+        const record = records.find(item => item.id === field?.closest('.rpcm-person-record')?.dataset.personRecord);
+        if (!record) return;
+        if(field.hasAttribute('data-person-graph')){const card=field.closest('.rpcm-person-record'),value=name=>card.querySelector(`[data-person-graph="${name}"]`)?.value||'',chosen=value('kind'),kind=chosen||((field.dataset.personGraph!=='kind'&&(value('label')||value('group')||value('members')))?'other':''),anchor=value('anchor');if(kind&&!chosen)card.querySelector('[data-person-graph="kind"]').value=kind;record.graph=kind?normalizeRelationshipGraph({label:value('label'),kind,parent:kind==='family'?anchor:'',superior:kind==='hierarchy'?anchor:'',group:value('group'),members:value('members').split(',').map(x=>x.trim()).filter(Boolean)},record.person,record.target):null;}
+        else record[field.dataset.personField] = field.type === 'checkbox' ? field.checked : field.value;
+        queueRoomAutoSave(room, 500);
+        clearTimeout(section._rpcmPersonSync);
+        const syncPerson = () => {
+          if (rpcmHasActiveComposition()) { section._rpcmPersonSync = setTimeout(syncPerson, 200); return; }
+          void rebuildPendingKnowledgeItem(room).catch(error => notify(`인물정보 주입 갱신 실패: ${error.message}`,'error'));
+        };
+        section._rpcmPersonSync = setTimeout(syncPerson, 850);
+      };
+      parent.oninput = update;
+      parent.onchange = event => { if (event.target.matches('[data-person-field],[data-person-graph]')) { update(event); if (event.target.dataset.personField === 'person') state.personFilter = event.target.value.trim(); renderPersonPanel(room, overlay); state.capacityUiRefresh?.(); } };
+    }
+
+    const review = section.querySelector('#rpcm-person-review');
+    const previous = [...knowledge.filter(card => card.archived).map(card => ({id:card.id,title:`${card.person} · ${card.fact}`,kind:'knowledge'})), ...records.filter(record => !record.active).map(record => ({id:record.id,title:`${record.person} → ${record.target} · ${label(record.type)}`,kind:record.type}))];
+    review.innerHTML = `<div class="rpcm-person-type-head"><div><strong>이전 검토 · ${previous.length}개</strong><span>종료한 항목을 보관합니다. 다시 활성화할 수 있습니다.</span></div></div>` + (previous.map(item => `<div class="rpcm-person-archive-row"><span>${esc(item.title)}</span><button type="button" data-person-restore="${esc(item.id)}" data-person-kind="${esc(item.kind)}">다시 활성화</button></div>`).join('') || '<div class="rpcm-person-empty">보관된 항목이 없습니다.</div>') + (room.personLastImportSummary ? `<div class="rpcm-person-last-import">최근 가져오기 · ${esc(room.personLastImportSummary)}</div>` : '');
+    review.onclick = event => {
+      const button = event.target.closest('[data-person-restore]');
+      if (!button) return;
+      if (button.dataset.personKind === 'knowledge') { const card = knowledge.find(item => item.id === button.dataset.personRestore); if (card) card.archived = false; }
+      else { const record = records.find(item => item.id === button.dataset.personRestore); if (record) record.active = true; }
+      void saveRoom(room).then(() => renderModalIfOpen());
+    };
+    }
+    applyFilter();
+
+    const importBox = section.querySelector('#rpcm-person-import');
+    const closeImport=()=>{state.personImportDraft=importBox.querySelector('textarea').value;importBox.hidden=true;state.personImportOpen=false;section.querySelector('#rpcm-person-import-toggle').focus({preventScroll:true});};
+    importBox.querySelectorAll('[data-person-import-close]').forEach(button=>button.onclick=closeImport);
+    importBox.onkeydown=event=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();closeImport();}};
+    section.querySelector('#rpcm-person-import-toggle').onclick = () => { importBox.hidden = !importBox.hidden; state.personImportOpen = !importBox.hidden; if (!importBox.hidden) importBox.querySelector('textarea').focus(); };
+    section.querySelector('#rpcm-person-export').onclick = async () => {
+      const copied = await copyPlainText(personStateExportText(room));
+      notify(copied ? '기존 인물정보를 복사했습니다. 인물 전용 방의 다음 요청에 함께 넣어 주세요.' : '복사에 실패했습니다.', copied ? 'success' : 'error', 4300);
+    };
+    section.querySelector('#rpcm-person-guide-copy').onclick = async () => {
+      const copied = await copyPlainText(effectivePersonGuide(room));
+      notify(copied ? '인물정보 지침을 복사했습니다. 전용 방에 한 번 넣어 주세요.' : '인물정보 지침 복사에 실패했습니다.', copied ? 'success' : 'error', 4300);
+    };
+    const guidePanel=section.querySelector('#rpcm-person-guide-panel');
+    const guideText=section.querySelector('#rpcm-person-guide-text');
+    const guideModified=section.querySelector('#rpcm-person-guide-modified');
+    if (guidePanel && guideText) {
+      guideText.value=effectivePersonGuide(room);
+      const refresh=()=>{ guideModified.textContent=guideText.value===canonicalGuideText('personInfo')?'기본':'수정됨'; };
+      refresh(); guideText.oninput=refresh;
+      section.querySelector('#rpcm-person-guide-toggle').onclick=()=>{guidePanel.hidden=!guidePanel.hidden;if(!guidePanel.hidden) guideText.focus();};
+      section.querySelector('#rpcm-person-guide-save').onclick=async()=>{room.personStateGuide=guideText.value;await saveRoom(room);refresh();notify('인물정보 지침을 저장했습니다.','success');};
+      section.querySelector('#rpcm-person-guide-reset').onclick=async()=>{if(!confirm('인물정보 지침을 기본값으로 되돌릴까요?'))return;guideText.value=canonicalGuideText('personInfo');room.personStateGuide=guideText.value;await saveRoom(room);refresh();};
+    }
+    const fileInput = section.querySelector('#rpcm-person-import-file');
+    section.querySelector('#rpcm-person-import-file-button').onclick = () => fileInput.click();
+    fileInput.onchange = async () => {
+      const file = fileInput.files?.[0];
+      if (!file) return;
+      if (file.size > 600000) { notify('인물 결과 TXT가 너무 큽니다. 나누어 가져와 주세요.', 'warn'); return; }
+      importBox.querySelector('textarea').value = await file.text();
+      state.personImportDraft = importBox.querySelector('textarea').value;
+      fileInput.value = '';
+      section.querySelector('#rpcm-person-preview').click();
+    };
+    section.querySelector('#rpcm-person-preview').onclick = () => openPersonStateImportPreview(room, importBox.querySelector('textarea').value);
+    const editorClose = section.querySelector('.rpcm-person-core-editor-close');
+    if (editorClose) editorClose.onclick = event => {
+      event.preventDefault(); event.stopPropagation();
+      state.personAdvancedOpen = false;
+      const advanced = section.querySelector('.rpcm-person-advanced');
+      advanced.open = false; advanced.hidden = true;
+      state.personReturnSource = null;
+      renderPersonCoreUi(room, overlay);
+    };
+    renderPersonCoreUi(room, overlay);
+    if (editorShell && editorShell.dataset.rpcmLazyEditorBound !== '1') {
+      editorShell.dataset.rpcmLazyEditorBound='1';
+      editorShell.addEventListener('toggle',()=>{
+        if (!overlay.isConnected || state.currentRoom !== room) return;
+        const active=editorShell.open && !editorShell.hidden;
+        state.personAdvancedOpen=active;
+        if (active && editorShell.dataset.rpcmLazyEditorReady !== '1') {
+          renderPersonPanel(room,overlay);
+        } else if (!active && editorShell.dataset.rpcmLazyEditorReady === '1') {
+          // Discard only UI nodes; editor changes were already written to room via input handlers.
+          for(const selector of ['#rpcm-knowledge-panel','#rpcm-person-speech','#rpcm-person-relationship','#rpcm-person-review']) {
+            overlay.querySelector(selector)?.replaceChildren();
+          }
+          editorShell.dataset.rpcmLazyEditorReady='0';
+        }
+      });
+    }
+    if (editorShell) editorShell.dataset.rpcmLazyEditorReady=buildEditor?'1':'0';
+  }
+
+  function openPersonStateImportPreview(room, text) {
+    const {records, errors} = parsePersonStateOutput(text,room);
+    const backdrop = document.createElement('div');
+    backdrop.className = 'rpcm-person-preview-backdrop';
+    backdrop.innerHTML = '<div class="rpcm-person-preview-dialog" role="dialog" aria-modal="true" aria-label="인물정보 가져오기 검토"><header><strong>🫂 인물정보 분류 미리보기</strong><button type="button" data-person-preview-close aria-label="닫기" data-rpcm-close="icon">✕</button></header><p>기존 정보는 그대로 두고 선택한 카드만 추가·갱신합니다. 종료에도 직접 근거가 필요합니다.</p><div class="rpcm-person-preview-list"></div><label class="rpcm-person-replace-option"><input type="checkbox" id="rpcm-person-archive-omitted"> 전체본에 없는 기존 항목을 이전 검토로 이동 <small>기존 기록은 삭제되지 않으며 되돌릴 수 있습니다.</small></label><footer><button type="button" class="rpcm-btn secondary" data-person-preview-close>취소</button><button type="button" class="rpcm-btn primary" id="rpcm-person-apply">선택 항목 적용</button></footer></div>';
+    const list = backdrop.querySelector('.rpcm-person-preview-list');
+    if (errors.length) list.innerHTML = '<div class="rpcm-person-import-errors"><strong>형식 오류 · 적용할 수 없습니다</strong>' + errors.map(error => `<p>${esc(error)}</p>`).join('') + '</div>';
+    else if (!records.length) list.innerHTML = '<div class="rpcm-person-empty">결과물에 현재 유효한 인물정보 카드가 없습니다.</div>';
+    else list.innerHTML = records.map((entry,index) => {
+      const old = personRecordMatch(room, entry);
+      const collidedId = entry.id && [...normalizeKnowledgeCards(room), ...normalizePersonStateRecords(room)].some(item => item.id === entry.id && item !== old);
+      const actorMismatch = !!old && (old.person.trim() !== entry.person || (entry.type !== 'knowledge' && old.target.trim() !== entry.target));
+      const unknownEnd = entry.op === 'end' && !old;
+      const blocked = actorMismatch || unknownEnd || collidedId;
+      const title = entry.type === 'knowledge' ? `${entry.person} · ${entry.fact || old?.fact || entry.key}` : `${entry.person} → ${entry.target} · ${entry.type === 'speech' ? '호칭·말투' : '관계·감정선'}`;
+      const value = entry.type === 'knowledge' ? `${entry.status} · ${entry.fact}${entry.status==='knows-part'?' · 실제로 아는 부분: '+entry.knownPart:''}` : entry.type === 'speech' ? `${entry.address} · ${entry.tone} · ${entry.context}` : `${entry.official} · ${entry.stance} · ${entry.conflict}${entry.trajectory ? ` · 핵심 전환 ${entry.trajectory.length}자` : ''}`;
+      const beforeTrajectory = String(old?.trajectory || '');
+      const afterTrajectory = entry.trajectoryPresent ? entry.trajectory : beforeTrajectory;
+      const trajectoryDiff = entry.type === 'relationship' && entry.op === 'upsert' && beforeTrajectory !== afterTrajectory
+        ? `<small style="white-space:pre-wrap">핵심 전환 · 기존: ${esc(beforeTrajectory || '(없음)')}\n제안: ${esc(afterTrajectory || '(없음)')}</small>` : '';
+      return `<label class="rpcm-person-import-row${blocked ? ' is-blocked' : ''}"><input type="checkbox" data-person-index="${index}" ${blocked ? 'disabled' : 'checked'}><span><strong>${esc(title)}</strong><small>${esc(blocked ? (unknownEnd ? '종료할 기존 카드를 찾지 못했습니다.' : collidedId ? '동일 ID가 다른 카드에 쓰이고 있습니다.' : '기존 카드와 인물이 달라 자동 병합할 수 없습니다.') : entry.op === 'end' ? '종료 · 이전 검토로 이동' : old ? '기존 카드 갱신' : '새 카드 추가')}</small><em>${esc(value)}</em>${trajectoryDiff}<small>근거 · ${esc(entry.evidence)}</small></span></label>`;
+    }).join('');
+    const apply = backdrop.querySelector('#rpcm-person-apply');
+    apply.disabled = !!errors.length || !records.length;
+    backdrop.querySelectorAll('[data-person-preview-close]').forEach(button => button.onclick = () => backdrop.remove());
+    backdrop.onclick = event => { if (event.target === backdrop) backdrop.remove(); };
+    backdrop.onkeydown = event => { if (event.key === 'Escape') backdrop.remove(); };
+    apply.onclick = async () => {
+      const selected = [...backdrop.querySelectorAll('[data-person-index]:checked')].map(input => records[Number(input.dataset.personIndex)]);
+      if (!selected.length) { notify('적용할 카드를 선택해 주세요.', 'warn'); return; }
+      apply.disabled = true;
+      try {
+        const archiveOmitted = backdrop.querySelector('#rpcm-person-archive-omitted').checked;
+        // 완전한 전체본임을 선택한 경우에만, 기존 항목의 누락을 보관 처리합니다.
+        const retained = new Set(selected.filter(entry => entry.op === 'upsert').map(entry => personRecordMatch(room, entry)).filter(Boolean));
+        const omitted = archiveOmitted
+          ? [...normalizeKnowledgeCards(room).filter(card => !card.archived), ...normalizePersonStateRecords(room).filter(record => record.active)]
+              .filter(record => !retained.has(record))
+          : [];
+        for (const entry of selected) {
+          const old = personRecordMatch(room, entry);
+          if(entry.preserveUnknown){rpcmAssertPreservedUnknown(room,entry);continue;}
+          if (entry.op === 'end') {
+            if (!old) throw new Error(`${entry.person}: 종료할 기존 카드가 없습니다.`);
+            old.inject = false;
+            if (entry.type === 'knowledge') old.archived = true;
+            else old.active = false;
+            old.evidence = entry.evidence;
+            continue;
+          }
+          const fields = entry.type === 'knowledge'
+            ? {key:entry.key || old?.key || '', person:entry.person, status:entry.status, ...(entry.knownPartPresent?{knownPart:entry.knownPart}:old?.knownPart!==undefined?{knownPart:old.knownPart}:{}), fact:entry.fact, actualFact:entry.actualFact, evidence:entry.evidence,category:old?.category && old.category!=='auto' ? old.category : (entry.categoryPresent ? entry.category : (old?.category||'auto')),hiddenFrom:entry.hiddenFromPresent?entry.hiddenFrom:old?.hiddenFrom||[],concealmentNote:entry.concealmentNotePresent?entry.concealmentNote:old?.concealmentNote||'',concealments:entry.concealmentsPresent?entry.concealments:old?.concealments||[], archived:false}
+            : {type:entry.type,key:entry.key || old?.key || '',person:entry.person,target:entry.target,address:entry.address,tone:entry.tone,context:entry.context,official:entry.official,stance:entry.stance,conflict:entry.conflict,graph:entry.graphPresent?entry.graph:old?.graph,trajectory:entry.type === 'relationship' ? (entry.trajectoryPresent ? entry.trajectory : String(old?.trajectory || '')) : '',evidence:entry.evidence,active:true};
+          if (old) Object.assign(old, fields);
+          else if (entry.type === 'knowledge') room.knowledgeCards.push({id:'kc_' + Date.now().toString(36) + Math.random().toString(36).slice(2,9),...fields,inject:entry.status !== 'unconfirmed',updatedAt:nowIso()});
+          else room.personStateRecords.push({id:'ps_' + Date.now().toString(36) + Math.random().toString(36).slice(2,9),...fields,inject:true});
+        }
+        for (const record of omitted) {
+          record.inject = false;
+          if (record.status) record.archived = true;
+          else record.active = false;
+        }
+        room.personLastImportSummary = `${new Date().toLocaleString('ko-KR')} · ${selected.length}개 반영${omitted.length ? ` · 기존 ${omitted.length}개 이전 검토` : ''}`;
+        await saveRoom(room);
+        let syncWarning = '';
+        try { await rebuildPendingKnowledgeItem(room); }
+        catch (syncError) { syncWarning = syncError.message || '주입 내용 동기화 오류'; }
+        backdrop.remove();
+        state.personImportDraft = '';
+        state.personImportOpen = false;
+        notify(syncWarning ? `인물정보 ${selected.length}개는 저장됐습니다. 주입 동기화를 확인해 주세요: ${syncWarning}` : `인물정보 ${selected.length}개를 분류해 저장했습니다.`, syncWarning ? 'warn' : 'success', 5500);
+        renderModalIfOpen();
+      } catch (error) { notify(`인물정보 적용 실패: ${error.message}`, 'error', 6500); apply.disabled = false; }
+    };
+    document.body.appendChild(backdrop);
+    backdrop.querySelector('[data-person-index]')?.focus();
+  }
+
+  function storyTimelineInjectionItems(room, options = {}) {
+    if (room?.storyTimelineInjectionEnabled === false) return [];
+    const cards = storyTimelineCardsFor(room).filter(card => card.inject && (card.title || card.content));
+    if (!cards.length) return [];
+    const density = ['compact','index'].includes(String(options.density || '')) ? String(options.density) : 'detail';
+    const recentIds = density === 'compact' ? new Set(cards.slice(-6).map(card => card.cardId)) : new Set();
+    const relatedIds = new Set();
+    if (density === 'compact') {
+      const contextText = options.contextText == null ? String(room?.autoRecallContextText || '') : String(options.contextText || '');
+      const contextTokens = new Set(tokenizeRecallText(contextText));
+      if (contextTokens.size) {
+        const termsById = new Map(), df = new Map();
+        for (const card of cards) {
+          const terms = new Set([...tokenizeRecallText(card.title), ...(card.tags || []).flatMap(tag => tokenizeRecallText(tag))]);
+          termsById.set(card.cardId, terms);
+          for (const term of terms) df.set(term, Number(df.get(term) || 0) + 1);
+        }
+        const commonCutoff = Math.max(3, Math.ceil(cards.length * 0.10));
+        const foldedContext = contextText.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+        for (const card of cards) {
+          if (recentIds.has(card.cardId)) continue;
+          const terms = termsById.get(card.cardId) || new Set();
+          const hits = [...terms].filter(term => contextTokens.has(term) && Number(df.get(term) || 0) < commonCutoff);
+          const titleFold = String(card.title || '').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+          const titleDirect = titleFold.length >= 6 && foldedContext.includes(titleFold);
+          const uniqueTitle = tokenizeRecallText(card.title).some(term => term.length >= 4 && contextTokens.has(term) && Number(df.get(term) || 0) === 1);
+          if (titleDirect || uniqueTitle || hits.some(term => Number(df.get(term) || 0) === 1) || hits.length >= 2) relatedIds.add(card.cardId);
+        }
+      }
+    }
+    const content = cards.map(card => {
+      const source = card.timelineLabel && card.timelineLabel !== DEFAULT_LOG_TIMELINE ? ` · ${card.timelineLabel}` : '';
+      const detailed = density === 'detail' || density === 'compact' && (recentIds.has(card.cardId) || relatedIds.has(card.cardId));
+      const tags = density === 'detail' && (card.tags || []).length ? `\n태그: ${(card.tags || []).map(tag => `#${tag}`).join(' ')}` : '';
+      const body = detailed ? `\n${card.content || ''}` : '';
+      return `[${storyCardDateLabel(card)}${source}] ${card.title || '제목 없음'}${body}${tags}`.trim();
+    }).join('\n\n');
+    return [{
+      slotId:'story-timeline:master', title:'연속성 타임라인', group:'story-timeline', content,
+      totalTurns:0, usedTurns:0, autoType:'story-timeline', recallReason:'항상 유지되는 하나의 서사 골격',
+    }];
+  }
+
+  function makeStoryLogId() {
+    return `log_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+  }
+
+  function storyLogFingerprint(block) {
+    return simpleHash(`${String(block?.heading || '')}\n${String(block?.body || '')}`);
+  }
+
+  function normalizeStoryLogReviews(room) {
+    if (!room || typeof room !== 'object') return [];
+    const log = (room.slots || []).find(slot => slot.id === 'logSummary');
+    const blocks = parseDatedLogBlocks(String(log?.content || ''));
+    const old = Array.isArray(room.storyLogReviews) ? room.storyLogReviews.filter(item => item && typeof item === 'object') : [];
+    const byKey = new Map(old.map(item => [String(item.blockKey || ''), item]));
+    const calendarBuckets=new Map();
+    for(const item of old){const key=JSON.stringify([String(item.calendarDateKey||''),String(item.timelineKey||'')]);if(!calendarBuckets.has(key))calendarBuckets.set(key,[]);calendarBuckets.get(key).push(item);}
+    const usedIds = new Set();
+    const next = [];
+    for (const block of blocks) {
+      let meta = byKey.get(String(block.key));
+      if (!meta) {
+        const candidates = (calendarBuckets.get(JSON.stringify([String(block.calendarDateKey||''),String(block.timelineKey||'')]))||[]).filter(item=>!usedIds.has(String(item.logId)));
+        if (candidates.length === 1) meta = candidates[0];
+      }
+      const fingerprint = storyLogFingerprint(block);
+      const changed = !!meta && String(meta.fingerprint || '') !== fingerprint;
+      let logId = String(meta?.logId || '');
+      if (!/^log_[A-Za-z0-9_-]+$/.test(logId) || usedIds.has(logId)) logId = makeStoryLogId();
+      usedIds.add(logId);
+      next.push({
+        logId,
+        blockKey:String(block.key),
+        calendarDateKey:String(block.calendarDateKey || ''),
+        timelineKey:String(block.timelineKey || ''),
+        fingerprint,
+        version:Math.max(1, Number(meta?.version || 1) + (changed ? 1 : 0)),
+        reviewedVersion:Math.max(0, Number(meta?.reviewedVersion || 0)),
+        createdAt:String(meta?.createdAt || nowIso()),
+        updatedAt:changed ? nowIso() : String(meta?.updatedAt || meta?.createdAt || nowIso()),
+      });
+    }
+    room.storyLogReviews = next;
+    room.storyLogReviewRevisionV1 = true;
+    const existingStoryGuide = String(room.storyTimelineGuide || '');
+    // Only missing or fingerprint-matched official bodies move to the current builtin.
+    // A user-edited body remains unchanged even when its title names an older version.
+    const builtInStoryGuideHashes = new Set(['kqpc9i', '1qc4n6u', 'mlc1go']);
+    const exactLegacyBuiltIn = !existingStoryGuide || builtInStoryGuideHashes.has(simpleHash(existingStoryGuide)) ||
+      existingStoryGuide === STORY_TIMELINE_GUIDE_V15 || existingStoryGuide === LEGACY_CANONICAL_GUIDES.timeline ||
+      existingStoryGuide === PREVIOUS_CANONICAL_GUIDES_V01456.timeline || existingStoryGuide === canonicalGuideText('timeline');
+    if (exactLegacyBuiltIn) {
+      room.storyTimelineGuide = canonicalGuideText('timeline');
+      room.storyTimelineGuideSource = 'builtin-v1.7.2';
+    } else {
+      room.storyTimelineGuide = existingStoryGuide;
+      room.storyTimelineGuideSource = 'custom';
+    }
+    room.storyTimelineGuideRevisionV15 = true;
+    if (!room.storyTimelinePendingReview || typeof room.storyTimelinePendingReview !== 'object') room.storyTimelinePendingReview = null;
+    room.storyTimelineLastReviewedMessageId = String(room.storyTimelineLastReviewedMessageId || '');
+    room.storyTimelineLastReviewedAt = String(room.storyTimelineLastReviewedAt || '');
+    if (!room.storyTimelineReviewSettings || typeof room.storyTimelineReviewSettings !== 'object') room.storyTimelineReviewSettings = {};
+    room.storyTimelineReviewSettings = {
+      threshold:[30,50,100].includes(Number(room.storyTimelineReviewSettings.threshold)) ? Number(room.storyTimelineReviewSettings.threshold) : Math.max(1, Number(room.storyTimelineReviewSettings.threshold) || 50),
+      menuBadge:room.storyTimelineReviewSettings.menuBadge !== false,
+      topNotice:room.storyTimelineReviewSettings.topNotice !== false,
+      popup:!!room.storyTimelineReviewSettings.popup,
+      dateIndicator:room.storyTimelineReviewSettings.dateIndicator !== false,
+      monthlyFold:room.storyTimelineReviewSettings.monthlyFold !== false,
+      monthlyFoldMin:Math.max(2, Math.min(100, Number(room.storyTimelineReviewSettings.monthlyFoldMin) || 8)),
+    };
+    if (!Array.isArray(room.storyTimelineLastDiff)) room.storyTimelineLastDiff = [];
+    if (!room.storyTimelineBackup || typeof room.storyTimelineBackup !== 'object' || !Array.isArray(room.storyTimelineBackup.cards)) room.storyTimelineBackup = null;
+    if (!room.storyTimelineApiDraft || typeof room.storyTimelineApiDraft !== 'object') room.storyTimelineApiDraft = null;
+    room.storyTimelineApiHistory = (Array.isArray(room.storyTimelineApiHistory) ? room.storyTimelineApiHistory : []).filter(item => item && typeof item === 'object').slice(0, 10);
+    room.storyTimelineAuditHistory = (Array.isArray(room.storyTimelineAuditHistory) ? room.storyTimelineAuditHistory : []).filter(item => item && typeof item === 'object').slice(0, 50);
+    if (!room.storyTimelineManualRun || typeof room.storyTimelineManualRun !== 'object') room.storyTimelineManualRun = null;
+    room.storyTimelineCarryoverTurnKeys = (Array.isArray(room.storyTimelineCarryoverTurnKeys) ? room.storyTimelineCarryoverTurnKeys : []).map(String).slice(-40);
+    const nextByKey=new Map();for(const item of next)if(!nextByKey.has(item.blockKey))nextByKey.set(item.blockKey,item);
+    return blocks.map(block => {
+      const meta = nextByKey.get(String(block.key));
+      const status = !meta?.reviewedVersion ? 'new' : Number(meta.reviewedVersion) < Number(meta.version) ? 'modified' : 'reviewed';
+      return { block, meta, status };
+    });
+  }
+
+  function storyUnreviewedLogs(room) {
+    return normalizeStoryLogReviews(room).filter(item => item.status !== 'reviewed');
+  }
+
+
+  function snapshotStoryTimelineCards(room) {
+    return storyTimelineCardsFor(room).map(card => ({ ...card, tags:[...(card.tags || [])] }));
+  }
+
+  function storyTimelineCardsForLabel(room, timelineLabel = activeLogTimelineLabel(room)) {
+    const key = normalizedLogTimelineKey(timelineLabel === DEFAULT_LOG_TIMELINE ? '' : timelineLabel);
+    return orderedStoryTimelineCards(normalizeStoryTimelineCards(room).filter(card =>
+      normalizedLogTimelineKey((card.timelineLabel || DEFAULT_LOG_TIMELINE) === DEFAULT_LOG_TIMELINE ? '' : card.timelineLabel) === key
+    ));
+  }
+
+  function snapshotStoryTimelineCardsForLabel(room, timelineLabel = activeLogTimelineLabel(room)) {
+    return storyTimelineCardsForLabel(room, timelineLabel).map(card => ({ ...card, tags:[...(card.tags || [])] }));
+  }
+
+  function storyTimelineComparable(card) {
+    return JSON.stringify({
+      timelineLabel:String(card?.timelineLabel || ''), dateStart:String(card?.dateStart || ''), dateEnd:String(card?.dateEnd || ''),
+      title:String(card?.title || ''), content:String(card?.content || ''), tags:[...(card?.tags || [])],
+      userLocked:!!card?.userLocked, inject:card?.inject !== false,
+    });
+  }
+
+  function storyTimelineMasterSignature(cards) {
+    return JSON.stringify((cards || []).map(card => [String(card.cardId || ''), storyTimelineComparable(card)]));
+  }
+
+  function storyTimelineRunRef(number) {
+    return `C${String(number).padStart(3, '0')}`;
+  }
+
+  function createStoryTimelineRun(room, timelineLabel = activeLogTimelineLabel(room), kind = 'update', sourceScope = 'FULL') {
+    const masterSnapshot = snapshotStoryTimelineCardsForLabel(room, timelineLabel);
+    return {
+      runId:`TLRUN_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`,
+      kind:String(kind || 'update'), sourceScope:String(sourceScope || 'FULL'), timelineLabel:String(timelineLabel || DEFAULT_LOG_TIMELINE),
+      createdAt:nowIso(), masterSnapshot, masterSignature:storyTimelineMasterSignature(masterSnapshot),
+      refEntries:masterSnapshot.map((card, index) => ({ ref:storyTimelineRunRef(index + 1), cardId:String(card.cardId) })),
+      nextRefNumber:masterSnapshot.length + 1,
+    };
+  }
+
+  function storyTimelineRunRefMaps(run) {
+    const entries = Array.isArray(run?.refEntries) ? run.refEntries : [];
+    return {
+      refToId:new Map(entries.map(item => [String(item.ref), String(item.cardId)])),
+      idToRef:new Map(entries.map(item => [String(item.cardId), String(item.ref)])),
+    };
+  }
+
+  function ensureStoryTimelineRunRefs(run, cards) {
+    const maps = storyTimelineRunRefMaps(run);
+    let next = Math.max(1, Number(run.nextRefNumber) || 1);
+    for (const card of (cards || [])) {
+      const cardId = String(card.cardId || '');
+      if (!cardId || maps.idToRef.has(cardId)) continue;
+      let ref = storyTimelineRunRef(next++);
+      while (maps.refToId.has(ref)) ref = storyTimelineRunRef(next++);
+      run.refEntries.push({ ref, cardId });
+      maps.refToId.set(ref, cardId);
+      maps.idToRef.set(cardId, ref);
+    }
+    run.nextRefNumber = next;
+    return maps;
+  }
+
+  function assertStoryTimelineRunCurrent(room, run) {
+    if (!run || !Array.isArray(run.masterSnapshot)) throw new Error('실행 전 타임라인 snapshot을 찾지 못했습니다. 작업을 다시 시작해 주세요.');
+    const current = snapshotStoryTimelineCardsForLabel(room, run.timelineLabel);
+    if (storyTimelineMasterSignature(current) !== String(run.masterSignature || '')) {
+      throw new Error('실행 후 마스터 타임라인이 변경되었습니다. 현재 마스터를 기준으로 다시 실행해 주세요.');
+    }
+    return true;
+  }
+
+  function serializeStoryTimelineRefMaster(cards, run, includeLockedInput = true, outputNewAsNew = false) {
+    const maps = ensureStoryTimelineRunRefs(run, cards);
+    const originalIds = new Set((run.masterSnapshot || []).map(card => String(card.cardId)));
+    const body = (cards || []).map(card => {
+      const ref = outputNewAsNew && !originalIds.has(String(card.cardId || '')) ? 'NEW' : maps.idToRef.get(String(card.cardId || ''));
+      const locked = includeLockedInput ? `\nLOCKED_INPUT=${card.userLocked ? 'true' : 'false'}` : '';
+      return `[CARD]\nREF=${ref}\nDATE_START=${card.dateStart ? String(card.dateStart).replace(/-/g, '.') : 'UNKNOWN'}\nDATE_END=${card.dateEnd ? String(card.dateEnd).replace(/-/g, '.') : 'UNKNOWN'}\nTITLE=${card.title || ''}\nTAGS=${(card.tags || []).join(',')}${locked}\nCONTENT=\n${card.content || ''}\n[/CARD]`;
+    }).join('\n\n');
+    return `[TIMELINE]\n${body}\n[/TIMELINE]`;
+  }
+
+  function storyTimelineCardJsonSchema(validRefs) {
+    return {
+      type:'OBJECT', properties:{
+        ref:{ type:'STRING', enum:[...validRefs, 'NEW'] },
+        dateStart:{ type:'STRING', nullable:true }, dateEnd:{ type:'STRING', nullable:true },
+        title:{ type:'STRING' }, tags:{ type:'ARRAY', items:{ type:'STRING' } }, content:{ type:'STRING' },
+      }, required:['ref','dateStart','dateEnd','title','tags','content'],
+    };
+  }
+
+  function storyTimelineUpdateResponseSchema(validRefs) {
+    return {
+      type:'OBJECT', properties:{
+        status:{ type:'STRING', enum:['CHANGED','NO_CHANGE'] },
+        cards:{ type:'ARRAY', items:storyTimelineCardJsonSchema(validRefs) },
+      }, required:['status','cards'],
+    };
+  }
+
+  function storyTimelineAuditResponseSchema(validRefs) {
+    return {
+      type:'OBJECT', properties:{
+        audit:{ type:'OBJECT', properties:{
+          result:{ type:'STRING', enum:['PASS','FAIL','UNVERIFIED'] },
+          sourceScope:{ type:'STRING', enum:['FULL','PARTIAL','TIMELINE_ONLY'] },
+          currentCount:{ type:'INTEGER' }, recommendedCount:{ type:'INTEGER', nullable:true },
+          keep:{ type:'ARRAY', items:{ type:'STRING', enum:validRefs } },
+          update:{ type:'ARRAY', items:{ type:'STRING', enum:validRefs } },
+          merge:{ type:'ARRAY', items:{ type:'OBJECT', properties:{ refs:{ type:'ARRAY', items:{ type:'STRING', enum:validRefs } }, targetRef:{ type:'STRING', enum:validRefs } }, required:['refs','targetRef'] } },
+          remove:{ type:'ARRAY', items:{ type:'STRING', enum:validRefs } },
+          split:{ type:'ARRAY', items:{ type:'STRING', enum:validRefs } },
+          addCount:{ type:'INTEGER' }, lockedIssues:{ type:'ARRAY', items:{ type:'STRING' } }, summary:{ type:'STRING' },
+        }, required:['result','sourceScope','currentCount','recommendedCount','keep','update','merge','remove','split','addCount','lockedIssues','summary'] },
+        cards:{ type:'ARRAY', items:storyTimelineCardJsonSchema(validRefs) },
+      }, required:['audit','cards'],
+    };
+  }
+
+  function parseStoryTimelineJsonObject(value) {
+    const raw = normalizeLineBreaks(String(value || '')).trim();
+    if (!raw) throw new Error('응답 형식 오류: 빈 응답입니다.');
+    const fenced = raw.match(/^```(?:json)?[ \t]*\n([\s\S]*?)\n```[ \t]*$/i);
+    const jsonText = fenced ? fenced[1].trim() : raw;
+    let parsed;
+    try { parsed = JSON.parse(jsonText); }
+    catch (_) { const error = new Error('JSON 파싱 실패: 응답 전체가 하나의 JSON 객체가 아닙니다.'); error.rawExcerpt = safeAiContextRawExcerpt(raw); throw error; }
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error('응답 최상위 값은 JSON 객체여야 합니다.');
+    return parsed;
+  }
+
+  function normalizeStoryTimelineJsonDate(value, fieldName, index) {
+    if (value == null || String(value).trim().toUpperCase() === 'UNKNOWN') return '';
+    const normalized = normalizeStoryDate(value);
+    if (!normalized) throw new Error(`${index + 1}번째 카드의 ${fieldName} 날짜 형식이 올바르지 않습니다.`);
+    return normalized;
+  }
+
+  function materializeStoryTimelineJsonCards(rawCards, room, run, options = {}) {
+    if (!Array.isArray(rawCards)) throw new Error('cards는 배열이어야 합니다.');
+    const workingCards = Array.isArray(options.workingCards) ? options.workingCards : run.masterSnapshot;
+    ensureStoryTimelineRunRefs(run, workingCards);
+    const maps = storyTimelineRunRefMaps(run);
+    const currentById = new Map(workingCards.map(card => [String(card.cardId), card]));
+    const originalById = new Map((run.masterSnapshot || []).map(card => [String(card.cardId), card]));
+    const usedExistingRefs = new Set();
+    const now = nowIso();
+    const materialized = rawCards.map((source, index) => {
+      if (!source || Array.isArray(source) || typeof source !== 'object') throw new Error(`${index + 1}번째 카드는 객체여야 합니다.`);
+      for (const key of ['ref','dateStart','dateEnd','title','tags','content']) if (!(key in source)) throw new Error(`${index + 1}번째 카드에 ${key} 필드가 없습니다.`);
+      const ref = String(source.ref || '').trim();
+      const isNew = ref === 'NEW';
+      if (!isNew && !maps.refToId.has(ref)) throw new Error(`${index + 1}번째 카드의 알 수 없는 REF: ${ref || '(빈 값)'}`);
+      if (!isNew && usedExistingRefs.has(ref)) throw new Error(`중복 REF가 있습니다: ${ref}`);
+      if (!isNew) usedExistingRefs.add(ref);
+      if (!Array.isArray(source.tags) || source.tags.some(tag => typeof tag !== 'string')) throw new Error(`${index + 1}번째 카드의 tags는 문자열 배열이어야 합니다.`);
+      const dateStart = normalizeStoryTimelineJsonDate(source.dateStart, 'dateStart', index);
+      const dateEnd = normalizeStoryTimelineJsonDate(source.dateEnd, 'dateEnd', index);
+      if (dateStart && dateEnd && dateEnd < dateStart) throw new Error(`${index + 1}번째 카드의 끝 날짜가 시작 날짜보다 빠릅니다.`);
+      const title = String(source.title || '').trim();
+      const content = String(source.content || '').trim();
+      if (!title) throw new Error(`${index + 1}번째 카드의 title이 비어 있습니다.`);
+      if (!content) throw new Error(`${index + 1}번째 카드의 content가 비어 있습니다.`);
+      const cardId = isNew ? makeStoryCardId() : maps.refToId.get(ref);
+      const previous = currentById.get(cardId) || originalById.get(cardId);
+      return {
+        cardId, timelineLabel:String(previous?.timelineLabel || run.timelineLabel || DEFAULT_LOG_TIMELINE), dateStart, dateEnd, title, content,
+        tags:[...new Set(source.tags.map(tag => tag.trim()).filter(Boolean))], userLocked:!!previous?.userLocked,
+        inject:previous ? previous.inject !== false : true, sortOrder:index, createdAt:String(previous?.createdAt || now), updatedAt:now,
+      };
+    });
+    const nextById = new Map(materialized.map(card => [String(card.cardId), card]));
+    for (const locked of workingCards.filter(card => card.userLocked)) {
+      const next = nextById.get(String(locked.cardId));
+      if (!next) throw new Error(`잠금 카드가 결과에서 누락되었습니다: ${maps.idToRef.get(String(locked.cardId)) || locked.title}`);
+      if (storyTimelineComparable(next) !== storyTimelineComparable(locked)) throw new Error(`잠금 카드를 변경할 수 없습니다: ${maps.idToRef.get(String(locked.cardId)) || locked.title}`);
+    }
+    ensureStoryTimelineRunRefs(run, materialized);
+    return materialized;
+  }
+
+  function buildStoryTimelinePreview(cards, run) {
+    const existing = run.masterSnapshot || [];
+    const existingById = new Map(existing.map(card => [String(card.cardId), card]));
+    const nextById = new Map((cards || []).map(card => [String(card.cardId), card]));
+    const diff = [];
+    for (const card of (cards || [])) {
+      const previous = existingById.get(String(card.cardId));
+      if (!previous) diff.push({ type:'new', cardId:card.cardId, title:card.title });
+      else if (storyTimelineComparable(previous) !== storyTimelineComparable(card)) diff.push({ type:'updated', cardId:card.cardId, title:card.title });
+    }
+    for (const card of existing) if (!nextById.has(String(card.cardId)) && !card.userLocked) diff.push({ type:'removed', cardId:card.cardId, title:card.title });
+    return { cards:(cards || []).map((card, index) => ({ ...card, sortOrder:index })), diff, removedCards:existing.filter(card => !nextById.has(String(card.cardId)) && !card.userLocked), warnings:[], protectedCount:existing.filter(card => card.userLocked).length };
+  }
+
+  function parseStoryTimelineUpdateJson(value, room, run, options = {}) {
+    const parsed = typeof value === 'string' ? parseStoryTimelineJsonObject(value) : value;
+    if (!['CHANGED','NO_CHANGE'].includes(parsed?.status) || !Array.isArray(parsed?.cards)) throw new Error('status와 cards가 포함된 일반 타임라인 JSON schema가 필요합니다.');
+    if (parsed.status === 'NO_CHANGE') {
+      if (parsed.cards.length) throw new Error('NO_CHANGE일 때 cards는 빈 배열이어야 합니다.');
+      return { status:'NO_CHANGE', cards:Array.isArray(options.workingCards) ? options.workingCards : run.masterSnapshot };
+    }
+    if (!parsed.cards.length) throw new Error('CHANGED일 때 최신 전체 카드 배열이 필요합니다.');
+    return { status:'CHANGED', cards:materializeStoryTimelineJsonCards(parsed.cards, room, run, options) };
+  }
+
+  function backupStoryTimeline(room, reason = '변경 전') {
+    room.storyTimelineBackup = { cards:snapshotStoryTimelineCards(room), savedAt:nowIso(), reason:String(reason || '변경 전') };
+    return room.storyTimelineBackup;
+  }
+
+  function restoreStoryTimelineBackup(room) {
+    const backup = room?.storyTimelineBackup;
+    if (!backup || !Array.isArray(backup.cards)) return false;
+    const current = snapshotStoryTimelineCards(room);
+    room.storyTimelineCards = backup.cards.map(card => ({ ...card, tags:[...(card.tags || [])] }));
+    room.storyTimelineBackup = { cards:current, savedAt:nowIso(), reason:'되돌리기 전' };
+    normalizeStoryTimelineCards(room);
+    return true;
+  }
+

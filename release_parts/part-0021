@@ -1,0 +1,1000 @@
+        refreshPaletteDots();
+      };
+    }
+    const intensitySlider = backdrop.querySelector('[data-rpcm-surface-intensity]');
+    const intensityLabel = backdrop.querySelector('[data-rpcm-intensity-value]');
+    if (intensitySlider) intensitySlider.oninput = () => {
+      if (!loadRpcmSurfaceTheme()) saveRpcmSurfaceTheme(normalizeRpcmAccentHex(state.quickSurfaceDraftHex) || rpcmCurrentSurfaceForPicker());
+      const shade = saveRpcmSurfaceIntensity(intensitySlider.value);
+      if (intensityLabel) intensityLabel.textContent = `${shade}%`;
+      refreshPaletteDots();
+    };
+
+    const saveCurrentPalette = kind => {
+      const label = kind === 'accent' ? '강조색' : '배경색·농담';
+      const name = prompt(`${label} 저장 이름 (최대 32자)`, '')?.trim().slice(0,32);
+      if (!name) return;
+      const presets = loadRpcmPalettePresets(kind);
+      const existing = presets.findIndex(row => row.name === name);
+      if (existing >= 0 && !confirm(`같은 이름의 ${label} 저장색을 덮어쓸까요?`)) return;
+      // Capture a concrete color value, including when the user has never set a custom one.
+      const hex = kind === 'accent'
+        ? (normalizeRpcmAccentHex(state.quickThemeDraftHex) || loadRpcmAccentTheme() || rpcmCurrentAccentForPicker())
+        : (normalizeRpcmAccentHex(state.quickSurfaceDraftHex) || loadRpcmSurfaceTheme() || rpcmCurrentSurfaceForPicker());
+      const row = kind === 'accent' ? {name,hex} : {name,hex,intensity:loadRpcmSurfaceIntensity()};
+      if (!normalizeRpcmAccentHex(row.hex)) { notify('현재 색상값을 확인할 수 없습니다.','error'); return; }
+      if (existing >= 0) presets[existing] = row;
+      else {
+        if (presets.length >= 12) { notify(`${label}은 최대 12개까지 저장할 수 있습니다.`, 'warn'); return; }
+        presets.push(row);
+      }
+      if (!saveRpcmPalettePresets(kind,presets)) { notify(`${label} 저장에 실패했습니다.`, 'error'); return; }
+      refreshPaletteDots(true);
+      notify(`${label}을 저장했습니다.`, 'success',2000);
+    };
+    const deletePalette = (kind,index) => {
+      const presets = loadRpcmPalettePresets(kind);
+      if (!Number.isInteger(index) || !presets[index]) return;
+      if (!confirm(`저장된 ${kind === 'accent' ? '강조색' : '배경색·농담'} '${presets[index].name}'을 삭제할까요?`)) return;
+      presets.splice(index,1);
+      if (!saveRpcmPalettePresets(kind,presets)) { notify('저장색 삭제에 실패했습니다.','error'); return; }
+      refreshPaletteDots(true);
+    };
+    for (const details of pickers) {
+      const grid = details.querySelector('[data-rpcm-palette-grid]');
+      if (grid) {
+        // Event delegation keeps handlers stable when the swatch grid is replaced.
+        grid.onclick = event => {
+          if (grid.dataset.suppressClick === '1') { grid.dataset.suppressClick = ''; return; }
+          if (event.target.closest('[data-rpcm-palette-save]')) { saveCurrentPalette(String(details.dataset.rpcmThemePicker || 'accent')); return; }
+          const dot = event.target.closest('[data-rpcm-palette-swatch]');
+          if (!dot || !grid.contains(dot)) return;
+          const index = Number(dot.dataset.rpcmPaletteSwatch);
+          const preset = loadRpcmPalettePresets(String(details.dataset.rpcmThemePicker || 'accent'))[index];
+          if (!preset) return;
+          applyRpcmPalettePreset(String(details.dataset.rpcmThemePicker || 'accent'),preset);
+          if (intensitySlider) intensitySlider.value = String(loadRpcmSurfaceIntensity());
+          if (intensityLabel) intensityLabel.textContent = `${loadRpcmSurfaceIntensity()}%`;
+          refreshAllPickers();
+          // Keep the picker open, show the applied color code immediately.
+        };
+        grid.oncontextmenu = event => {
+          const dot = event.target.closest('[data-rpcm-palette-swatch]');
+          if (!dot) return;
+          event.preventDefault();
+          deletePalette(String(details.dataset.rpcmThemePicker || 'accent'),Number(dot.dataset.rpcmPaletteSwatch));
+        };
+        // Saved palette deletion is exclusively available through swatch right-click.
+      }
+      const resetAll = details.querySelector('[data-rpcm-palette-reset]');
+      if (resetAll) resetAll.onclick = () => {
+        if (!confirm('현재 강조색·배경색·농담을 기본값으로 돌릴까요? 저장된 이름별 팔레트는 유지됩니다.')) return;
+        saveRpcmAccentTheme(''); saveRpcmSurfaceTheme(''); saveRpcmSurfaceIntensity(24); state.quickThemeDraftHex=''; state.quickSurfaceDraftHex='';
+        if (intensitySlider) intensitySlider.value = '24';
+        if (intensityLabel) intensityLabel.textContent = '24%';
+        refreshAllPickers();
+      };
+    }
+  }
+
+  function renderQuickInjectionPanel() {
+    const backdrop = state.quickPanel;
+    if (!backdrop?.isConnected) return;
+    // 체크 반영 등으로 팔레트 DOM이 교체되기 직전이면 마지막 드래그 미리보기를 먼저 확정합니다.
+    if (state.quickThemeDraftHex) {
+      saveRpcmAccentTheme(state.quickThemeDraftHex);
+      state.quickThemeDraftHex = '';
+    }
+    if (state.quickSurfaceDraftHex) {
+      saveRpcmSurfaceTheme(state.quickSurfaceDraftHex);
+      state.quickSurfaceDraftHex = '';
+    }
+    const savedPaletteScrollTop = backdrop.querySelector('[data-rpcm-theme-stack]')?.scrollTop || 0;
+    const room = state.currentRoom;
+    const pending = room?.pending;
+    const managedRows = pending ? quickManageItems(pending) : [];
+    const availableRows = pending ? quickUninjectedSlotRows(room, pending) : [];
+    const liveByKey = new Map();
+    // 제거된 캐릭터/OOC는 quickManageItems와 quickUninjectedSlotRows 양쪽에 잡힐 수 있습니다.
+    // 이 경우 available 정보가 있는 쪽을 최종 행으로 사용해 안내 문구를 유지합니다.
+    for (const row of managedRows) if (row?.key) liveByKey.set(row.key, row);
+    for (const row of availableRows) if (row?.key) liveByKey.set(row.key, row);
+
+    const activeLiveKeys = new Set(managedRows.filter(row => row.active).map(row => row.key));
+    const inactiveLiveKeys = new Set(availableRows.map(row => row.key));
+    const effectiveSectionFor = row => {
+      const key = String(row?.key || '');
+      const queued = key && state.quickDesired.has(key) ? state.quickDesired.get(key) : null;
+      if (queued === true) return 'active';
+      if (queued === false) {
+        const group = String(row?.item?.group || '');
+        return ['character','extra'].includes(group) ? 'inactive' : 'removed';
+      }
+      if (activeLiveKeys.has(key)) return 'active';
+      if (inactiveLiveKeys.has(key)) return 'inactive';
+      return 'removed';
+    };
+
+    // 새로 연 시점의 그룹 배치를 스냅샷으로 고정합니다.
+    // 이후 서버 반영으로 실제 active 상태가 바뀌어도 이 창을 닫기 전에는 행 위치를 옮기지 않습니다.
+    if (!pending) {
+      state.quickPanelLayout = null;
+    } else {
+      const roomId = String(room?.chatId || '');
+      if (!state.quickPanelLayout || state.quickPanelLayout.roomId !== roomId) {
+        const layout = { roomId, inactive:[], active:[], removed:[] };
+        const seen = new Set();
+        const sourceRows = [
+          ...availableRows,
+          ...managedRows.filter(row => row.active),
+          ...managedRows.filter(row => !row.active),
+        ];
+        for (const row of sourceRows) {
+          if (!row?.key || seen.has(row.key)) continue;
+          seen.add(row.key);
+          layout[effectiveSectionFor(row)].push(row.key);
+        }
+        state.quickPanelLayout = layout;
+      } else {
+        // 자동 갱신 등으로 이 창을 연 뒤 완전히 새로운 항목이 생긴 경우에만 현재 상태 그룹 끝에 추가합니다.
+        // 이미 보이던 항목은 체크 상태가 바뀌어도 기존 그룹 위치를 그대로 유지합니다.
+        const known = new Set([
+          ...state.quickPanelLayout.inactive,
+          ...state.quickPanelLayout.active,
+          ...state.quickPanelLayout.removed,
+        ]);
+        for (const row of liveByKey.values()) {
+          if (!row?.key || known.has(row.key)) continue;
+          state.quickPanelLayout[effectiveSectionFor(row)].push(row.key);
+          known.add(row.key);
+        }
+      }
+    }
+
+    const layout = state.quickPanelLayout;
+    const rowsFromLayout = name => layout
+      ? (layout[name] || []).map(key => liveByKey.get(key)).filter(Boolean)
+      : [];
+    const inactive = pending ? rowsFromLayout('inactive') : [];
+    const active = pending ? rowsFromLayout('active') : [];
+    const removed = pending ? rowsFromLayout('removed') : [];
+    const actualActive = managedRows.filter(row => row.active);
+    const stats = statsForItems(actualActive.map(row => row.item));
+    const capacity = carrierCapacityForUi(room, stats.block, buildContextBlockFromItems(actualActive.map(row => row.item)));
+    const monitor = quickMonitorStatus(room);
+    const rowHtml = (row, index) => {
+      const item = row.item;
+      const category = itemCategory(item);
+      const queued = state.quickDesired.has(row.key) ? state.quickDesired.get(row.key) : row.active;
+      const meta = row.available
+        ? `${formatCount(String(item.content || '').length)}자 · ${row.sessionRemoved ? '이번 주입에서 제외됨 · 체크하면 다시 추가' : '현재 미주입 · 체크하면 이번 주입에만 추가'} · ${esc(remainingLabelForItem(item))}`
+        : `${formatCount(String(item.content || '').length)}자 · ${esc(remainingLabelForItem(item))}${itemReason(item) ? ` · ${esc(itemReason(item))}` : ''}${relatedLogEvidence(item) ? ` · ${esc(relatedLogEvidence(item))}` : ''}`;
+      return `<label data-key="quick-${esc(row.key)}" class="rpcm-quick-row${queued ? '' : ' is-off'}">
+        <input type="checkbox" data-rpcm-quick-index="${index}" ${queued ? 'checked' : ''} ${state.quickApplying ? 'disabled' : ''}>
+        <span class="rpcm-quick-badge tone-${categoryTone(category)}">${esc(category)}</span>
+        <span class="rpcm-quick-copy"><strong>${esc(item.title || category)}</strong><small>${meta}</small></span>
+      </label>`;
+    };
+    const sectionOpen = state.quickSectionOpen || (state.quickSectionOpen = { inactive:false, active:true });
+    const sectionHtml = (name, title, rowsForSection, startIndex, openByDefault, muted = false) => {
+      const open = sectionOpen[name] == null ? openByDefault : !!sectionOpen[name];
+      return `<details class="rpcm-quick-group${muted ? ' is-muted' : ''}" data-rpcm-quick-section="${name}" ${open ? 'open' : ''}><summary class="rpcm-quick-group-title${muted ? ' is-muted' : ''}"><span class="rpcm-quick-group-main"><b>${esc(title)}</b><em>${rowsForSection.length}</em></span><span class="rpcm-quick-group-action">${open ? '접기' : '펴기'}</span></summary><div class="rpcm-quick-group-body">${rowsForSection.length ? rowsForSection.map((row, offset) => rowHtml(row, startIndex + offset)).join('') : '<div class="rpcm-quick-empty is-compact">해당 항목이 없습니다.</div>'}</div></details>`;
+    };
+    const ordered = [...inactive, ...active, ...removed];
+    rpcmPatchHtml(backdrop, `<div class="rpcm-quick-shade" data-key="shade"></div><aside class="rpcm-quick-panel" data-key="panel" role="dialog" aria-modal="true" aria-label="Quick Monitor">
+      <div class="rpcm-quick-head">${quickMonitorRing(monitor)}<div><strong>Quick Monitor</strong><span>${monitor.label} · ${actualActive.length}개 · ${formatCount(monitor.used)} / 50,000자 · ${monitor.percent}%${capacity.byteKnown && pending ? ` · ${rpcmCarrierWireState.utf16 ? 'UTF-8/UTF-16LE' : 'UTF-8'} 요청 ${formatCount(capacity.payloadBytes)} / ${formatCount(capacity.byteLimit)}B` : ''}</span></div><button type="button" class="rpcm-quick-close" aria-label="닫기" data-rpcm-close="icon">✕</button></div>
+      <div class="rpcm-monitor-summary"><span class="rpcm-monitor-state${monitor.warning ? ' is-warning' : ''}">${monitor.label}</span><span class="rpcm-monitor-issues">확인할 일 ${monitor.warningCount}</span>${monitor.capacityNear ? '<span class="rpcm-monitor-issues">정리 권장</span>' : ''}<div class="rpcm-monitor-categories">${quickMonitorCategories(monitor.items)}</div></div>
+      <div class="rpcm-quick-note">${pending ? '미주입 캐릭터·OOC는 체크하면 현재 주입에만 추가됩니다. 주입 중 항목의 체크를 끄면 현재 주입에서만 빠집니다. 체크 변경은 즉시 반영되지만 항목 위치는 이 창을 닫을 때까지 고정되며, 다시 열면 변경된 주입 상태에 맞춰 이동합니다. 저장된 원문과 다음 주입의 기본 선택은 바뀌지 않습니다.' : '현재 주입은 꺼져 있습니다. 전체 RP Manager에서 자료집을 포함한 다음 주입 구성을 확인할 수 있습니다.'}${room?._logBudgetInfo?.omitted ? ` · 로그 ${room._logBudgetInfo.omitted}개 용량 제외${room._logBudgetInfo.omittedTitles?.length ? `: ${esc(room._logBudgetInfo.omittedTitles.join(', '))}` : ''}` : ''}${loreBudgetInfoFor(room)?.candidates > loreBudgetInfoFor(room)?.included ? ` · 자료집 ${loreBudgetInfoFor(room).candidates - loreBudgetInfoFor(room).included}개 용량 제외${loreBudgetInfoFor(room)?.omittedTitles?.length ? `: ${esc(loreBudgetInfoFor(room).omittedTitles.join(', '))}` : ''}` : ''}</div>
+      <div class="rpcm-quick-list" data-key="list">
+        ${pending ? sectionHtml('inactive', '미주입 항목', inactive, 0, false, true) : ''}
+        ${sectionHtml('active', '주입 중', active, inactive.length, true, false)}
+        ${removed.length ? `<div class="rpcm-quick-group-title is-muted">이번 주입에서 끈 항목 ${removed.length}</div>${removed.map((row, index) => rowHtml(row, inactive.length + active.length + index)).join('')}` : ''}
+      </div>
+      ${quickThemePickerHtml()}
+      <div class="rpcm-quick-foot"><span>${state.quickApplying ? '서버에 반영 중…' : state.quickDesired.size ? '변경 사항을 곧 반영합니다…' : pending ? '여러 항목을 연달아 바꾸면 한 번에 반영됩니다.' : '주입 시작 전 구성을 확인하세요.'}</span><button type="button" class="rpcm-btn secondary rpcm-quick-open-full">전체 RP Manager</button>${pending ? '<button type="button" class="rpcm-btn warn rpcm-quick-disarm">주입 해제</button>' : '<button type="button" class="rpcm-btn primary rpcm-quick-arm">주입 시작</button>'}<button type="button" class="rpcm-btn secondary rpcm-quick-done" aria-label="닫기" data-rpcm-close="text">닫기</button></div>
+    </aside>`);
+
+    backdrop.querySelector('.rpcm-quick-shade').onclick = () => closeQuickInjectionPanel();
+    backdrop.querySelector('.rpcm-quick-close').onclick = () => closeQuickInjectionPanel();
+    backdrop.querySelector('.rpcm-quick-done').onclick = () => closeQuickInjectionPanel();
+    if (backdrop.querySelector('.rpcm-quick-arm')) backdrop.querySelector('.rpcm-quick-arm').onclick = async event => { event.currentTarget.disabled = true; try { await armInjection(room); renderQuickInjectionPanel(); updateFab(); } catch (error) { notify(`주입 시작 실패: ${error.message}`, 'error'); event.currentTarget.disabled = false; } };
+    if (backdrop.querySelector('.rpcm-quick-disarm')) backdrop.querySelector('.rpcm-quick-disarm').onclick = async event => {
+      event.currentTarget.disabled = true;
+      clearTimeout(state.quickApplyTimer); state.quickApplyTimer = null; state.quickDesired.clear();
+      try { await restorePending(room, 'manual'); renderQuickInjectionPanel(); updateFab(); }
+      catch (error) { notify(`주입 해제 실패: ${error.message}`, 'error'); if (event.currentTarget.isConnected) event.currentTarget.disabled = false; }
+    };
+
+    backdrop.querySelector('.rpcm-quick-open-full').onclick = async () => {
+      if (state.quickDesired.size) {
+        clearTimeout(state.quickApplyTimer);
+        state.quickApplyTimer = null;
+        await applyQueuedQuickChanges();
+      }
+      closeQuickInjectionPanel();
+      await openModal();
+    };
+    backdrop.querySelectorAll('[data-rpcm-quick-section]').forEach(details => {
+      details.ontoggle = () => {
+        const name = String(details.dataset.rpcmQuickSection || '');
+        if (name) state.quickSectionOpen[name] = !!details.open;
+        const action = details.querySelector('.rpcm-quick-group-action');
+        if (action) action.textContent = details.open ? '접기' : '펴기';
+      };
+    });
+    bindQuickThemePicker(backdrop);
+    const paletteStack = backdrop.querySelector('[data-rpcm-theme-stack]');
+    if (paletteStack) paletteStack.scrollTop = savedPaletteScrollTop;
+    backdrop.querySelectorAll('[data-rpcm-quick-index]').forEach(input => {
+      input.onchange = () => {
+        const row = ordered[Number(input.dataset.rpcmQuickIndex)];
+        if (!row) return;
+        input.closest('.rpcm-quick-row')?.classList.toggle('is-off', !input.checked);
+        queueQuickItemToggle(row.key, input.checked);
+        const note = backdrop.querySelector('.rpcm-quick-foot>span');
+        if (note) note.textContent = '변경 사항을 곧 반영합니다…';
+      };
+    });
+  }
+
+  // 버튼을 누르는 동안 필요한 방 초기화를 시작합니다. 현재 방이 준비돼 있으면
+  // 여는 순간 메타 API를 다시 기다리지 않고 같은 메모리 상태를 사용합니다.
+  function prepareManagerOpenRoom(chatId) {
+    const roomKey = getRoomScopeKey(chatId);
+    if (state.currentChatId === roomKey && state.currentRoom?.chatId === roomKey) return state.currentRoom;
+    if (state.managerOpenRoomScope === roomKey && state.managerOpenRoomPromise) return state.managerOpenRoomPromise;
+    state.managerOpenRoomScope = roomKey;
+    const pending = ensureCurrentRoom(chatId).then(() => {
+      if (getRoomScopeKey(getChatIdFromPath()) !== roomKey || state.currentRoom?.chatId !== roomKey) {
+        throw new Error('채팅방이 바뀌었습니다. 현재 방에서 다시 열어 주세요.');
+      }
+      return state.currentRoom;
+    }).finally(() => {
+      if (state.managerOpenRoomPromise === pending) {
+        state.managerOpenRoomPromise = null;
+        state.managerOpenRoomScope = '';
+      }
+    });
+    state.managerOpenRoomPromise = pending;
+    return pending;
+  }
+
+  async function openQuickInjectionPanel() {
+    const chatId = getChatIdFromPath();
+    if (!chatId) {
+      notify('채팅방 화면에서만 사용할 수 있습니다.', 'warn');
+      return;
+    }
+    const roomReady = prepareManagerOpenRoom(chatId);
+    if (roomReady?.then) await roomReady;
+    manualRestoreDrafts(state.currentRoom);
+    if (state.modal) closeModal();
+    closeQuickInjectionPanel();
+    // 새로 열 때는 미주입 목록을 기본 접힘, 현재 주입 목록을 기본 펼침으로 시작합니다.
+    state.quickSectionOpen = { inactive:false, active:true };
+    state.quickThemePickerOpen = false;
+    state.quickSurfacePickerOpen = false;
+    state.quickThemeDraftHex = '';
+    state.quickSurfaceDraftHex = '';
+    const backdrop = document.createElement('div');
+    backdrop.id = 'rpcm-quick-backdrop';
+    document.body.appendChild(backdrop);
+    state.quickPanel = backdrop;
+    backdrop.addEventListener('keydown', event => {
+      if (event.key === 'Escape') closeQuickInjectionPanel();
+    });
+    renderQuickInjectionPanel();
+    backdrop.querySelector('.rpcm-quick-close')?.focus();
+    updateFab();
+  }
+
+  // v0.14.94: pseudo-element 원형 채움 진행률을 브라우저별 transform 표현 차이에도 안전하게 읽습니다.
+  function rpcmMonitorFillProgress(trigger, pressedAt, holdMs) {
+    const fallback=Math.max(0,Math.min(1,(performance.now()-pressedAt)/Math.max(1,holdMs)));
+    try {
+      const transform=getComputedStyle(trigger,'::before').transform;
+      if(!transform||transform==='none')return fallback;
+      const Matrix=globalThis.DOMMatrixReadOnly||globalThis.WebKitCSSMatrix;
+      if(typeof Matrix==='function'){
+        const matrix=new Matrix(transform),scale=Math.hypot(Number(matrix.a??matrix.m11??0),Number(matrix.b??matrix.m12??0));
+        if(Number.isFinite(scale)&&scale>=0)return Math.max(0,Math.min(1,scale));
+      }
+      const match=transform.match(/^matrix\(([^)]+)\)$/);
+      if(match){const scale=Math.abs(Number(match[1].split(',')[0]));if(Number.isFinite(scale))return Math.max(0,Math.min(1,scale));}
+    } catch (_) {}
+    return fallback;
+  }
+
+  // The monitor lives in the stable header action row; composer controls are never used as anchors.
+  function rpcmBindMonitorPress(trigger) {
+    let holdTimer=0, openTimer=0, resetTimer=0, fired=false, pointerId=null, pressRoomId='', pressedAt=0, startX=0, startY=0;
+    const tapMs=360, holdMs=540;
+    const warmRoom=()=>{const chatId=getChatIdFromPath();if(chatId){const ready=prepareManagerOpenRoom(chatId);if(ready?.then)ready.catch(()=>{});}};
+    const releasePointer=()=>{
+      const id=pointerId;pointerId=null;
+      try{if(id!=null&&trigger.hasPointerCapture(id))trigger.releasePointerCapture(id);}catch(_){}
+    };
+    const clear=(completed=false)=>{
+      clearTimeout(holdTimer);holdTimer=0;clearTimeout(openTimer);openTimer=0;
+      clearTimeout(resetTimer);resetTimer=0;trigger.classList.remove('is-holding','is-hold-complete');
+      releasePointer();trigger.rpcmPressRoomId='';trigger.style.removeProperty('--rpcm-fill-start');
+      if(completed){trigger.classList.add('is-hold-complete');resetTimer=setTimeout(()=>trigger.classList.remove('is-hold-complete'),180);}
+    };
+    const valid=()=>trigger.isConnected&&!trigger.disabled&&pressRoomId===String(state.currentChatId||'');
+    const cancel=()=>{fired=true;clear();};trigger.rpcmCancelHold=cancel;
+    const finishQuick=()=>{
+      if(!valid()){cancel();return;}clear(true);
+      if(state.quickPanel)closeQuickInjectionPanel();else openQuickInjectionPanel().catch(error=>notify(error.message,'error'));
+    };
+    trigger.oncontextmenu=event=>event.preventDefault();
+    document.addEventListener('visibilitychange',()=>{if(document.hidden)cancel();});
+    trigger.onpointerdown=event=>{
+      if(trigger.disabled||event.isPrimary===false||(event.button!==undefined&&event.button!==0)||openTimer)return;
+      event.preventDefault();event.stopPropagation();clear();fired=false;pointerId=event.pointerId;pressRoomId=String(state.currentChatId||'');trigger.rpcmPressRoomId=pressRoomId;pressedAt=performance.now();startX=event.clientX;startY=event.clientY;
+      trigger.style.setProperty('--rpcm-hold-ms',`${holdMs}ms`);
+      trigger.classList.add('is-holding');warmRoom();
+      try{trigger.setPointerCapture(pointerId);}catch(_){}
+      holdTimer=setTimeout(()=>{
+        if(!valid()){cancel();return;}fired=true;clear(true);
+        try{navigator.vibrate?.(12);}catch(_){}
+        closeQuickInjectionPanel();openModal().catch(error=>notify(error.message,'error'));
+      },holdMs);
+    };
+    trigger.onpointermove=event=>{if(pointerId===event.pointerId&&Math.hypot(event.clientX-startX,event.clientY-startY)>14)cancel();};
+    trigger.onpointercancel=cancel;
+    trigger.onlostpointercapture=()=>{if(pointerId!==null&&holdTimer&&!fired)cancel();};
+    trigger.onpointerup=event=>{
+      if(pointerId===null||pointerId!==event.pointerId)return;
+      event.stopPropagation();const tapped=!fired;clearTimeout(holdTimer);holdTimer=0;releasePointer();fired=true;
+      if(tapped){
+        const elapsed=performance.now()-pressedAt;
+        const remaining=Math.max(0,tapMs-elapsed);
+        // 길게 누르기 진행률을 유지하고, 손을 떼면 남은 채우기만 짧게 마칩니다.
+        const progress=rpcmMonitorFillProgress(trigger,pressedAt,holdMs);
+        trigger.classList.remove('is-holding');
+        trigger.style.setProperty('--rpcm-fill-start',String(progress));
+        trigger.style.setProperty('--rpcm-hold-ms',`${remaining}ms`);
+        void trigger.offsetWidth;
+        trigger.classList.add('is-holding');
+        if(!remaining)finishQuick();
+        else openTimer=setTimeout(()=>{openTimer=0;finishQuick();},remaining);
+      }else clear();
+    };
+    trigger.onclick=event=>{
+      if(event.detail!==0||trigger.disabled||openTimer||pointerId!==null)return;
+      clear();pressRoomId=String(state.currentChatId||'');trigger.rpcmPressRoomId=pressRoomId;
+      trigger.style.setProperty('--rpcm-hold-ms','360ms');trigger.classList.add('is-holding');warmRoom();
+      openTimer=setTimeout(()=>{openTimer=0;finishQuick();},360);
+    };
+  }
+  function updateQuickInjectionTrigger() {
+    const trigger = state.fab;
+    const draftPopup=document.getElementById('rpcm-ai-draft-popup');
+    if(draftPopup&&draftPopup.dataset.roomId!==String(state.currentChatId||''))draftPopup.remove();
+    // Remove a trigger left by an earlier script instance without touching host controls.
+    document.getElementById('rpcm-monitor-slot')?.remove();
+    document.getElementById('rpcm-quick-trigger')?.remove();
+    if (!trigger) return;
+    if (trigger.rpcmPressRoomId && trigger.rpcmPressRoomId !== String(state.currentChatId || '')) trigger.rpcmCancelHold?.();
+    const monitor = quickMonitorStatus(state.currentRoom);
+    trigger.classList.toggle('is-on', monitor.armed);
+    trigger.classList.toggle('is-off', !monitor.armed);
+    trigger.classList.toggle('is-warning', monitor.warning || monitor.capacityNear);
+    trigger.classList.toggle('is-busy', monitor.busy);
+    trigger.classList.toggle('is-active', !!state.quickPanel);
+    trigger.classList.toggle('is-manager-open', !!state.modal);
+    trigger.setAttribute('aria-expanded',String(!!state.quickPanel));
+    trigger.setAttribute('aria-label',`WISH · ${monitor.armed?'주입 켜짐':'주입 꺼짐'}${monitor.busy?' · 반영 중':''} · 짧게 누르면 빠른 관리, 길게 누르면 전체 RP Manager`);
+    trigger.title=`WISH · ${monitor.armed?'주입 켜짐':'주입 꺼짐'}${monitor.warning?' · 확인할 일 있음':''} · 짧게 누르면 빠른 관리, 길게 누르면 전체 RP Manager`;
+    trigger.querySelector('.rpcm-header-monitor-label').textContent='WISH';
+    if (state.modal) trigger.rpcmCancelHold?.();
+    trigger.disabled = !!state.modal;
+  }
+
+  function rpcmAutoScanUserAnchor(messages, checkpointMessageId) {
+    const target=String(checkpointMessageId||'');if(!target)return '';
+    const roleOf=message=>{const role=String(messageRoleOf(message)||'').toLowerCase();return ['assistant','bot','character'].includes(role)?'assistant':role;};
+    const rows=(messages||[]).filter(message=>['user','assistant'].includes(roleOf(message)));
+    const index=rows.findIndex(message=>String(messageIdOf(message)||'')===target);
+    if(index<0)return '';
+    const current=rows[index],role=roleOf(current);
+    if(role==='user')return target;
+    if(role!=='assistant')return '';
+    const parent=String(current?.parentTurnId||''),turn=String(current?.turnId||current?.turn_id||'');
+    if(parent){
+      const linked=rows.find(message=>roleOf(message)==='user'&&[messageIdOf(message),message?.turnId,message?.turn_id].some(value=>String(value||'')===parent));
+      if(linked)return String(messageIdOf(linked)||'');
+    }
+    if(turn){
+      const linked=rows.find(message=>roleOf(message)==='user'&&[message?.turnId,message?.turn_id].some(value=>String(value||'')===turn));
+      if(linked)return String(messageIdOf(linked)||'');
+    }
+    for(let i=index+1;i<rows.length;i++)if(roleOf(rows[i])==='user')return String(messageIdOf(rows[i])||'');
+    return '';
+  }
+
+  function rpcmAutoScanAssistantForUser(messages, userMessageId) {
+    const target=String(userMessageId||'');if(!target)return '';
+    const roleOf=message=>{const role=String(messageRoleOf(message)||'').toLowerCase();return ['assistant','bot','character'].includes(role)?'assistant':role;};
+    const rows=(messages||[]).filter(message=>['user','assistant'].includes(roleOf(message)));
+    const userIndex=rows.findIndex(message=>roleOf(message)==='user'&&String(messageIdOf(message)||'')===target);
+    if(userIndex<0)return '';
+    let start=0;for(let i=userIndex-1;i>=0;i--)if(roleOf(rows[i])==='user'){start=i+1;break;}
+    const user=rows[userIndex],keys=new Set([messageIdOf(user),user?.turnId,user?.turn_id].map(value=>String(value||'')).filter(Boolean));
+    const segment=rows.slice(start,userIndex).filter(message=>roleOf(message)==='assistant');
+    const linked=segment.find(message=>{const parent=String(message?.parentTurnId||''),turn=String(message?.turnId||message?.turn_id||'');return parent&&keys.has(parent)||turn&&keys.has(turn);});
+    return String(messageIdOf(linked||segment[0])||'');
+  }
+
+  function rpcmAssignAutoScanCheckpoint(room, messages, checkpointMessage) {
+    const checkpointId=String(messageIdOf(checkpointMessage)||'');if(!checkpointId)return '';
+    room.autoScanLastMessageId=checkpointId;
+    room.autoScanLastUserMessageId=rpcmAutoScanUserAnchor(messages,checkpointId)||'';
+    return checkpointId;
+  }
+
+  function newMessagesSinceLastScan(room, recentMessages) {
+    const recent=(recentMessages||[]).filter(m=>['user','assistant'].includes(messageRoleOf(m)));
+    if(!recent.length)return [];
+    const lastId=String(room.autoScanLastMessageId||'');
+    if(!lastId)return recent.slice(0,Math.min(APP.autoScanMessageLimit,recent.length));
+    const idx=recent.findIndex(m=>String(messageIdOf(m)||'')===lastId);
+    // The caller may expand to 50. No silent reset, and no mutation here.
+    return idx>=0?recent.slice(0,idx):[];
+  }
+  async function autoDetectCharacters(room, freshMessages) {
+    if (!room.autoCharacterDetection) return { detected: [], added: 0, reset: 0 };
+    let library;
+    try{library=room.autoCharacterLibraryId?await getCharacterLibrary(room.autoCharacterLibraryId):null;}
+    catch(error){console.warn('[Wish] 캐릭터 자동 감지 대기: 설정집 조회 실패',error);return {detected:[],added:0,reset:0,paused:true};}
+    // An unavailable library is not evidence that every character left the scene.
+    if(!Array.isArray(library?.characters)||!library.characters.length)return {detected:[],added:0,reset:0,paused:true};
+    // Manager/로어가 숨겨 주입한 기억은 후보 근거로 쓰지 않습니다.
+    // 마커 블록을 제거하고 남은 실제 RP 본문에서만 등록 이름·별칭을 찾습니다.
+    const text = (freshMessages || []).map(m => stripAutomationNoise(messageTextOf(m), true)).filter(Boolean).join('\n\n');
+    const chars = (room.slots || []).filter(s => s.group === 'character');
+    const byKey = new Map(chars.map(s => [libraryItemKey(s), s]));
+    const owners = rpcmDetectionOwners([...(library.characters || []), ...chars]);
+    const detected = [];
+    let added = 0, reset = 0;
+
+    for (const src of (library?.characters || [])) {
+      const key = libraryItemKey(src);
+      let slot = byKey.get(key);
+      const evidence = text ? characterRpDetectionEvidence(text, src, owners) : { accepted:false };
+      const matched = evidence.accepted ? evidence.matched : null;
+      // 📌 자동 고정은 '감지 이벤트'가 아니라 항상 유지되는 사용자 상태입니다.
+      // 매 폴링마다 감지된 것으로 반환하면 토스트가 반복되고 모달이 재렌더링되어 스크롤이 위로 튀므로
+      // 실제 최근 RP에서 이름/별칭이 잡힌 경우에만 detected에 포함합니다.
+      if (!matched) continue;
+      if (slot?.autoExcluded) continue;
+      if (!slot) {
+        slot = makeDynamicSlot('character', String(src.title || '캐릭터'));
+        slot.aliases = Array.isArray(src.aliases) ? [...src.aliases] : [];
+        slot.content = String(src.content || '');
+        slot.retentionTurns = normalizeRetentionTurns(src.retentionTurns);
+        slot.autoExcluded = false;
+        slot.autoPinned = false;
+        room.slots.push(slot);
+        byKey.set(key, slot);
+        added++;
+      }
+      if (!String(slot.content || '').trim()) slot.content = String(src.content || '');
+      if (!Array.isArray(slot.aliases) || !slot.aliases.length) slot.aliases = Array.isArray(src.aliases) ? [...src.aliases] : [];
+      if (slot.manualInjectionOverride === 'off' && !characterUncheckedAutoSelectionAllowed(room, slot)) continue;
+      slot.enabled = true;
+      slot.autoChosenByRp = true;
+      slot.lastAutoMatch = matched;
+      slot.lastAutoConfidence = Number(evidence.confidence || 0);
+      slot.lastAutoReason = String(evidence.reason || '실제 RP 본문 감지');
+      slot.lastAutoDetectedAt = Date.now();
+      detected.push({ slot, matched, confidence:slot.lastAutoConfidence, reason:slot.lastAutoReason });
+
+      if (room.pending) {
+        const items = Array.isArray(room.pending.items) ? room.pending.items : (room.pending.items = []);
+        const idx = items.findIndex(i => i.slotId === slot.id);
+        const previous = idx >= 0 ? items[idx] : null;
+        const next = slotToPendingItem(slot);
+        next.autoType = 'character';
+        next.matchedAlias = matched;
+        next.autoConfidence = slot.lastAutoConfidence;
+        next.autoDetectionReason = slot.lastAutoReason;
+        next.recallReason = `신뢰도 ${slot.lastAutoConfidence}% · 감지: ${slot.lastAutoReason}`;
+        if (previous?.quickManualInjection === true) next.quickManualInjection = true;
+        if (idx < 0) items.push(next);
+        else if (room.autoCharacterResetOnReappear || matched === '사용자 고정') { items[idx] = next; reset++; }
+      }
+    }
+
+    // Clear previous auto-selection when the character has left the recent scene.
+    const currentIds = new Set(detected.map(entry => entry.slot.id));
+    for (const slot of (room.slots || []).filter(s => s.group === 'character')) {
+      if (slot.autoPinned || slot.manualInjectionOverride === 'on' || !rpAutomaticSlot(room,slot)) continue;
+      if (!currentIds.has(slot.id)) {
+        slot.enabled = false;
+        if (room.pending) room.pending.items = (room.pending.items || []).filter(item => item.slotId !== slot.id || item.quickManualInjection === true);
+      }
+    }
+
+    // 설정집에 없는 현재 방 캐릭터라도 사용자가 📌 고정했다면 조용히 항상 유지합니다.
+    // 고정 자체는 자동 '감지'로 취급하지 않아 반복 토스트/모달 재렌더링을 발생시키지 않습니다.
+    for (const slot of (room.slots || []).filter(s => s.group === 'character' && s.autoPinned)) {
+      if (detected.some(x => x.slot.id === slot.id)) continue;
+      slot.enabled = true;
+      slot.lastAutoMatch = '사용자 고정';
+      if (room.pending) {
+        const items = Array.isArray(room.pending.items) ? room.pending.items : (room.pending.items = []);
+        const idx = items.findIndex(i => i.slotId === slot.id);
+        const next = slotToPendingItem(slot);
+        next.autoType = 'character';
+        next.matchedAlias = '사용자 고정';
+        next.recallReason = '사용자 고정';
+        if (idx < 0) items.push(next); else items[idx] = next;
+      }
+    }
+    normalizeRoomSlots(room);
+    return { detected, added, reset };
+  }
+
+  function autoDetectImportantItems(room, freshMessages) {
+    if (!room.autoItemDetection) return { detected: [], reset: 0 };
+    // 숨김 주입문·상태창·외부 로어 참고 블록은 제외하고 실제 RP 문장만 검사합니다.
+    const text = (freshMessages || []).map(m => stripAutomationNoise(messageTextOf(m), true)).filter(Boolean).join('\n\n');
+    const detected = [];
+    let reset = 0;
+    for (const slot of (room.slots || []).filter(s => s.group === 'item')) {
+      if (slot.autoExcluded || !String(slot.content || '').trim()) continue;
+      const evidence = text ? importantItemRpDetectionEvidence(text, slot) : { accepted:false };
+      if (!evidence.accepted) continue;
+      if (slot.manualInjectionOverride === 'off') continue;
+      slot.enabled = true;
+      slot.autoChosenByRp = true;
+      slot.lastAutoMatch = evidence.matched;
+      slot.lastAutoConfidence = Number(evidence.confidence || 0);
+      slot.lastAutoReason = String(evidence.reason || '실제 RP 본문 물품 언급 감지');
+      slot.lastAutoDetectedAt = Date.now();
+      detected.push({ slot, matched:evidence.matched, confidence:slot.lastAutoConfidence, reason:slot.lastAutoReason });
+
+      if (room.pending) {
+        const items = Array.isArray(room.pending.items) ? room.pending.items : (room.pending.items = []);
+        const idx = items.findIndex(item => item.slotId === slot.id);
+        const next = slotToPendingItem(slot);
+        next.autoType = 'important-item';
+        next.matchedAlias = evidence.matched;
+        next.autoConfidence = slot.lastAutoConfidence;
+        next.autoDetectionReason = slot.lastAutoReason;
+        next.recallReason = `신뢰도 ${slot.lastAutoConfidence}% · 감지: ${slot.lastAutoReason}`;
+        if (idx < 0) items.push(next);
+        else if (room.autoItemResetOnReappear) { items[idx] = next; reset++; }
+      }
+    }
+
+    const currentIds = new Set(detected.map(entry => entry.slot.id));
+    for (const slot of (room.slots || []).filter(s => s.group === 'item')) {
+      if (slot.autoPinned || slot.manualInjectionOverride === 'on' || !rpAutomaticSlot(room,slot)) continue;
+      if (!currentIds.has(slot.id)) {
+        slot.enabled = false;
+        if (room.pending) room.pending.items = (room.pending.items || []).filter(item => item.slotId !== slot.id);
+      }
+    }
+
+    for (const slot of (room.slots || []).filter(s => s.group === 'item' && s.autoPinned)) {
+      if (detected.some(entry => entry.slot.id === slot.id)) continue;
+      slot.enabled = true;
+      slot.lastAutoMatch = '사용자 고정';
+      if (room.pending) {
+        const items = Array.isArray(room.pending.items) ? room.pending.items : (room.pending.items = []);
+        const idx = items.findIndex(item => item.slotId === slot.id);
+        const next = slotToPendingItem(slot);
+        next.autoType = 'important-item';
+        next.matchedAlias = '사용자 고정';
+        next.recallReason = '사용자 고정';
+        if (idx < 0) items.push(next); else items[idx] = next;
+      }
+    }
+    return { detected, reset };
+  }
+
+  function refreshAutoRecentLogsToPending(room) {
+    if (!room.pending || !room.autoLogRecallEnabled) return 0;
+    const slot = (room.slots || []).find(s => s.id === 'logSummary');
+    if (!slot?.enabled || !String(slot.content || '').trim()) return 0;
+    const blocks = parseDatedLogBlocks(slot.content);
+    if (!blocks.length) return 0;
+
+    const excludedKeys = new Set((room.autoLogExcludedKeys || []).map(String));
+    const pinnedKeys = new Set((room.autoLogPinnedKeys || []).map(String));
+    const manualKeys = new Set((room.manualLogSelectedKeys || []).map(String));
+    const occupied = new Set([...pinnedKeys, ...manualKeys]);
+    const eligible = autoRecallVisibleLogBlocks(blocks, room).filter(b => !excludedKeys.has(b.key));
+    const latest = recentContinuityLogBlocks(room, eligible, excludedKeys);
+    const scored = eligibleRelatedLogScores(room, eligible, room.autoRecallContextText || '', new Set([...excludedKeys, ...occupied]));
+    const recent = latest.filter(block => !occupied.has(String(block.key)));
+
+    // 활성 시간선의 최신 eligible 날짜 두 개를 직전 흐름으로 유지합니다.
+    // 매 응답 뒤 최신 목록을 다시 계산해 오래된 자동 최근로그는 빼고, 새 최신 로그는 유지턴이
+    // 끝났더라도 0턴부터 다시 시작시킵니다. 같은 항목이 아직 활성 상태라면 진행도는 이어갑니다.
+    const items = Array.isArray(room.pending.items) ? room.pending.items : [];
+    const previousRecent = items.filter(item => item?.autoType === 'recent-log');
+    const previousBySource = new Map(previousRecent.map(item => [
+      String(item.sourceKey || item.slotId || '').replace(/^auto-log:/, ''),
+      item,
+    ]));
+    room.pending.items = items.filter(item => item?.autoType !== 'recent-log');
+
+    for (const block of recent) {
+      const rank = scored.findIndex(entry => entry.block.key === block.key);
+      const next = makeRecentContinuityLogItem(block, slot, rank < 0 ? null : scored[rank], rank < 0 ? null : rank + 1, scored.length);
+      const previous = previousBySource.get(String(block.key));
+      const previousTotal = Number(previous?.totalTurns || 0);
+      const previousUsed = Number(previous?.usedTurns || 0);
+      const previousActive = !!previous && (previousTotal === 0 || previousUsed < previousTotal);
+      if (previousActive) next.usedTurns = previousUsed;
+      room.pending.items.push(next);
+    }
+    return recent.length;
+  }
+
+  const AI_CONTEXT_RESPONSE_SCHEMA = Object.freeze({
+    type:'OBJECT',
+    properties:{
+      situation:{ type:'STRING' },
+      keys:{ type:'ARRAY', items:{ type:'STRING' } },
+      decisions:{type:'ARRAY',items:{type:'OBJECT',properties:{key:{type:'STRING'},reason:{type:'STRING'}},required:['key','reason']}},
+    },
+    required:['situation','keys'],
+  });
+
+  function safeAiContextRawExcerpt(value) {
+    return normalizeLineBreaks(String(value || '')).trim().slice(0, 1200)
+      .replace(/AIza[0-9A-Za-z_-]{20,}/g, '[인증정보 숨김]')
+      .replace(/((?:api[_-]?key|private[_-]?key|client[_-]?email|project[_-]?id)\s*["']?\s*[:=]\s*)[^,\n}]+/gi, '$1[인증정보 숨김]');
+  }
+
+  function parseAiContextResponse(value) {
+    const raw = normalizeLineBreaks(String(value || '')).trim();
+    if (!raw) throw new Error('응답 형식 오류: 빈 응답입니다.');
+    let jsonText = raw;
+    const fenced = raw.match(/^```(?:json)?[ \t]*\n([\s\S]*?)\n```[ \t]*$/i);
+    if (fenced) jsonText = fenced[1].trim();
+    else if (/^```/.test(raw)) throw new Error('응답 형식 오류: JSON 코드블록 형식을 확인할 수 없습니다.');
+    let parsed;
+    try { parsed = JSON.parse(jsonText); }
+    catch (_) { throw new Error('응답 형식 오류: 전체 응답이 하나의 JSON 객체가 아닙니다.'); }
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object' || typeof parsed.situation !== 'string' || !Array.isArray(parsed.keys)) {
+      throw new Error('응답 형식 오류: {"situation":"...","keys":[...]} schema가 필요합니다.');
+    }
+    if (Object.keys(parsed).some(key => !['situation','keys','decisions'].includes(key)) || parsed.keys.some(key => typeof key !== 'string')) {
+      throw new Error('응답 형식 오류: situation·keys·decisions 이외의 값이 포함되었습니다.');
+    }
+    if(parsed.decisions!==undefined&&(!Array.isArray(parsed.decisions)||parsed.decisions.some(row=>!row||typeof row.key!=='string'||typeof row.reason!=='string')))throw new Error('응답 형식 오류: 후보별 이유 형식을 확인해 주세요.');
+    const situation = normalizeLineBreaks(parsed.situation).replace(/\s+/g, ' ').trim();
+    if (!situation) throw new Error('응답 형식 오류: 현재 상황 설명이 비어 있습니다.');
+    return {
+      situation:situation.slice(0, 500),
+      keys:parsed.keys.map(key => key.trim()).filter(Boolean),
+      decisions:(parsed.decisions||[]).map(row=>({key:row.key.trim(),reason:row.reason.trim().slice(0,240)})),
+    };
+  }
+
+  function assertAiContextResponseComplete(result) {
+    const finishReason = String(result?.finishReason || '').trim();
+    if (/(?:MAX_TOKENS|LENGTH|TOKEN_LIMIT|INCOMPLETE)/i.test(finishReason)) {
+      throw new Error(`응답 출력 한도 초과: JSON이 중간에 끊겼습니다. finishReason=${finishReason}`);
+    }
+  }
+
+  async function rpcmAiRerankRelatedLogCandidatesNow(room, contextText, candidates, count, options={}) {
+    if (!room?.aiContextLogRerankEnabled || (!candidates.length&&!options.manual)) return candidates;
+    const settings = aiFeatureSettings(loadAiSummarySettings(), 'context');
+    const provider = settings.provider;
+    const secret = readAiSecret(provider);
+    const candidateText = candidates.slice(0, 12).map((entry, index) => {
+      const block = entry.block;
+      return `[후보 ${index + 1}]\nKEY=${block.key}\n시간선=${logTimelineLabelOfBlock(block)}\n제목=${block.heading}\n내용=${String(block.body || '').slice(0, 2200)}`;
+    }).join('\n\n');
+    const prompt = `먼저 [현재 RP]만 읽고, 지금 진행 중인 상황을 확인된 사실만으로 한국어 1~2문장(최대 220자)으로 정리한다. 누가 누구에게 무엇을 하고 있으며 어떤 사건·대화·쟁점이 진행 중인지 구체적으로 쓴다. 감정·의도·행동을 추측하거나 아직 발생하지 않은 일을 확정하지 않는다. [${semanticEnabled(room)?"하이브리드 검색 후보":"키워드 검색 후보"}]의 과거 내용을 현재 상황에 섞지 않는다.\n\n그다음 현재 RP 맥락과 실제로 이어지는 날짜로그를 고른다. 인물 이름만 겹치는 로그보다 사건·장소·물건·관계 변화·미해결 단서가 이어지는 로그를 우선한다. 후보에 없는 KEY는 만들지 않는다. 최대 ${count}개를 관련도순으로 고른다. 적합한 로그가 없으면 keys는 빈 배열로 반환한다.\n\n[현재 RP]\n${String(contextText || '').slice(-12000)}\n\n[${semanticEnabled(room)?"하이브리드 검색 후보":"키워드 검색 후보"}]\n${candidateText}\n\n선택 및 미선택 후보 각각에 대해 decisions에 KEY와 구체적인 이유를 한국어 한 문장(최대 80자)으로 적는다. 현재 사건과의 연결 또는 연결 부족을 입력에서만 설명한다. 후보가 없으면 현재 상황만 정리하고 keys와 decisions는 빈 배열로 반환한다.\nJSON 한 줄만 출력:\n{"situation":"현재 RP에서 확인된 상황","keys":["후보의 KEY"],"decisions":[{"key":"후보의 KEY","reason":"선택 또는 미선택 이유"}]}`;
+    const systemInstruction = '현재 RP 상황을 사실대로 정리하고 날짜로그 후보를 맥락 기준으로 재정렬하는 선택기다. 설명 없이 지정된 JSON만 출력한다.';
+    const callOptions = { feature:'context', room, deferUsageSave:options.deferUsageSave===true, responseJsonSchema:AI_CONTEXT_RESPONSE_SCHEMA, allowEmptyText:true, thinkingLevel:'low',recallPrefetch:options.prefetchWork===true,control:options.control,check:options.check,rpcmScopeRoom:options.recallOwner,...(options.prefetchWork?{totalTimeoutMs:60000}:{}) };
+    let result = await callAiSummaryProvider(provider, settings, secret, systemInstruction, prompt, 4096, () => {}, callOptions);
+    let parsedResponse;
+    let formatRetried = false;
+    try {
+      assertAiContextResponseComplete(result);
+      parsedResponse = parseAiContextResponse(result.text);
+    } catch (firstError) {
+      if(options.prefetchWork)throw firstError;
+      formatRetried = true;
+      const firstRaw = safeAiContextRawExcerpt(result.text);
+      const retryPrompt = `${prompt}\n\n[응답 형식 재요청]\nJSON 외 텍스트 출력 금지. 설명 금지. 코드블록 금지. {"situation":"현재 RP에서 확인된 상황","keys":["후보의 KEY"]} schema만 반환한다.`;
+      let retryResult = null;
+      try {
+        retryResult = await callAiSummaryProvider(provider, settings, secret, systemInstruction, retryPrompt, 4096, () => {}, callOptions);
+        assertAiContextResponseComplete(retryResult);
+        parsedResponse = parseAiContextResponse(retryResult.text);
+        result = retryResult;
+      } catch (retryError) {
+        const failure = new Error(`응답 형식 오류: 1차 파싱 실패 후 자동 재요청도 실패했습니다. ${String(retryError?.message || retryError || '')}`.trim());
+        failure.aiRaw = [firstRaw, safeAiContextRawExcerpt(retryResult?.text || '')].filter(Boolean).join('\n\n[자동 재요청 응답]\n');
+        failure.parseFailure = `${String(firstError?.message || firstError)} / ${String(retryError?.message || retryError)}`;
+        failure.finishReason = String(retryResult?.finishReason || result?.finishReason || '');
+        throw failure;
+      }
+    }
+    const byKey = new Map(candidates.slice(0, 12).map(entry => [String(entry.block.key), entry]));
+    const selected = [];
+    for (const key of parsedResponse.keys) {
+      const entry = byKey.get(key);
+      if (entry && !selected.includes(entry)) selected.push(entry);
+      if (selected.length >= count) break;
+    }
+    const totalLogs = parseDatedLogBlocks((room.slots || []).find(slot => slot.id === 'logSummary')?.content || '').length;
+    const rpcmReviewReport = {
+      state:'success', checkedAt:nowIso(), totalLogs, candidateCount:candidates.length, inspectedCount:Math.min(12, candidates.length), selectedCount:selected.length,
+      provider, model:String(result.model || settings.models?.[provider] || ''), fallback:false, formatRetried,
+      managerVersion:APP.version, finishReason:String(result.finishReason || ''),
+      situation:parsedResponse.situation,
+      keywords:[...new Set(selected.flatMap(item => [...(item.matchedPhrases || []), ...(item.matchedCoreTokens || []), ...(item.matchedRareTokens || [])]))].slice(0, 12),
+      characters:[...new Set(selected.flatMap(item => item.matchedCharacterTerms || []))].slice(0, 8),
+      execution:options.manual?'수동 실행':'자동 실행',note:!candidates.length?'과거 후보가 없어 현재 RP 상황만 AI로 확인했습니다. 최근 연속성 로그는 별도로 유지합니다.':'',
+      candidates:candidates.slice(0,12).map((item,index)=>({key:String(item.block.key),title:String(item.block.titleText||item.block.heading||''),selected:selected.includes(item),candidateRank:index+1,keywordScore:Number(item.keywordScore||0),semanticScore:Number(item.semanticScore||0),reason:parsedResponse.decisions.find(row=>row.key===String(item.block.key))?.reason||(selected.includes(item)?'AI가 현재 맥락과 연결되는 후보로 선택':'AI가 선택하지 않음 · 구체적 이유 미제공')})),
+      items:selected.map((item, index) => ({ key:String(item.block.key), title:String(item.block.titleText || item.block.heading || ''), rank:index + 1, candidateRank:candidates.indexOf(item) + 1, score:Number(item.score || 0), reason:relatedLogReason(item) })),
+    };
+    if(options.prefetchWork)return {selected,report:rpcmReviewReport};
+    room.aiContextReviewReport=rpcmReviewReport;
+    setAiFeatureStatus('context', 'ok', provider, room.aiContextReviewReport.model, '최근 검토 정상');
+    return selected;
+  }
+
+  function recordAiContextFallback(room, error, candidates, selected) {
+    const failure = classifyAiFailure(error);
+    const settings = aiFeatureSettings(loadAiSummarySettings(), 'context');
+    const provider = settings.provider;
+    const totalLogs = parseDatedLogBlocks((room.slots || []).find(slot => slot.id === 'logSummary')?.content || '').length;
+    room.aiContextReviewReport = {
+      state:'fallback', checkedAt:nowIso(), totalLogs, candidateCount:(candidates || []).length, inspectedCount:Math.min(12, (candidates || []).length), selectedCount:(selected || []).length,
+      provider, model:String(settings.models?.[provider] || ''), fallback:true, failureCategory:failure.category, failureDetail:failure.detail,
+      managerVersion:APP.version, finishReason:String(error?.finishReason || ''),
+      situation:'',
+      failureRaw:safeAiContextRawExcerpt(error?.aiRaw || ''), parseFailure:String(error?.parseFailure || ''),
+      items:(selected || []).map((item, index) => ({ key:String(item.block.key), title:String(item.block.titleText || item.block.heading || ''), rank:index + 1, candidateRank:(candidates || []).indexOf(item) + 1, score:Number(item.score || 0), reason:relatedLogReason(item) })),
+    };
+    setAiFeatureStatus('context','fallback',provider,room.aiContextReviewReport.model,'대체 검색 완료 · AI 검토 미완료',failure.category+' · '+failure.detail);
+    return failure;
+  }
+
+  function aiContextSelectionReason(room,key,fallback){
+    const report=room.aiContextReviewReport;
+    return report?.state==='success'?report.candidates?.find(row=>row.key===String(key)&&row.selected)?.reason||fallback:fallback;
+  }
+
+  function recordAiContextSkipped(room,reason){
+    const settings=aiFeatureSettings(loadAiSummarySettings(),'context');
+    room.aiContextReviewReport={state:'skipped',checkedAt:nowIso(),managerVersion:APP.version,totalLogs:parseDatedLogBlocks((room.slots||[]).find(s=>s.id==='logSummary')?.content||'').length,candidateCount:0,inspectedCount:0,selectedCount:0,provider:settings.provider,model:settings.models?.[settings.provider]||'',note:reason,situation:'',items:[],candidates:[],apiCalled:false};
+    return room.aiContextReviewReport;
+  }
+  function manualAiContextCandidates(room,blocks,context,skip){
+    const scored=scoreRelatedLogBlocks(blocks,context,skip,room),known=new Set(scored.map(row=>String(row.block.key))),active=normalizedLogTimelineKey(activeLogTimelineLabel(room));
+    // Explicit manual execution may ask AI to assess a small broader pool; no automatic injection is implied.
+    const extra=blocks.filter(b=>!skip.has(String(b.key))&&!known.has(String(b.key))&&normalizedLogTimelineKey(logTimelineLabelOfBlock(b))===active).sort((a,b)=>b.index-a.index).slice(0,12).map(block=>({block,score:0,coreScore:0,keywordScore:0,semanticScore:0,matchedCoreTokens:[],matchedCharacterTerms:[]}));
+    return [...scored,...extra].slice(0,12);
+  }
+
+  async function refreshAiContextReviewNow(room) {
+    if (!room?.aiContextLogRerankEnabled) throw new Error('AI 맥락 검토가 꺼져 있습니다. API 설정에서 먼저 켜 주세요.');
+    if (!room.autoLogRecallEnabled) throw new Error('최근·관련 로그 자동 선택이 꺼져 있습니다. 먼저 켜 주세요.');
+    const slot = (room.slots || []).find(item => item.id === 'logSummary');
+    if (!slot?.enabled || !String(slot.content || '').trim()) throw new Error('검토할 날짜로그가 없습니다.');
+
+    const recent = await fetchRecentMessages(apiChatIdOf(room), Math.max(12, APP.autoScanMessageLimit));
+    const contextText = recent
+      .filter(message => ['user','assistant'].includes(messageRoleOf(message)))
+      .map(message => stripAutomationNoise(messageTextOf(message)))
+      .filter(Boolean)
+      .join('\n')
+      .slice(-12000);
+    if (!contextText) throw new Error('현재 RP 맥락을 불러오지 못했습니다.');
+    room.autoRecallContextText = contextText;
+    prepareLocalRecall(room,contextText,recent);
+    await prepareSemanticRecall(room,contextText,recent);
+    room.aiContextReviewReport = null;
+    const before=injectionRecheckSnapshot(room);
+
+    if (room.pending) {
+      await addAutoRelatedLogsToPending(room, contextText,{manual:true});
+      await syncPendingCarrier(room, 'manual-ai-context-refresh');
+    } else {
+      const previewBudget = contextBudgetForPreview(room);
+      const baseItems = snapshotSelectedItems(room, contextText, previewBudget);
+      const previewItems=await rerankInitialRelatedLogItems(room,baseItems,contextText,previewBudget,{manual:true});
+      recordRecallSelectionAudit(room,before,previewItems,contextText,'수동 맥락 검토 · 다음 주입 후보',false);
+      await saveRoom(room);
+    }
+    return room.aiContextReviewReport;
+  }
+
+  async function rerankInitialRelatedLogItems(room, items, contextText, contextBudget, options={}) {
+    if (!room?.aiContextLogRerankEnabled || !room.autoLogRecallEnabled) return items;
+    const slot = (room.slots || []).find(s => s.id === 'logSummary');
+    if (!slot?.enabled || !String(slot.content || '').trim()) return items;
+    const blocks = parseDatedLogBlocks(slot.content);
+    if (!blocks.length) return items;
+
+    const excludedKeys = new Set((room.autoLogExcludedKeys || []).map(String));
+    const pinnedKeys = new Set((room.autoLogPinnedKeys || []).map(String));
+    const manualKeys = new Set((room.manualLogSelectedKeys || []).map(String));
+    const eligible = autoRecallVisibleLogBlocks(blocks, room).filter(block => !excludedKeys.has(block.key));
+    const occupied = new Set([...pinnedKeys, ...manualKeys]);
+    const existingNonRelatedKeys = new Set((items || []).filter(item => item.autoType !== 'related-log').map(item => String(item.sourceKey || '')));
+    const skip = new Set([...excludedKeys, ...occupied, ...existingNonRelatedKeys]);
+    let relatedCandidates = eligibleRelatedLogScores(room, eligible, contextText, skip);
+    if(!relatedLogInjectionCount(room)){recordAiContextSkipped(room,'관련로그 개수가 0으로 설정되어 AI 검토를 건너뛰었습니다. 최근 로그는 별도 유지합니다.');return items;}
+    if(!relatedCandidates.length&&options.manual)relatedCandidates=manualAiContextCandidates(room,eligible,contextText,skip);
+    if (!relatedCandidates.length&&!options.manual){recordAiContextSkipped(room,'검색 기준을 통과한 과거 후보가 없습니다. 최근 연속성·항상·직접 주입 로그는 별도 유지합니다. 수동 재검토는 더 넓은 후보를 확인합니다.');return items;}
+
+    let selected;
+    try {
+      const reranked = await aiRerankRelatedLogCandidates(room, contextText, relatedCandidates, Math.min(12, relatedLogInjectionCount(room)),options);
+      if(room.rpcmRecallPrefetchEnabled===true&&!options.manual&&room.aiContextReviewReport?.state!=='success')return items;
+      selected = reranked;
+    } catch (error) {
+      const fallback = relatedCandidates;
+      const failure = recordAiContextFallback(room, error, relatedCandidates, fallback);
+      console.warn('[RP Manager] 최초 주입 AI 맥락 검토 실패, 키워드 결과를 사용합니다.', error);
+      notify(`${semanticEnabled(room)?'하이브리드 검색':'기본 검색'}으로 완료 · AI 검토 원인은 상세 기록에서 확인할 수 있습니다.`, 'info', 4000);
+      return items;
+    }
+
+    const nonLogs = (items || []).filter(item => item.sourceSlotId !== 'logSummary' && item.group !== 'log-auto' && item.slotId !== 'logSummary');
+    const fixedLogs = (items || []).filter(item => (item.sourceSlotId === 'logSummary' || item.group === 'log-auto' || item.slotId === 'logSummary') && item.autoType !== 'related-log');
+    const aiRelated = selected.slice(0, relatedLogInjectionCount(room)).map((scored, index) => makeLogRecallItem(
+      scored.block,
+      slot,
+      'related-log',
+      '관련로그',
+      `${logTimelineLabelOfBlock(scored.block)} · AI 맥락 검토 · ${aiContextSelectionReason(room,scored.block.key,relatedLogReason(scored))}`,
+      {
+        score:scored.score,
+        coreScore:scored.coreScore, keywordScore:scored.keywordScore, semanticScore:scored.semanticScore, ...localRecallExtras(scored),
+        characterScore:scored.characterScore,
+        rank:index + 1,
+        candidateCount:relatedCandidates.length,
+        matchedTerms:[...(scored.matchedPhrases || []), ...(scored.matchedCoreTokens || []), ...(scored.matchedCharacterTerms || [])],
+        matchedCoreTerms:[...(scored.matchedPhrases || []), ...(scored.matchedCoreTokens || []), ...(scored.matchedRareTokens || [])],
+        matchedCharacterTerms:[...(scored.matchedCharacterTerms || [])],
+      },
+    ));
+    return [...nonLogs, ...fitLogItemsToBudget(room, nonLogs, [...fixedLogs, ...aiRelated], contextBudget)];
+  }
+
+  async function addAutoRelatedLogsToPending(room, contextText, options={}) {
+    if(room&&!options.skipRecallPreparation){prepareLocalRecall(room,contextText);await prepareSemanticRecall(room,contextText);}
+    if (!room.pending || !room.autoLogRecallEnabled) return 0;
+    const slot = (room.slots || []).find(s => s.id === 'logSummary');
+    if (!slot?.enabled || !String(slot.content || '').trim()) return 0;
+    const blocks = parseDatedLogBlocks(slot.content);
+    if (!blocks.length) return 0;
+    const excludedKeys = new Set((room.autoLogExcludedKeys || []).map(String));
+    const pinnedKeys = new Set((room.autoLogPinnedKeys || []).map(String));
+    const manualKeys = new Set((room.manualLogSelectedKeys || []).map(String));
+    const eligible = autoRecallVisibleLogBlocks(blocks, room).filter(b => !excludedKeys.has(b.key));
+    const occupied = new Set([...pinnedKeys, ...manualKeys]);
+    const latestKeys = new Set(recentContinuityLogBlocks(room, eligible, excludedKeys).map(block => String(block.key)));
+    const allEligible = eligibleRelatedLogScores(room, eligible, contextText, new Set([...excludedKeys, ...occupied]));
+    let relatedCandidates = allEligible.filter(entry => !latestKeys.has(String(entry.block.key)));
+    if(!relatedCandidates.length&&options.manual)relatedCandidates=manualAiContextCandidates(room,eligible,contextText,new Set([...excludedKeys,...occupied,...latestKeys]));
+    let related = relatedCandidates;
+    if(room.aiContextLogRerankEnabled&&(!relatedLogInjectionCount(room)||(!relatedCandidates.length&&!options.manual)))recordAiContextSkipped(room,!relatedLogInjectionCount(room)?'관련로그 개수가 0입니다.':'검색 기준을 통과한 과거 후보가 없습니다. 최근 연속성 로그는 별도로 유지합니다.');
+    if (room.aiContextLogRerankEnabled && relatedLogInjectionCount(room) > 0 && (relatedCandidates.length||options.manual)) {
+      try {
+        const reranked = await aiRerankRelatedLogCandidates(room, contextText, relatedCandidates, Math.min(12, relatedLogInjectionCount(room)),options);
+        related = reranked;
+      } catch (error) {
+        const fallback = allEligible.filter(entry=>!latestKeys.has(String(entry.block.key)));
+        const failure = recordAiContextFallback(room, error, relatedCandidates, fallback);
+        related = fallback;
+        console.warn('[RP Manager] AI 맥락 검토 실패, 키워드 결과를 사용합니다.', error);
+        notify(`${semanticEnabled(room)?'하이브리드 검색':'기본 검색'}으로 완료 · AI 검토 원인은 상세 기록에서 확인할 수 있습니다.`, 'info', 4000);
+      }
+    }
+
+    // 이전 턴의 관련로그를 계속 쌓지 않고 이번 검색 결과로 교체합니다.
+    // 같은 로그가 다시 선정되면 남은 유지턴은 이어가되, 순위에서 빠진 로그는 즉시 제외합니다.
+    const items = Array.isArray(room.pending.items) ? room.pending.items : [];
+    const previousRelated = items.filter(item => item?.autoType === 'related-log');
+    const previousBySource = new Map(previousRelated.map(item => [
+      String(item.sourceKey || item.slotId || '').replace(/^auto-log:/, ''),
+      item,
+    ]));
+    room.pending.items = items.filter(item => item?.autoType !== 'related-log');
+    const nextItems = room.pending.items;
+    let added = 0;
+    for (let relatedIndex = 0; relatedIndex < Math.min(relatedLogInjectionCount(room), related.length); relatedIndex++) {
+      const scored = related[relatedIndex];
+      const b = scored.block;
+      // 최초 주입 경로와 자동 갱신 경로가 같은 메타데이터 구조를 사용하게 해서
+      // 총점만 있고 핵심/인물 점수·매칭어·후보순위가 사라지는 현상을 막습니다.
+      const selectionMethod = room.aiContextLogRerankEnabled
+        ? (room.aiContextReviewReport?.state === 'success' ? 'AI 맥락 검토로 선정' : room.rpcmRecallPrefetchEnabled===true&&room.aiContextReviewReport?.state==='skipped' ? String(room.aiContextReviewReport.note||'미리 검토 대기 · 로컬 검색 결과 사용') : (semanticEnabled(room)?'AI 검토 실패 후 하이브리드 선정':'AI 검토 실패 후 키워드 선정'))
+        : (semanticEnabled(room)?'AI 맥락 검토 OFF · 하이브리드 검색':'AI 맥락 검토 OFF · 기본 검색');
+      const next = makeLogRecallItem(b, slot, 'related-log', '관련로그', `${logTimelineLabelOfBlock(b)} · ${selectionMethod} · ${aiContextSelectionReason(room,b.key,relatedLogReason(scored))}`, {
+        score: scored.score,
+        coreScore: scored.coreScore,
+          keywordScore: scored.keywordScore, semanticScore: scored.semanticScore, ...localRecallExtras(scored),
+        characterScore: scored.characterScore,
+        rank: relatedIndex + 1,
+        candidateCount: relatedCandidates.length,
+        matchedTerms:[...(scored.matchedPhrases || []), ...(scored.matchedCoreTokens || []), ...(scored.matchedCharacterTerms || [])],
+        matchedCoreTerms:[...(scored.matchedPhrases || []), ...(scored.matchedCoreTokens || []), ...(scored.matchedRareTokens || [])],
+        matchedCharacterTerms:[...(scored.matchedCharacterTerms || [])],
+      });
+      const previous = previousBySource.get(String(b.key));
+      const previousTotal = Number(previous?.totalTurns || 0);
+      const previousUsed = Number(previous?.usedTurns || 0);
+      const previousActive = !!previous && (previousTotal === 0 || previousUsed < previousTotal);
+      if (previousActive) next.usedTurns = previousUsed;
+
+      const activeNow = activePendingItems(room.pending);
+      const canFit = buildContextBlockFromItems([...activeNow, next]).length <= contextBudgetForCarrier(room, String(room.pending.originalText || '').length);
+      if (!canFit) continue;
+      nextItems.push(next);
+      if (!previousActive) added++;
+    }
+    return added;
+  }
+
+  async function removePendingRecallItem(room, identity, sourceKey = '', autoType = '') {
+    const pending = room?.pending;
+    const current = pending ? activePendingItems(pending).find(item => pendingItemIdentity(item) === identity) : null;
+    const resolvedType = String(current?.autoType || autoType || '');
+    const resolvedKey = String(current?.sourceKey || sourceKey || '').replace(/^auto-log:/, '');
+
+    // 직접 선택은 임시 carrier 속성이 아니라 다음 주입에도 유지되는 사용자 설정입니다.
+    // 따라서 `빼기`를 누르면 pending 유무와 관계없이 선택 원본에서도 제거합니다.
+    if (resolvedType === 'manual-log' && resolvedKey) {
+      room.manualLogSelectedKeys = (room.manualLogSelectedKeys || []).map(String).filter(key => key !== resolvedKey);
+    }
+
+    if (!pending) {
+      if (!resolvedKey) throw new Error('빼 로그를 찾지 못했습니다.');
+      if (resolvedType === 'related-log' || resolvedType === 'recent-log' || resolvedType === 'pinned-log') {
+        const excluded = new Set((room.autoLogExcludedKeys || []).map(String));
+        excluded.add(resolvedKey);
+        room.autoLogExcludedKeys = [...excluded];
+        if (resolvedType === 'pinned-log') room.autoLogPinnedKeys = (room.autoLogPinnedKeys || []).map(String).filter(key => key !== resolvedKey);
+      }
+      await saveRoom(room);
+      return;
+    }
+
+    if (!current) throw new Error('이미 빠졌거나 찾을 수 없는 항목입니다.');
+    const removed = quickRemovedPendingItems(pending);
+    if (!removed.some(item => pendingItemIdentity(item) === identity)) removed.push({ ...current });
+    pending.quickRemovedItems = removed;
+    pending.items = (pending.items || []).filter(item => pendingItemIdentity(item) !== identity);
+    await syncPendingCarrier(room, 'main-log-remove');
+    await saveRoom(room);
+  }
+
+  async function applyManualRelatedLog(room, sourceKey, replaceIdentity = '') {
+    const slot = (room?.slots || []).find(item => item.id === 'logSummary');
+    const blocks = parseDatedLogBlocks(slot?.content || '');
+    const block = blocks.find(item => String(item.key) === String(sourceKey));
+    if (!slot || !block) throw new Error('선택한 날짜로그를 찾지 못했습니다.');
+
+    const manual = new Set((room.manualLogSelectedKeys || []).map(String));
+    const excluded = new Set((room.autoLogExcludedKeys || []).map(String));
+    const pending = room.pending;
+    const visibleItems = pending ? activePendingItems(pending) : snapshotSelectedItems(room);
+    const previous = replaceIdentity
+      ? visibleItems.find(item => pendingItemIdentity(item) === replaceIdentity)
+      : null;
+    const previousKey = String(previous?.sourceKey || '').replace(/^auto-log:/, '');
+    if (previous?.autoType === 'manual-log' && previousKey) manual.delete(previousKey);
+    if (['related-log','recent-log','pinned-log'].includes(String(previous?.autoType || '')) && previousKey) {
+      excluded.add(previousKey);
+      if (previous?.autoType === 'pinned-log') {
+        room.autoLogPinnedKeys = (room.autoLogPinnedKeys || []).map(String).filter(key => key !== previousKey);
+      }
+    }
+    manual.add(String(block.key));

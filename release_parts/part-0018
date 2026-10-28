@@ -1,0 +1,1000 @@
+    if (label === '중요 물품') return 'item';
+    if (label === '자료집') return 'knowledge';
+    if (label === '기타·OOC') return 'extra';
+    if (label === '분류 확인') return 'format';
+    return 'format';
+  }
+
+  function contextUsageSegments(items, blockChars, originalChars = 0, separatorChars = 0) {
+    const grouped = new Map();
+    for (const item of (items || [])) {
+      const label = itemCategory(item);
+      const tone = categoryTone(label);
+      const key = label;
+      const current = grouped.get(key) || { label:key, tone, count:0, chars:0 };
+      current.count++;
+      current.chars += String(item.content || '').length;
+      grouped.set(key, current);
+    }
+    const order = ['현재상태','인지 현황','타임라인','자료집','항상 주입','직접 주입','최근 연속성','관련로그','로그요약','캐릭터','중요 물품','기타·OOC','분류 확인'];
+    const result = order.filter(key => grouped.has(key)).map(key => grouped.get(key));
+    const rawChars = result.reduce((sum, item) => sum + item.chars, 0);
+    const overhead = Math.max(0, Number(blockChars || 0) - rawChars + Number(separatorChars || 0));
+    if (overhead) result.push({ label:'주입 형식', tone:'format', count:1, chars:overhead });
+    if (Number(originalChars) > 0) result.unshift({ label:'AI 답변 원문', tone:'carrier', count:1, chars:Number(originalChars) });
+    return result;
+  }
+
+  function renderUsageSummary(items, blockChars, maxChars, originalChars = 0, separatorChars = 0) {
+    const segments = contextUsageSegments(items, blockChars, originalChars, separatorChars);
+    const max = Math.max(1, Number(maxChars) || APP.defaultMaxChars);
+    const used = Math.max(1, Number(blockChars) + Number(originalChars) + Number(separatorChars) || 0);
+    const bars = segments.map(item => {
+      const width = Math.max(0.15, Math.min(100, item.chars / max * 100));
+      return `<span class="rpcm-usage-segment tone-${item.tone}" style="width:${width}%" title="${esc(item.label)} · ${formatCount(item.chars)}자"></span>`;
+    }).join('');
+    const chips = segments.map(item => {
+      const ofUsed = used ? item.chars / used * 100 : 0;
+      return `<span class="rpcm-breakdown-chip tone-${item.tone}"><i class="rpcm-usage-dot"></i><strong>${esc(item.label)}</strong><span>${formatCount(item.chars)}자 · ${ofUsed < 1 && ofUsed > 0 ? '&lt;1' : Math.round(ofUsed)}%</span></span>`;
+    }).join('');
+    const emptyWidth = Math.max(0, 100 - Math.min(100, used / max * 100));
+    return {
+      bar: `${bars}${emptyWidth ? `<span class="rpcm-usage-empty" style="width:${emptyWidth}%"></span>` : ''}`,
+      chips,
+    };
+  }
+
+  function itemReason(item) {
+    if ((item.autoType === 'character' || item.autoType === 'important-item') && item.matchedAlias === '사용자 고정') return '사용자 고정';
+    if ((item.autoType === 'character' || item.autoType === 'important-item') && item.autoDetectionReason) {
+      return `신뢰도 ${Number(item.autoConfidence || 0)}% · 감지: ${item.autoDetectionReason}`;
+    }
+    if (item.recallReason) return String(item.recallReason);
+    if ((item.autoType === 'character' || item.autoType === 'important-item') && item.matchedAlias) return `“${item.matchedAlias}” 감지`;
+    if (item.autoType === 'manual-log') return '사용자 직접 주입';
+    if (item.autoType === 'recent-log') return '최근이라 포함 · 활성 시간선의 직전 흐름';
+    if (item.autoType === 'pinned-log') return '사용자 항상 주입';
+    if (item.autoType === 'related-log') return '현재 RP와 관련';
+    return '';
+  }
+
+  // v0.9.0: 관련로그가 왜 선택됐는지 사용자가 확인할 수 있도록
+  // 실제 점수 구성과 후보 순위를 UI용 설명으로 노출합니다. 검색 로직 자체는 바꾸지 않습니다.
+  // 초기 v0.9.0에서 이미 만들어져 세부 메타데이터가 비어 있는 pending 관련로그는
+  // 마지막 자동회수 컨텍스트를 기준으로 한 번 재계산해 표시용 메타데이터를 보강합니다.
+  function hydrateRelatedLogEvidence(room, items) {
+    const targets = (items || []).filter(item => item?.autoType === 'related-log' && (
+      ((!Array.isArray(item.matchedCoreTerms) || !item.matchedCoreTerms.length) && (!Array.isArray(item.matchedCharacterTerms) || !item.matchedCharacterTerms.length)) ||
+      item.recallCoreScore === null || item.recallCoreScore === undefined || item.recallCoreScore === '' ||
+      item.recallCharacterScore === null || item.recallCharacterScore === undefined || item.recallCharacterScore === '' ||
+      !Number(item.recallRank || 0) || !Number(item.recallCandidateCount || 0)
+    ));
+    if (!targets.length) return false;
+
+    const slot = (room?.slots || []).find(s => s.id === 'logSummary');
+    const contextText = String(room?.autoRecallContextText || '').trim();
+    if (!slot?.enabled || !String(slot.content || '').trim() || !contextText) return false;
+    const blocks = parseDatedLogBlocks(slot.content);
+    if (!blocks.length) return false;
+
+    const excludedKeys = new Set((room.autoLogExcludedKeys || []).map(String));
+    const pinnedKeys = new Set((room.autoLogPinnedKeys || []).map(String));
+    const manualKeys = new Set((room.manualLogSelectedKeys || []).map(String));
+    const eligible = autoRecallVisibleLogBlocks(blocks, room).filter(b => !excludedKeys.has(b.key));
+    const skip = new Set([...excludedKeys, ...pinnedKeys, ...manualKeys]);
+    const recentKeys = new Set(recentContinuityLogBlocks(room, eligible, excludedKeys).map(block => String(block.key)));
+    const candidates = eligibleRelatedLogScores(room, eligible, contextText, skip).filter(entry => !recentKeys.has(String(entry.block.key))).slice(0, relatedLogInjectionCount(room));
+    const byKey = new Map(candidates.map((scored, index) => [String(scored.block.key), { scored, rank:index + 1 }]));
+    let changed = false;
+
+    for (const item of targets) {
+      const hit = byKey.get(String(item.sourceKey || '').trim());
+      if (!hit) continue;
+      const { scored, rank } = hit;
+      Object.assign(item, {
+        recallReason: `${logTimelineLabelOfBlock(scored.block)} · ${relatedLogReason(scored)}`,
+        recallScore: scored.score,
+        recallCoreScore: scored.coreScore,
+        recallCharacterScore: scored.characterScore,
+        recallRank: rank,
+        recallCandidateCount: candidates.length,
+        matchedTerms:[...(scored.matchedPhrases || []), ...(scored.matchedCoreTokens || []), ...(scored.matchedCharacterTerms || [])],
+        matchedCoreTerms:[...(scored.matchedPhrases || []), ...(scored.matchedCoreTokens || []), ...(scored.matchedRareTokens || [])],
+        matchedCharacterTerms:[...(scored.matchedCharacterTerms || [])],
+      });
+      changed = true;
+    }
+    return changed;
+  }
+
+  // 자동 호출 설명창은 실제 pending 배열의 삽입 순서가 아니라 종류별로 묶어 보여줍니다.
+  // 주입 본문의 실제 순서는 건드리지 않고 UI 표시 순서만 정리합니다.
+  function sortAutoItemsForDisplay(items) {
+    const priority = {
+      'character': 0,
+      'important-item': 1,
+      'pinned-log': 2,
+      'manual-log': 3,
+      'recent-log': 4,
+      'related-log': 5,
+      'legacy-log': 6,
+    };
+    return (items || []).map((item, index) => ({ item, index })).sort((a, b) => {
+      const pa = priority[a.item?.autoType] ?? 9;
+      const pb = priority[b.item?.autoType] ?? 9;
+      if (pa !== pb) return pa - pb;
+      if (a.item?.autoType === 'related-log' && b.item?.autoType === 'related-log') {
+        const ra = Number(a.item.recallRank || 9999);
+        const rb = Number(b.item.recallRank || 9999);
+        if (ra !== rb) return ra - rb;
+      }
+      return a.index - b.index;
+    }).map(x => x.item);
+  }
+
+  function relatedLogEvidence(item) {
+    if (!['related-log','recent-log'].includes(item?.autoType)) return '';
+    const core = [...new Set((item.matchedCoreTerms || []).map(String).filter(Boolean))].slice(0, 4);
+    const chars = [...new Set((item.matchedCharacterTerms || []).map(String).filter(Boolean))].slice(0, 3);
+    const bits = [];
+    if (core.length) bits.push(`핵심어 ${core.join(' · ')}`);
+    if (chars.length) bits.push(`인물 보조 ${chars.join(' · ')}`);
+
+    const hasTotal = item.recallScore !== null && item.recallScore !== undefined && item.recallScore !== '' && Number.isFinite(Number(item.recallScore));
+    const hasCoreScore = item.recallCoreScore !== null && item.recallCoreScore !== undefined && item.recallCoreScore !== '' && Number.isFinite(Number(item.recallCoreScore));
+    const hasCharacterScore = item.recallCharacterScore !== null && item.recallCharacterScore !== undefined && item.recallCharacterScore !== '' && Number.isFinite(Number(item.recallCharacterScore));
+    if (hasTotal) {
+      const total = Number(item.recallScore);
+      if (hasCoreScore && hasCharacterScore) {
+        bits.push(`관련도 점수 ${total.toFixed(1)} = 핵심 ${Number(item.recallCoreScore).toFixed(1)} + 인물 ${Number(item.recallCharacterScore).toFixed(1)}`);
+      } else {
+        // 이전 0.9.0에서 이미 만들어진 pending 항목처럼 세부점수가 없는 경우
+        // 없는 값을 0.0으로 꾸며내지 않고 실제로 저장된 총점만 보여줍니다.
+        bits.push(`관련도 점수 ${total.toFixed(1)}`);
+      }
+    }
+    const rank = Number(item.recallRank || 0);
+    const candidateCount = Number(item.recallCandidateCount || 0);
+    if (rank > 0 && candidateCount > 0) bits.push(`후보 ${candidateCount}개 중 ${rank}위`);
+    return bits.join(' · ');
+  }
+
+  function getDataWarnings(room, precomputed = null) {
+    const warnings = [];
+    const log = (room.slots || []).find(x => x.id === 'logSummary');
+    const blocks = parseDatedLogBlocks(log?.content || '');
+    if (String(log?.content || '').trim() && !blocks.length && String(log.content || '').length > APP.legacyWholeLogFallbackMax) warnings.push('로그요약이 길지만 날짜 블록을 감지하지 못해 통짜 주입을 차단함. [2026년 8월 31일-사건명]·[BC206-사건명] 같은 형식을 사용해 주세요.');
+    if (blocks.length) {
+      const noYearCount = blocks.filter(b => !b.isUnknown && !b.isSpecialDate && b.year == null).length;
+      const acceptedUnknown = new Set((room.acceptedUnknownLogKeys || []).map(String));
+      const unknownCount = blocks.filter(b => b.isUnknown && !acceptedUnknown.has(String(b.key))).length;
+      if (noYearCount) warnings.push(`연도 없는 날짜 로그 ${noYearCount}개 있음. ‘날짜 정리’에서 선택한 항목에 2024년/2025년처럼 연도를 일괄 적용할 수 있음.`);
+      if (unknownCount) warnings.push(`확인하지 않은 날짜 미상 로그 ${unknownCount}개 있음. ‘날짜 수정’에서 ‘날짜 미상으로 계속 유지’를 체크하면 이 안내를 숨길 수 있음.`);
+      const byDate = new Map();
+      for (const b of blocks) {
+        if (b.isUnknown) continue;
+        byDate.set(b.dateKey, (byDate.get(b.dateKey) || 0) + 1);
+      }
+      const byBlockKey = new Map(blocks.filter(b => !b.isUnknown).map(b => [b.dateKey, b]));
+      const dupDates = [...byDate.entries()].filter(([,n]) => n > 1).map(([k,n]) => {
+        const block = byBlockKey.get(k);
+        return `${block?.fullDate || k.replace(/^x-/, '').split('::')[0]} · ${logTimelineLabelOfBlock(block)} (${n}개)`;
+      });
+      if (dupDates.length) {
+        const duplicateGroups = precomputed?.duplicateGroups ?? duplicateLogDateGroups(room);
+        if (precomputed && !precomputed.duplicateGroups) precomputed.duplicateGroups = duplicateGroups;
+        const branchHint = duplicateGroups.map(timelineBranchHintForGroup).find(Boolean) || '';
+        warnings.push(branchHint
+          ? `시간선 분기 가능성 감지(“${branchHint}”): 같은 날짜 블록을 확인해 기본/회귀 시간선 폴더로 나눠 주세요. ${dupDates.join(', ')}`
+          : `같은 시간선·날짜 로그가 여러 블록으로 감지됨: ${dupDates.join(', ')}`);
+      }
+    }
+    const chars = (room.slots || []).filter(x => x.group === 'character');
+    const byName = new Map();
+    for (const c of chars) {
+      const k = libraryItemKey(c);
+      if (!k) continue;
+      byName.set(k, (byName.get(k) || 0) + 1);
+    }
+    const dupChars = [...byName.entries()].filter(([,n]) => n > 1).map(([k,n]) => `${k} (${n}개)`);
+    if (dupChars.length) warnings.push(`같은 이름의 캐릭터 설정이 중복됨: ${dupChars.join(', ')}`);
+    if (room._logBudgetInfo?.omitted) warnings.push(`주입 안전선(50,000자·요청 ${formatCount(APP.safeCarrierPayloadBytes)}바이트) 때문에 로그 ${room._logBudgetInfo.omitted}개를 이번 주입 후보에서 자동 제외함.${room._logBudgetInfo.omittedTitles?.length ? ` (${room._logBudgetInfo.omittedTitles.join(', ')})` : ''}`);
+    return warnings;
+  }
+
+  function openDetachedEditor(slot, sourceTextarea) {
+    document.querySelector('#rpcm-detached-backdrop')?.remove();
+    if (!slot || !sourceTextarea) return;
+
+    const originalText = String(sourceTextarea.value || '');
+    const kind = slot.id === 'currentState' ? 'currentState' : slot.id === 'logSummary' ? 'logSummary' : 'plain';
+    const backdrop = document.createElement('div');
+    backdrop.id = 'rpcm-detached-backdrop';
+    backdrop.innerHTML = `
+      <div class="rpcm-detached-editor" role="dialog" aria-modal="true" aria-label="${esc(slot.title)} 크게 편집">
+        <div class="rpcm-detached-head">
+          <div class="rpcm-detached-head-main"><strong>${slot.id === 'currentState' ? '🧭' : slot.id === 'logSummary' ? '🗓️' : '✏️'} ${esc(slot.title)} 크게 편집</strong><span id="rpcm-detached-format"></span></div>
+          <span class="rpcm-detached-chars" id="rpcm-detached-chars">${formatCount(originalText.length)}자</span>
+          <span class="rpcm-detached-save-state" id="rpcm-detached-save-state">원본 유지</span>
+          <button type="button" class="rpcm-detached-mobile-done" id="rpcm-detached-mobile-done">완료</button>
+          <button type="button" class="rpcm-iconbtn" id="rpcm-detached-x" aria-label="닫기" data-rpcm-close="icon">✕</button>
+        </div>
+        <div class="rpcm-detached-toolbar">
+          <div class="rpcm-detached-search"><div class="rpcm-detached-search-box"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="m16 16 4.2 4.2"></path></svg><input id="rpcm-detached-search" placeholder="검색"></div><button type="button" id="rpcm-detached-search-prev" title="이전 결과">↑</button><button type="button" id="rpcm-detached-search-next" title="다음 결과">↓</button><span id="rpcm-detached-search-count">0 / 0</span></div>
+          <span class="rpcm-detached-log-selection-summary" id="rpcm-detached-log-selection-summary" hidden></span>
+          <button type="button" class="rpcm-editor-action rpcm-detached-favorite-filter" id="rpcm-detached-favorites-only" ${kind === 'logSummary' ? '' : 'hidden'}>☆ 전체 보기</button>
+          <button type="button" class="rpcm-editor-action rpcm-detached-add-log" id="rpcm-detached-add-log" hidden>＋ 날짜 블록 추가</button>
+          <button type="button" class="rpcm-editor-action" id="rpcm-detached-mode">원문 보기</button>
+          <button type="button" class="rpcm-editor-action" id="rpcm-detached-expand">전체 펼치기</button>
+          <button type="button" class="rpcm-editor-action" id="rpcm-detached-collapse">전체 접기</button>
+          <button type="button" class="rpcm-editor-action" id="rpcm-detached-copy">전체 복사</button>
+        </div>
+        <div class="rpcm-detached-log-bulkbar" id="rpcm-detached-log-bulkbar" ${kind === 'logSummary' ? '' : 'hidden'}><strong>시간선 일괄 이동</strong><span id="rpcm-detached-log-bulk-count">선택 0개</span><select id="rpcm-detached-log-bulk-target" aria-label="이동할 시간선"></select><button type="button" id="rpcm-detached-log-bulk-clear">선택 해제</button><button type="button" id="rpcm-detached-log-bulk-move">선택 이동</button></div>
+        <div class="rpcm-detached-layout">
+          <aside class="rpcm-detached-nav" id="rpcm-detached-nav"></aside>
+          <main class="rpcm-detached-main" id="rpcm-detached-main"></main>
+        </div>
+        <div class="rpcm-detached-foot">
+          <span class="rpcm-detached-note">실제 저장값은 기존처럼 평문 1개입니다. 블록 화면은 편집할 때만 구조화해서 보여줍니다.</span>
+          <button type="button" class="rpcm-btn secondary" id="rpcm-detached-cancel">취소</button>
+          <button type="button" class="rpcm-btn primary" id="rpcm-detached-apply">적용하고 닫기</button>
+        </div>
+      </div>`;
+    document.body.appendChild(backdrop);
+
+    const main = backdrop.querySelector('#rpcm-detached-main');
+    const nav = backdrop.querySelector('#rpcm-detached-nav');
+    const formatEl = backdrop.querySelector('#rpcm-detached-format');
+    const charsEl = backdrop.querySelector('#rpcm-detached-chars');
+    const saveStateEl = backdrop.querySelector('#rpcm-detached-save-state');
+    const modeBtn = backdrop.querySelector('#rpcm-detached-mode');
+    const expandBtn = backdrop.querySelector('#rpcm-detached-expand');
+    const collapseBtn = backdrop.querySelector('#rpcm-detached-collapse');
+    const searchInput = backdrop.querySelector('#rpcm-detached-search');
+    const searchCount = backdrop.querySelector('#rpcm-detached-search-count');
+    const logSelectionSummaryEl = backdrop.querySelector('#rpcm-detached-log-selection-summary');
+    const addLogBtn = backdrop.querySelector('#rpcm-detached-add-log');
+    const favoriteOnlyBtn = backdrop.querySelector('#rpcm-detached-favorites-only');
+    const logBulkBar = backdrop.querySelector('#rpcm-detached-log-bulkbar');
+    const logBulkCount = backdrop.querySelector('#rpcm-detached-log-bulk-count');
+    const logBulkTarget = backdrop.querySelector('#rpcm-detached-log-bulk-target');
+    let mode = 'blocks';
+    let currentSections = [];
+    let logBlocks = [];
+    let logOriginKeys = [];
+    let searchHits = [];
+    let searchIndex = -1;
+    let lastSearchQuery = '';
+    let userEdited = false;
+    let logSelectionChanged = false;
+    let logSelectionPersistTimer = null;
+    let favoriteOnly = false;
+
+    const roomLogSelectionSets = () => {
+      const room = state.currentRoom;
+      return {
+        manual:new Set((room?.manualLogSelectedKeys || []).map(String)),
+        pinned:new Set((room?.autoLogPinnedKeys || []).map(String)),
+        excluded:new Set((room?.autoLogExcludedKeys || []).map(String)),
+        favorite:new Set((room?.favoriteLogKeys || []).map(String)),
+      };
+    };
+
+    const setRoomLogSelectionKey = (field, key, checked) => {
+      const room = state.currentRoom;
+      if (!room || !key) return;
+      const next = new Set((room[field] || []).map(String));
+      if (checked) next.add(String(key)); else next.delete(String(key));
+      room[field] = [...next];
+    };
+
+    const normalizeDetachedLogHeading = (value, fallback = '[날짜-키워드]') => {
+      const text = String(value || '').replace(/[\r\n]+/g, ' ').trim();
+      if (!text) return fallback;
+      if (/^\[[^\]\n]+\]$/.test(text)) return text;
+      const inner = text.replace(/^\[/, '').replace(/\]$/, '').trim();
+      return inner ? `[${inner}]` : fallback;
+    };
+
+    const detachedNewLogHeading = (timelineLabel = '') => {
+      const timeline = cleanLogTimelineLabel(timelineLabel) || activeLogTimelineLabel(state.currentRoom);
+      return timeline === DEFAULT_LOG_TIMELINE ? '[날짜 미정-새 로그]' : `[날짜 미정·${timeline}-새 로그]`;
+    };
+
+    const detachedLogHeading = (card, index, normalizeInput = false) => {
+      const block = logBlocks[index];
+      const input = card?.querySelector('input[data-role="log-heading"]');
+      const heading = normalizeDetachedLogHeading(input?.value, block?.heading || '[날짜-키워드]');
+      if (normalizeInput && input) input.value = heading;
+      return heading;
+    };
+
+    const selectedDetachedLogChars = () => {
+      let chars = 0;
+      main.querySelectorAll('.rpcm-detached-log-card[data-log-key]').forEach(card => {
+        if (!card.querySelector('[data-log-choice="manual"]')?.checked) return;
+        const idx = Number(card.dataset.logIndex);
+        const heading = detachedLogHeading(card, idx);
+        const body = card.querySelector('textarea[data-role="log-body"]')?.value || '';
+        chars += `${heading}${String(body).trim() ? `\n${String(body).trim()}` : ''}`.length;
+      });
+      return chars;
+    };
+
+    const applyDetachedFavoriteFilter = () => {
+      if (kind !== 'logSummary') return;
+      main.querySelectorAll('.rpcm-detached-log-card[data-log-index]').forEach(card => { card.hidden = favoriteOnly && !card.classList.contains('is-log-favorite'); });
+      nav.querySelectorAll('.rpcm-detached-nav-item[data-nav-index]').forEach(item => {
+        const card = main.querySelector(`.rpcm-detached-log-card[data-log-index="${Number(item.dataset.navIndex)}"]`);
+        item.hidden = favoriteOnly && !card?.classList.contains('is-log-favorite');
+      });
+      main.querySelectorAll('.rpcm-detached-timeline-group').forEach(group => { group.hidden = favoriteOnly && !group.querySelector('.rpcm-detached-log-card.is-log-favorite'); });
+      nav.querySelectorAll('.rpcm-detached-nav-timeline').forEach(group => { group.hidden = favoriteOnly && ![...group.querySelectorAll('.rpcm-detached-nav-item')].some(item => !item.hidden); });
+      if (favoriteOnlyBtn) { favoriteOnlyBtn.classList.toggle('active', favoriteOnly); favoriteOnlyBtn.textContent = favoriteOnly ? '★ 즐겨찾기만' : '☆ 전체 보기'; }
+    };
+
+    const refreshDetachedLogSelectionUi = () => {
+      if (kind !== 'logSummary') {
+        if (logSelectionSummaryEl) logSelectionSummaryEl.hidden = true;
+        return;
+      }
+      const cards = [...main.querySelectorAll('.rpcm-detached-log-card[data-log-key]')];
+      cards.forEach(card => {
+        const manual = !!card.querySelector('[data-log-choice="manual"]')?.checked;
+        const pinned = !!card.querySelector('[data-log-choice="pinned"]')?.checked;
+        const excluded = !!card.querySelector('[data-log-choice="excluded"]')?.checked;
+        const favorite = !!card.querySelector('[data-log-choice="favorite"]')?.checked;
+        card.classList.toggle('is-log-manual', manual);
+        card.classList.toggle('is-log-pinned', pinned);
+        card.classList.toggle('is-log-excluded', excluded);
+        card.classList.toggle('is-log-favorite', favorite);
+        const flags = card.querySelector('[data-log-flags]');
+        if (flags) {
+          const bits = [];
+          if (manual) bits.push('직접');
+          if (pinned) bits.push('📌');
+          if (favorite) bits.push('★');
+          if (excluded) bits.push('제외');
+          flags.textContent = bits.join(' · ');
+          flags.hidden = !bits.length;
+        }
+      });
+      nav.querySelectorAll('.rpcm-detached-nav-item[data-nav-index]').forEach(item => {
+        const card = main.querySelector(`.rpcm-detached-log-card[data-log-index="${Number(item.dataset.navIndex)}"]`);
+        const active = !!card?.querySelector('[data-log-choice="favorite"]')?.checked;
+        item.classList.toggle('is-favorite', active);
+        const star = item.querySelector('[data-nav-favorite]');
+        if (star) { star.textContent = active ? '★' : '☆'; star.setAttribute('aria-label', active ? '즐겨찾기 해제' : '즐겨찾기 추가'); }
+      });
+      const manualCount = cards.filter(card => card.querySelector('[data-log-choice="manual"]')?.checked).length;
+      if (logSelectionSummaryEl) {
+        logSelectionSummaryEl.hidden = false;
+        logSelectionSummaryEl.textContent = `직접 주입 ${manualCount}개 · ${formatCount(selectedDetachedLogChars())}자`;
+      }
+      applyDetachedFavoriteFilter();
+    };
+
+    const refreshDetachedBulkUi = () => {
+      if (kind !== 'logSummary') {
+        if (logBulkBar) logBulkBar.hidden = true;
+        return;
+      }
+      if (logBulkBar) logBulkBar.hidden = Number(logBulkBar.dataset.timelineCount || 1) <= 1;
+      const selected = main.querySelectorAll('[data-log-bulk-select]:checked').length;
+      if (logBulkCount) logBulkCount.textContent = `선택 ${selected}개`;
+      const moveButton = backdrop.querySelector('#rpcm-detached-log-bulk-move');
+      const clearButton = backdrop.querySelector('#rpcm-detached-log-bulk-clear');
+      if (moveButton) moveButton.disabled = !selected;
+      if (clearButton) clearButton.disabled = !selected;
+    };
+
+    const persistDetachedLogSelectionSoon = () => {
+      if (kind !== 'logSummary') return;
+      clearTimeout(logSelectionPersistTimer);
+      logSelectionPersistTimer = setTimeout(async () => {
+        const room = state.currentRoom;
+        if (!room) return;
+        try {
+          if (room.pending) await rebuildPendingLogItems(room, 'detached-log-direct-pin-exclude');
+          else await saveRoom(room);
+        } catch (e) {
+          notify(`로그 직접선택 반영 실패: ${e.message}`, 'error', 6000);
+        }
+      }, 300);
+    };
+
+    const autoGrow = textarea => {
+      if (!textarea) return;
+      if (isMobileManagerLayout()) return;
+      if (textarea.matches('[data-role="log-body"]')) {
+        textarea.style.height = `${Math.min(420, Math.max(140, textarea.scrollHeight + 2))}px`;
+        textarea.style.maxHeight = '55vh';
+        textarea.style.overflowY = 'auto';
+        textarea.style.resize = 'vertical';
+        return;
+      }
+      textarea.style.height = 'auto';
+      textarea.style.height = `${Math.max(92, textarea.scrollHeight + 2)}px`;
+    };
+
+    const collectCurrentStateFromDom = () => {
+      const sections = [];
+      [...main.querySelectorAll('.rpcm-detached-card[data-section-index]')].forEach((card, index) => {
+        const title = String(card.dataset.sectionTitle || `섹션 ${index + 1}`);
+        const single = card.querySelector('textarea[data-role="section-body"]');
+        let body = '';
+        if (single) {
+          body = single.value;
+        } else {
+          const intro = card.querySelector('textarea[data-role="section-intro"]')?.value || '';
+          const blocks = [...card.querySelectorAll('.rpcm-detached-subblock')].map(sub => ({
+            title:String(sub.dataset.subTitle || ''),
+            body:sub.querySelector('textarea[data-role="sub-body"]')?.value || '',
+          }));
+          body = buildCurrentStateSubblockBody({ intro, blocks });
+        }
+        sections.push({ title, body });
+      });
+      return buildCurrentStateText(sections);
+    };
+
+    const collectLogsFromDom = () => {
+      return [...main.querySelectorAll('.rpcm-detached-card[data-log-index]')].map(card => {
+        const index = Number(card.dataset.logIndex);
+        const heading = detachedLogHeading(card, index);
+        const body = card.querySelector('textarea[data-role="log-body"]')?.value || '';
+        return `${heading}${String(body || '').trim() ? `\n${String(body).trim()}` : ''}`;
+      }).join('\n\n').trim();
+    };
+
+    const activeText = () => {
+      if (mode === 'raw') return String(main.querySelector('#rpcm-detached-raw')?.value || '');
+      if (kind === 'currentState') return collectCurrentStateFromDom();
+      if (kind === 'logSummary') return collectLogsFromDom();
+      return String(main.querySelector('#rpcm-detached-raw')?.value || '');
+    };
+
+    const isActuallyDirty = () => userEdited && normalizeLineBreaks(activeText()).trim() !== normalizeLineBreaks(originalText).trim();
+
+    const refreshDirty = () => {
+      const text = activeText();
+      if (charsEl) charsEl.textContent = `${formatCount(text.length)}자`;
+      const dirty = isActuallyDirty();
+      if (saveStateEl) {
+        saveStateEl.textContent = dirty ? '수정됨 · 아직 미적용' : '원본 유지';
+        saveStateEl.classList.toggle('is-dirty', dirty);
+      }
+    };
+
+    const refreshDetachedAfterInput = debounce(() => {
+      refreshDirty();
+      if (kind === 'logSummary') refreshDetachedLogSelectionUi();
+    }, isMobileManagerLayout() ? 280 : 60);
+
+    const bindEditorTextareas = () => {
+      main.querySelectorAll('textarea').forEach(ta => {
+        ta.dataset.rpcmEditor = 'true';
+        autoGrow(ta);
+        ta.addEventListener('input', () => { userEdited = true; autoGrow(ta); refreshDetachedAfterInput(); });
+      });
+    };
+
+    const bindDetachedNavItems = () => {
+      nav.querySelectorAll('[data-nav-index]').forEach(btn => btn.onclick = () => {
+        const target = main.querySelector(`[data-card-index="${Number(btn.dataset.navIndex)}"]`);
+        const folder = target?.closest('.rpcm-detached-timeline-group');
+        if (folder) folder.open = true;
+        target?.scrollIntoView({ behavior:'smooth', block:'start' });
+      });
+      nav.querySelectorAll('[data-nav-favorite]').forEach(star => star.onclick = event => {
+        event.preventDefault(); event.stopPropagation();
+        const item = star.closest('[data-nav-index]');
+        const card = main.querySelector(`.rpcm-detached-log-card[data-log-index="${Number(item?.dataset.navIndex)}"]`);
+        const checkbox = card?.querySelector('[data-log-choice="favorite"]');
+        if (!checkbox) return;
+        checkbox.checked = !checkbox.checked;
+        checkbox.dispatchEvent(new Event('change', { bubbles:true }));
+      });
+    };
+
+    const renderNav = entries => {
+      nav.innerHTML = entries.length ? entries.map((entry, index) => `<button type="button" class="rpcm-detached-nav-item" data-nav-index="${index}" title="${esc(entry.title)}"><span>${esc(entry.short || String(index + 1))}</span><strong>${esc(entry.title)}</strong></button>`).join('') : '<div class="rpcm-detached-nav-empty">블록 없음</div>';
+      bindDetachedNavItems();
+    };
+
+    const renderCurrentStateBlocks = text => {
+      if (logSelectionSummaryEl) logSelectionSummaryEl.hidden = true;
+      if (addLogBtn) addLogBtn.hidden = true;
+      currentSections = parseCurrentStateSections(text);
+      if (!currentSections.length) return false;
+      main.innerHTML = currentSections.map((section, index) => {
+        const nested = parseCurrentStateSubblocks(section.body);
+        const nestedHtml = nested.blocks.length ? `
+          ${nested.intro ? `<div class="rpcm-detached-intro"><div class="rpcm-detached-subhead">섹션 본문</div><textarea data-role="section-intro" spellcheck="false">${esc(nested.intro)}</textarea></div>` : ''}
+          ${nested.blocks.map((sub, subIndex) => `<div class="rpcm-detached-subblock" data-sub-title="${esc(sub.title)}"><div class="rpcm-detached-subhead"><strong>[${esc(sub.title)}]</strong><button type="button" class="rpcm-detached-subcopy" data-subcopy="${subIndex}">복사</button></div><textarea data-role="sub-body" spellcheck="false">${esc(sub.body)}</textarea></div>`).join('')}` : `<textarea data-role="section-body" spellcheck="false">${esc(section.body)}</textarea>`;
+        return `<details class="rpcm-detached-card" data-card-index="${index}" data-section-index="${index}" data-section-title="${esc(section.title)}" open><summary><span class="rpcm-detached-index">${String(index + 1).padStart(2,'0')}</span><strong>${esc(section.title)}</strong><span class="rpcm-detached-card-meta">${formatCount(section.body.length)}자${nested.blocks.length ? ` · 하위 ${nested.blocks.length}` : ''}</span><button type="button" class="rpcm-detached-card-copy">블록 복사</button><span class="rpcm-chevron">▼</span></summary><div class="rpcm-detached-card-body">${nestedHtml}</div></details>`;
+      }).join('');
+      renderNav(currentSections.map((section, index) => ({ short:String(index + 1), title:section.title })));
+      if (formatEl) formatEl.textContent = `대블록 ${currentSections.length}개 · [하위블록] 자동 인식`;
+      return true;
+    };
+
+    const renderLogBlocks = (text, originKeys = null) => {
+      const parsedBlocks = parseDatedLogBlocks(text);
+      if (!parsedBlocks.length) return false;
+      const selections = roomLogSelectionSets();
+      const timelineLabels = normalizeRoomLogTimelines(state.currentRoom).slice();
+      parsedBlocks.forEach(block => {
+        const label = logTimelineLabelOfBlock(block);
+        if (!timelineLabels.some(item => normalizedLogTimelineKey(item) === normalizedLogTimelineKey(label))) timelineLabels.push(label);
+      });
+      const hasMultipleTimelines = timelineLabels.length > 1;
+      if (logBulkBar) logBulkBar.dataset.timelineCount = String(timelineLabels.length);
+      const parsedPairs = parsedBlocks.map((block, index) => ({ block, origin:String(originKeys?.[index] || block.key || '') }));
+      const orderedPairs = timelineLabels.flatMap(label => parsedPairs
+        .filter(item => blockBelongsToTimeline(item.block, label))
+        .sort((a, b) => compareLogBlocksChronologically(a.block, b.block)));
+      logBlocks = orderedPairs.map(item => item.block);
+      logOriginKeys = orderedPairs.map(item => item.origin);
+      const timelineOptions = selected => timelineLabels.map(label => `<option value="${esc(label)}" ${normalizedLogTimelineKey(label) === normalizedLogTimelineKey(selected) ? 'selected' : ''}>${esc(label)}</option>`).join('');
+      if (logBulkTarget) {
+        const selectedTarget = String(logBulkTarget.value || activeLogTimelineLabel(state.currentRoom));
+        logBulkTarget.innerHTML = timelineOptions(selectedTarget);
+      }
+      const cardHtml = (block, index) => {
+        const key = logOriginKeys[index];
+        const manual = selections.manual.has(key);
+        const pinned = selections.pinned.has(key);
+        const excluded = selections.excluded.has(key);
+        const favorite = selections.favorite.has(key);
+        const flagBits = [manual ? '직접' : '', pinned ? '📌' : '', favorite ? '★' : '', excluded ? '제외' : ''].filter(Boolean).join(' · ');
+        return `<details class="rpcm-detached-card rpcm-detached-log-card${manual ? ' is-log-manual' : ''}${pinned ? ' is-log-pinned' : ''}${favorite ? ' is-log-favorite' : ''}${excluded ? ' is-log-excluded' : ''}" data-card-index="${index}" data-log-index="${index}" data-log-key="${esc(key)}" data-log-origin-key="${esc(key)}" open><summary><span class="rpcm-detached-index">${String(index + 1).padStart(2,'0')}</span><strong data-log-title-preview>${esc(block.heading)}</strong><span class="rpcm-detached-log-flags" data-log-flags ${flagBits ? '' : 'hidden'}>${esc(flagBits)}</span><span class="rpcm-detached-card-meta">${formatCount(block.raw.length)}자</span><button type="button" class="rpcm-detached-card-copy">블록 복사</button><button type="button" class="rpcm-detached-card-delete">삭제</button><span class="rpcm-chevron">▼</span></summary><div class="rpcm-detached-card-body"><div class="rpcm-detached-log-insertbar"><button type="button" data-log-insert="before">＋ 위에 날짜 추가</button><button type="button" data-log-insert="after">＋ 아래에 날짜 추가</button></div><label class="rpcm-detached-log-heading"><span>날짜 · 키워드 제목</span><input type="text" data-role="log-heading" value="${esc(block.heading)}" placeholder="[2027년 9월 24일-키워드]" spellcheck="false"></label><div class="rpcm-detached-log-controls">${hasMultipleTimelines ? `<label class="rpcm-detached-log-timeline-choice"><span>이 블록 시간선</span><select data-role="log-timeline">${timelineOptions(logTimelineLabelOfBlock(block))}</select></label><label class="choice-bulk"><input type="checkbox" data-log-bulk-select><span>이동 선택</span></label><button type="button" class="rpcm-detached-log-select-after" title="같은 시간선에서 이 날짜부터 아래 블록까지 선택">이 날짜부터 아래 선택</button>` : ''}<label class="choice-favorite" title="즐겨찾기 목록에서 빠르게 찾을 수 있습니다."><input type="checkbox" data-log-choice="favorite" ${favorite ? 'checked' : ''}><span>★ 즐겨찾기</span></label><label class="choice-manual" title="자동 선택을 꺼도 이 날짜를 주입 후보에 포함합니다."><input type="checkbox" data-log-choice="manual" ${manual ? 'checked' : ''}><span>직접 주입</span></label><label class="choice-pinned" title="자동 선택 여부와 상관없이 항상 우선 주입 후보에 포함합니다."><input type="checkbox" data-log-choice="pinned" ${pinned ? 'checked' : ''}><span>📌 항상 주입</span></label><label class="choice-excluded" title="최근·관련 로그 자동 선택에서 제외합니다. 직접 주입은 가능합니다."><input type="checkbox" data-log-choice="excluded" ${excluded ? 'checked' : ''}><span>🚫 자동 선택 제외</span></label></div><textarea data-role="log-body" spellcheck="false">${esc(block.body)}</textarea></div></details>`;
+      };
+      const activeTimeline = activeLogTimelineLabel(state.currentRoom);
+      const groups = timelineLabels.map(label => ({
+        label,
+        entries:logBlocks.map((block, index) => ({ block, index })).filter(item => blockBelongsToTimeline(item.block, label)),
+      })).filter(group => group.entries.length);
+      main.innerHTML = hasMultipleTimelines ? groups.map((group, groupIndex) => {
+        const open = normalizedLogTimelineKey(group.label) === normalizedLogTimelineKey(activeTimeline) || (!groups.some(item => normalizedLogTimelineKey(item.label) === normalizedLogTimelineKey(activeTimeline)) && groupIndex === 0);
+        const chars = group.entries.reduce((sum, item) => sum + item.block.raw.length, 0);
+        return `<details class="rpcm-detached-timeline-group" data-detached-timeline="${esc(group.label)}" ${open ? 'open' : ''}><summary><strong>🗂️ ${esc(group.label)}</strong><span>${open ? '현재 편집 · ' : ''}${group.entries.length}개 · ${formatCount(chars)}자</span><span class="rpcm-chevron">${open ? '▼' : '▶'}</span></summary><div class="rpcm-detached-timeline-body">${group.entries.map(item => cardHtml(item.block, item.index)).join('')}</div></details>`;
+      }).join('') : groups.flatMap(group => group.entries).map(item => cardHtml(item.block, item.index)).join('');
+      nav.innerHTML = hasMultipleTimelines ? groups.map((group, groupIndex) => {
+        const open = normalizedLogTimelineKey(group.label) === normalizedLogTimelineKey(activeTimeline) || (!groups.some(item => normalizedLogTimelineKey(item.label) === normalizedLogTimelineKey(activeTimeline)) && groupIndex === 0);
+        return `<details class="rpcm-detached-nav-timeline" ${open ? 'open' : ''}><summary><strong>${esc(group.label)}</strong><span>${group.entries.length}</span></summary>${group.entries.map(item => `<button type="button" class="rpcm-detached-nav-item" data-nav-index="${item.index}" title="${esc(item.block.events || item.block.fullDate)}"><i data-nav-favorite aria-label="즐겨찾기"></i><span>${esc(item.block.isUnknown ? '?' : item.block.isSpecialDate ? item.block.fullDate : `${item.block.month}/${item.block.day}`)}</span><strong>${esc(item.block.events || item.block.fullDate || `날짜 ${item.index + 1}`)}</strong></button>`).join('')}</details>`;
+      }).join('') : groups.flatMap(group => group.entries).map(item => `<button type="button" class="rpcm-detached-nav-item" data-nav-index="${item.index}" title="${esc(item.block.events || item.block.fullDate)}"><i data-nav-favorite aria-label="즐겨찾기"></i><span>${esc(item.block.isUnknown ? '?' : item.block.isSpecialDate ? item.block.fullDate : `${item.block.month}/${item.block.day}`)}</span><strong>${esc(item.block.events || item.block.fullDate || `날짜 ${item.index + 1}`)}</strong></button>`).join('');
+      bindDetachedNavItems();
+      if (formatEl) formatEl.textContent = `날짜 블록 ${logBlocks.length}개${hasMultipleTimelines ? ` · 시간선 ${groups.length}개` : ''} · [날짜-키워드]`;
+      if (addLogBtn) addLogBtn.hidden = false;
+      refreshDetachedLogSelectionUi();
+      refreshDetachedBulkUi();
+      return true;
+    };
+
+    const insertDetachedLogBlock = (position, timelineLabel = '') => {
+      const cards = [...main.querySelectorAll('.rpcm-detached-log-card[data-log-index]')];
+      if (!cards.length) {
+        if (!renderLogBlocks(detachedNewLogHeading(timelineLabel), [''])) return;
+        bindBlockActions();
+        userEdited = true;
+        refreshDirty();
+        const input = main.querySelector('input[data-role="log-heading"]');
+        requestAnimationFrame(() => { input?.focus(); input?.select(); });
+        return;
+      }
+      const text = collectLogsFromDom();
+      const blocks = parseDatedLogBlocks(text);
+      if (blocks.length !== cards.length) {
+        notify('날짜 제목 형식을 먼저 확인해 주세요. 제목은 [날짜-키워드] 형태여야 합니다.', 'warn', 5200);
+        return;
+      }
+      const origins = cards.map((card, index) => String(card.dataset.logOriginKey || card.dataset.logKey || blocks[index]?.key || ''));
+      const pieces = blocks.map(block => String(block.raw || '').trim());
+      const at = Math.max(0, Math.min(pieces.length, Number(position)));
+      pieces.splice(at, 0, detachedNewLogHeading(timelineLabel));
+      origins.splice(at, 0, '');
+      if (!renderLogBlocks(pieces.filter(Boolean).join('\n\n'), origins)) return;
+      bindBlockActions();
+      userEdited = true;
+      refreshDirty();
+      const card = main.querySelector(`.rpcm-detached-log-card[data-log-index="${at}"]`);
+      const input = card?.querySelector('input[data-role="log-heading"]');
+      card?.scrollIntoView({ behavior:'smooth', block:'center' });
+      requestAnimationFrame(() => { input?.focus(); input?.select(); });
+    };
+
+    const deleteDetachedLogBlock = card => {
+      const cards = [...main.querySelectorAll('.rpcm-detached-log-card[data-log-index]')];
+      const index = Number(card?.dataset.logIndex);
+      if (!Number.isInteger(index) || index < 0) return;
+      const title = detachedLogHeading(card, index).replace(/^\[|\]$/g, '');
+      if (!confirm(`‘${title}’ 날짜 블록을 삭제할까요?`)) return;
+      const pieces = cards.map(item => {
+        if (item === card) return '';
+        const itemIndex = Number(item.dataset.logIndex);
+        const heading = detachedLogHeading(item, itemIndex);
+        const body = String(item.querySelector('textarea[data-role="log-body"]')?.value || '').trim();
+        return `${heading}${body ? `\n${body}` : ''}`;
+      }).filter(Boolean);
+      const origins = cards.filter(item => item !== card).map(item => String(item.dataset.logOriginKey || item.dataset.logKey || ''));
+      if (pieces.length && parseDatedLogBlocks(pieces.join('\n\n')).length !== pieces.length) {
+        notify('남은 날짜 제목 형식을 먼저 확인해 주세요.', 'warn', 4200);
+        return;
+      }
+      const originKey = String(card.dataset.logOriginKey || card.dataset.logKey || '');
+      if (originKey) {
+        setRoomLogSelectionKey('manualLogSelectedKeys', originKey, false);
+        setRoomLogSelectionKey('autoLogPinnedKeys', originKey, false);
+        setRoomLogSelectionKey('autoLogExcludedKeys', originKey, false);
+        setRoomLogSelectionKey('favoriteLogKeys', originKey, false);
+        logSelectionChanged = true;
+        persistDetachedLogSelectionSoon();
+      }
+      if (pieces.length) {
+        if (!renderLogBlocks(pieces.join('\n\n'), origins)) {
+          notify('남은 날짜 제목 형식을 확인해 주세요.', 'warn', 4200);
+          return;
+        }
+        bindBlockActions();
+      } else {
+        renderEmptyLogBlocks();
+      }
+      userEdited = true;
+      refreshDirty();
+    };
+
+    const renderRaw = text => {
+      if (logSelectionSummaryEl) logSelectionSummaryEl.hidden = true;
+      if (addLogBtn) addLogBtn.hidden = true;
+      main.innerHTML = `<div class="rpcm-detached-raw-wrap"><div class="rpcm-detached-raw-note">${kind === 'currentState' ? '블록 문법: 구분선 → N. 섹션명 → 동일 구분선' : kind === 'logSummary' ? '블록 문법: [날짜-키워드] 다음 줄부터 본문' : '원문 편집'}</div><textarea id="rpcm-detached-raw" spellcheck="false">${esc(text)}</textarea></div>`;
+      nav.innerHTML = '<div class="rpcm-detached-nav-empty">원문 보기</div>';
+      if (formatEl) formatEl.textContent = '원문 편집 모드';
+      bindEditorTextareas();
+    };
+
+    const renderEmptyLogBlocks = () => {
+      logBlocks = [];
+      logOriginKeys = [];
+      main.innerHTML = '<div class="rpcm-detached-empty-log">날짜 블록이 없습니다.<br>상단의 ‘＋ 날짜 블록 추가’로 새 블록을 만들 수 있습니다.</div>';
+      renderNav([]);
+      if (formatEl) formatEl.textContent = '날짜 블록 0개';
+      if (addLogBtn) addLogBtn.hidden = false;
+      refreshDetachedLogSelectionUi();
+      return true;
+    };
+
+    const bindBlockActions = () => {
+      bindEditorTextareas();
+      main.querySelectorAll('.rpcm-detached-timeline-group').forEach(group => group.addEventListener('toggle', () => {
+        const chev = group.querySelector(':scope > summary .rpcm-chevron');
+        if (chev) chev.textContent = group.open ? '▼' : '▶';
+      }));
+      main.querySelectorAll('.rpcm-detached-card').forEach(card => card.addEventListener('toggle', () => {
+        const chev = card.querySelector('.rpcm-chevron'); if (chev) chev.textContent = card.open ? '▼' : '▶';
+      }));
+      if (kind === 'logSummary') {
+        main.querySelectorAll('.rpcm-detached-log-card[data-log-key]').forEach(card => {
+          const headingInput = card.querySelector('input[data-role="log-heading"]');
+          const timelineSelect = card.querySelector('select[data-role="log-timeline"]');
+          const updateHeadingPreview = normalize => {
+            const idx = Number(card.dataset.logIndex);
+            const heading = detachedLogHeading(card, idx, normalize);
+            const preview = card.querySelector('[data-log-title-preview]');
+            if (preview) preview.textContent = heading;
+            const navTitle = nav.querySelector(`[data-nav-index="${idx}"] strong`);
+            if (navTitle) navTitle.textContent = heading.replace(/^\[|\]$/g, '');
+          };
+          if (headingInput) {
+            headingInput.oninput = () => { userEdited = true; updateHeadingPreview(false); refreshDetachedAfterInput(); };
+            headingInput.onblur = () => { updateHeadingPreview(true); refreshDirty(); };
+          }
+          if (timelineSelect) timelineSelect.onchange = () => {
+            const idx = Number(card.dataset.logIndex);
+            if (!headingInput) return;
+            const heading = detachedLogHeading(card, idx, true);
+            const body = String(card.querySelector('textarea[data-role="log-body"]')?.value || '').trim();
+            const parsed = parseDatedLogBlocks(`${heading}${body ? `\n${body}` : ''}`)[0];
+            if (!parsed) {
+              timelineSelect.value = logTimelineLabelOfBlock(logBlocks[idx]);
+              notify('시간선을 바꾸기 전에 날짜 제목 형식을 확인해 주세요.', 'warn', 4200);
+              return;
+            }
+            headingInput.value = formatLogHeadingForTimeline(parsed, timelineSelect.value);
+            userEdited = true;
+            updateHeadingPreview(false);
+            const originKey = String(card.dataset.logOriginKey || card.dataset.logKey || '');
+            const cards = [...main.querySelectorAll('.rpcm-detached-log-card[data-log-index]')];
+            const origins = cards.map(item => String(item.dataset.logOriginKey || item.dataset.logKey || ''));
+            const nextText = collectLogsFromDom();
+            if (renderLogBlocks(nextText, origins)) {
+              bindBlockActions();
+              const moved = originKey ? main.querySelector(`.rpcm-detached-log-card[data-log-origin-key="${CSS.escape(originKey)}"]`) : null;
+              moved?.closest('.rpcm-detached-timeline-group')?.setAttribute('open', '');
+              moved?.scrollIntoView({ behavior:'smooth', block:'center' });
+            }
+            refreshDetachedAfterInput();
+          };
+          card.querySelectorAll('[data-log-insert]').forEach(button => button.onclick = event => {
+            event.preventDefault(); event.stopPropagation();
+            const idx = Number(card.dataset.logIndex);
+            insertDetachedLogBlock(idx + (button.dataset.logInsert === 'after' ? 1 : 0), timelineSelect?.value || logTimelineLabelOfBlock(logBlocks[idx]));
+          });
+          const bulkCheckbox = card.querySelector('[data-log-bulk-select]');
+          if (bulkCheckbox) bulkCheckbox.onchange = refreshDetachedBulkUi;
+          const selectAfterButton = card.querySelector('.rpcm-detached-log-select-after');
+          if (selectAfterButton) selectAfterButton.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const group = card.closest('.rpcm-detached-timeline-group');
+            const groupCards = [...(group?.querySelectorAll('.rpcm-detached-log-card') || [])];
+            const start = groupCards.indexOf(card);
+            groupCards.slice(Math.max(0, start)).forEach(item => {
+              const checkbox = item.querySelector('[data-log-bulk-select]');
+              if (checkbox) checkbox.checked = true;
+            });
+            refreshDetachedBulkUi();
+          };
+          card.querySelectorAll('[data-log-choice]').forEach(input => input.onchange = () => {
+            const key = String(card.dataset.logKey || '');
+            const choice = String(input.dataset.logChoice || '');
+            if (!key || !choice) return;
+            if (choice === 'manual') {
+              setRoomLogSelectionKey('manualLogSelectedKeys', key, input.checked);
+            } else if (choice === 'favorite') {
+              setRoomLogSelectionKey('favoriteLogKeys', key, input.checked);
+            } else if (choice === 'pinned') {
+              setRoomLogSelectionKey('autoLogPinnedKeys', key, input.checked);
+              if (input.checked) {
+                const excluded = card.querySelector('[data-log-choice="excluded"]');
+                if (excluded) excluded.checked = false;
+                setRoomLogSelectionKey('autoLogExcludedKeys', key, false);
+              }
+            } else if (choice === 'excluded') {
+              setRoomLogSelectionKey('autoLogExcludedKeys', key, input.checked);
+              if (input.checked) {
+                const pinned = card.querySelector('[data-log-choice="pinned"]');
+                if (pinned) pinned.checked = false;
+                setRoomLogSelectionKey('autoLogPinnedKeys', key, false);
+              }
+            }
+            logSelectionChanged = true;
+            refreshDetachedLogSelectionUi();
+            persistDetachedLogSelectionSoon();
+          });
+          const deleteButton = card.querySelector('.rpcm-detached-card-delete');
+          if (deleteButton) deleteButton.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            deleteDetachedLogBlock(card);
+          };
+        });
+      }
+      main.querySelectorAll('.rpcm-detached-card-copy').forEach(btn => btn.onclick = async event => {
+        event.preventDefault(); event.stopPropagation();
+        const card = btn.closest('.rpcm-detached-card');
+        let text = '';
+        if (kind === 'currentState') {
+          const idx = Number(card?.dataset.sectionIndex);
+          const title = String(card?.dataset.sectionTitle || currentSections[idx]?.title || '섹션');
+          const single = card?.querySelector('textarea[data-role="section-body"]');
+          let body = single?.value || '';
+          if (!single) {
+            const intro = card?.querySelector('textarea[data-role="section-intro"]')?.value || '';
+            const blocks = [...(card?.querySelectorAll('.rpcm-detached-subblock') || [])].map(sub => ({ title:String(sub.dataset.subTitle || ''), body:sub.querySelector('textarea[data-role="sub-body"]')?.value || '' }));
+            body = buildCurrentStateSubblockBody({ intro, blocks });
+          }
+          text = `${CURRENT_STATE_SECTION_RULE}\n${idx + 1}. ${title}\n${CURRENT_STATE_SECTION_RULE}${String(body).trim() ? `\n${String(body).trim()}` : ''}`;
+        } else if (kind === 'logSummary') {
+          const idx = Number(card?.dataset.logIndex);
+          const heading = detachedLogHeading(card, idx);
+          const body = card?.querySelector('textarea[data-role="log-body"]')?.value || '';
+          text = `${heading}${String(body).trim() ? `\n${String(body).trim()}` : ''}`;
+        }
+        const ok = await copyPlainText(text);
+        notify(ok ? '이 블록을 복사했습니다.' : '블록 복사에 실패했습니다.', ok ? 'success' : 'error', 2600);
+      });
+      main.querySelectorAll('.rpcm-detached-subcopy').forEach(btn => btn.onclick = async event => {
+        event.preventDefault(); event.stopPropagation();
+        const sub = btn.closest('.rpcm-detached-subblock');
+        const title = String(sub?.dataset.subTitle || '');
+        const body = sub?.querySelector('textarea[data-role="sub-body"]')?.value || '';
+        const ok = await copyPlainText(`[${title}]${String(body).trim() ? `\n${String(body).trim()}` : ''}`);
+        notify(ok ? '하위 블록을 복사했습니다.' : '복사에 실패했습니다.', ok ? 'success' : 'error', 2400);
+      });
+    };
+
+    const renderBlocks = text => {
+      mode = 'blocks';
+      if (kind === 'logSummary' && !String(text || '').trim()) {
+        renderEmptyLogBlocks();
+        if (modeBtn) modeBtn.textContent = '원문 보기';
+        if (expandBtn) expandBtn.disabled = true;
+        if (collapseBtn) collapseBtn.disabled = true;
+        refreshDirty();
+        return true;
+      }
+      const parsedCount = kind === 'logSummary' ? parseDatedLogBlocks(text).length : 0;
+      const preservedOrigins = kind === 'logSummary' && logOriginKeys.length === parsedCount ? logOriginKeys : null;
+      const ok = kind === 'currentState' ? renderCurrentStateBlocks(text) : kind === 'logSummary' ? renderLogBlocks(text, preservedOrigins) : false;
+      if (!ok) {
+        mode = 'raw';
+        renderRaw(text);
+        if (modeBtn) modeBtn.textContent = '블록 보기';
+        if (expandBtn) expandBtn.disabled = true;
+        if (collapseBtn) collapseBtn.disabled = true;
+        if (formatEl) formatEl.textContent = kind === 'currentState' ? '⚠ 현재상태 블록 문법 미감지' : kind === 'logSummary' ? '⚠ 날짜 블록 문법 미감지' : '원문 편집 모드';
+        return false;
+      }
+      if (modeBtn) modeBtn.textContent = '원문 보기';
+      if (expandBtn) expandBtn.disabled = false;
+      if (collapseBtn) collapseBtn.disabled = false;
+      bindBlockActions();
+      refreshDirty();
+      return true;
+    };
+
+    const renderInitial = () => {
+      if (kind === 'plain') { mode = 'raw'; renderRaw(originalText); modeBtn.hidden = true; expandBtn.disabled = true; collapseBtn.disabled = true; }
+      else renderBlocks(originalText);
+      refreshDirty();
+    };
+
+    modeBtn.onclick = () => {
+      const text = activeText();
+      if (mode === 'blocks') {
+        mode = 'raw';
+        renderRaw(text);
+        modeBtn.textContent = '블록 보기';
+        expandBtn.disabled = true; collapseBtn.disabled = true;
+        refreshDirty();
+      } else {
+        if (!renderBlocks(text)) notify(kind === 'currentState' ? '현재상태 고정 3줄 문법을 찾지 못해 원문 보기를 유지합니다.' : '날짜 제목 [날짜-키워드] 블록을 찾지 못해 원문 보기를 유지합니다.', 'warn', 4400);
+      }
+    };
+
+    expandBtn.onclick = () => main.querySelectorAll('.rpcm-detached-timeline-group,.rpcm-detached-card').forEach(card => { card.open = true; });
+    collapseBtn.onclick = () => main.querySelectorAll('.rpcm-detached-card,.rpcm-detached-timeline-group').forEach(card => { card.open = false; });
+    if (favoriteOnlyBtn) favoriteOnlyBtn.onclick = () => { favoriteOnly = !favoriteOnly; applyDetachedFavoriteFilter(); };
+    if (addLogBtn) addLogBtn.onclick = () => insertDetachedLogBlock(logBlocks.length);
+    backdrop.querySelector('#rpcm-detached-log-bulk-clear')?.addEventListener('click', () => {
+      main.querySelectorAll('[data-log-bulk-select]').forEach(input => { input.checked = false; });
+      refreshDetachedBulkUi();
+    });
+    backdrop.querySelector('#rpcm-detached-log-bulk-move')?.addEventListener('click', () => {
+      const target = cleanLogTimelineLabel(logBulkTarget?.value) || DEFAULT_LOG_TIMELINE;
+      const cards = [...main.querySelectorAll('.rpcm-detached-log-card[data-log-index]')];
+      const pieces = [];
+      const origins = [];
+      let movedCount = 0;
+      for (const card of cards) {
+        const index = Number(card.dataset.logIndex);
+        const heading = detachedLogHeading(card, index, true);
+        const body = String(card.querySelector('textarea[data-role="log-body"]')?.value || '').trim();
+        const parsed = parseDatedLogBlocks(`${heading}${body ? `\n${body}` : ''}`)[0];
+        if (!parsed) {
+          notify('선택한 블록 중 날짜 제목 형식을 인식하지 못한 항목이 있습니다.', 'warn', 4600);
+          return;
+        }
+        const selected = !!card.querySelector('[data-log-bulk-select]')?.checked;
+        pieces.push(`${selected ? formatLogHeadingForTimeline(parsed, target) : heading}${body ? `\n${body}` : ''}`);
+        origins.push(String(card.dataset.logOriginKey || card.dataset.logKey || ''));
+        if (selected) movedCount++;
+      }
+      if (!movedCount) return;
+      if (renderLogBlocks(pieces.join('\n\n'), origins)) {
+        bindBlockActions();
+        userEdited = true;
+        const destination = main.querySelector(`.rpcm-detached-timeline-group[data-detached-timeline="${CSS.escape(target)}"]`);
+        if (destination) destination.open = true;
+        refreshDirty();
+        notify(`${movedCount}개 날짜 블록을 ‘${target}’으로 옮겼습니다. 적용하고 닫기를 누르면 저장됩니다.`, 'success', 4200);
+      }
+    });
+    backdrop.querySelector('#rpcm-detached-copy').onclick = async () => {
+      const ok = await copyPlainText(activeText());
+      notify(ok ? `‘${slot.title}’ 전체를 복사했습니다.` : '전체 복사에 실패했습니다.', ok ? 'success' : 'error', 2800);
+    };
+
+    const clearDetachedSearchVisuals = () => {
+      main.querySelectorAll('.rpcm-detached-card.is-search-hit').forEach(card => card.classList.remove('is-search-hit'));
+      main.querySelectorAll('.is-search-active-field').forEach(field => field.classList.remove('is-search-active-field'));
+      main.querySelectorAll('.is-search-active-label').forEach(el => el.classList.remove('is-search-active-label'));
+    };
+
+    const findAllOccurrences = (value, query) => {
+      const hay = String(value || '').toLocaleLowerCase('ko-KR');
+      const hits = [];
+      let from = 0;
+      while (query && from <= hay.length) {
+        const at = hay.indexOf(query, from);
+        if (at < 0) break;
+        hits.push([at, at + query.length]);
+        from = at + Math.max(1, query.length);
+        if (hits.length >= 500) break;
+      }
+      return hits;
+    };
+
+    const selectionOffsetY = (textarea, start) => {
+      try {
+        const cs = getComputedStyle(textarea);
+        const mirror = document.createElement('div');
+        mirror.setAttribute('aria-hidden', 'true');
+        Object.assign(mirror.style, {
+          position:'fixed', left:'-100000px', top:'0', visibility:'hidden', pointerEvents:'none',
+          boxSizing:'border-box', width:`${textarea.getBoundingClientRect().width}px`,
+          whiteSpace:'pre-wrap', overflowWrap:'break-word', wordBreak:'break-word',
+          paddingTop:cs.paddingTop, paddingRight:cs.paddingRight, paddingBottom:cs.paddingBottom, paddingLeft:cs.paddingLeft,
+          borderTopWidth:cs.borderTopWidth, borderRightWidth:cs.borderRightWidth, borderBottomWidth:cs.borderBottomWidth, borderLeftWidth:cs.borderLeftWidth,
+          borderStyle:'solid', fontFamily:cs.fontFamily, fontSize:cs.fontSize, fontWeight:cs.fontWeight, fontStyle:cs.fontStyle,
+          lineHeight:cs.lineHeight, letterSpacing:cs.letterSpacing, tabSize:cs.tabSize || '8'
+        });
+        mirror.append(document.createTextNode(String(textarea.value || '').slice(0, start)));
+        const marker = document.createElement('span');
+        marker.textContent = String(textarea.value || '').slice(start, start + 1) || ' ';
+        mirror.appendChild(marker);
+        document.body.appendChild(mirror);
+        const y = marker.offsetTop;
+        mirror.remove();
+        return Number.isFinite(y) ? y : 0;
+      } catch (_) { return 0; }
+    };
+
+    const revealTextareaHit = hit => {
+      const ta = hit.textarea || hit.raw;
+      if (!ta) return;
+      const card = hit.card || ta.closest('.rpcm-detached-card');
+      if (card) {
+        card.closest('.rpcm-detached-timeline-group')?.setAttribute('open', '');
+        card.open = true;
+        card.classList.add('is-search-hit');
+      }
+      ta.classList.add('is-search-active-field');
+      const offsetY = selectionOffsetY(ta, hit.start);
+      const mainRect = main.getBoundingClientRect();
+      const taRect = ta.getBoundingClientRect();
+      const desired = main.scrollTop + (taRect.top - mainRect.top) + offsetY - Math.max(80, main.clientHeight * .40);
+      main.scrollTo({ top:Math.max(0, desired), behavior:'smooth' });
+      // 검색어 자체가 눈에 보이도록 실제 해당 문자열을 선택합니다.
+      requestAnimationFrame(() => {
+        try { ta.focus({ preventScroll:true }); } catch (_) { ta.focus(); }
+        try { ta.setSelectionRange(hit.start, hit.end); } catch (_) {}
+      });
+    };
+
+    const collectSearchHits = () => {
+      const query = String(searchInput.value || '').trim().toLocaleLowerCase('ko-KR');
+      lastSearchQuery = query;
+      searchHits = []; searchIndex = -1;
+      clearDetachedSearchVisuals();
+      if (!query) { searchCount.textContent = '0 / 0'; return; }
+      if (mode === 'raw') {
+        const raw = main.querySelector('#rpcm-detached-raw');
+        for (const [start, end] of findAllOccurrences(raw?.value || '', query)) searchHits.push({ raw, start, end });
+      } else {
+        main.querySelectorAll('.rpcm-detached-card').forEach(card => {
+          if (favoriteOnly && card.matches('.rpcm-detached-log-card') && !card.classList.contains('is-log-favorite')) return;
+          // 본문은 '카드 단위'가 아니라 실제 등장 위치마다 검색 결과를 만듭니다.
+          card.querySelectorAll('textarea,input[data-role="log-heading"]').forEach(textarea => {
+            for (const [start, end] of findAllOccurrences(textarea.value, query)) searchHits.push({ card, textarea, start, end });
+          });
+          // 섹션/하위블록 제목도 검색 가능하게 유지합니다.
+          card.querySelectorAll(':scope > summary strong, .rpcm-detached-subhead strong').forEach(label => {
+            if (String(label.textContent || '').toLocaleLowerCase('ko-KR').includes(query)) searchHits.push({ card, label });
+          });
+        });
+      }
+      searchCount.textContent = searchHits.length ? `– / ${searchHits.length}` : '0 / 0';
+    };
+
+    const showSearchHit = direction => {
+      const query = String(searchInput.value || '').trim().toLocaleLowerCase('ko-KR');
+      if (query !== lastSearchQuery || !searchHits.length) collectSearchHits();
+      if (!searchHits.length) return;
+      clearDetachedSearchVisuals();
+      searchIndex = (searchIndex + direction + searchHits.length) % searchHits.length;
+      const hit = searchHits[searchIndex];
+      if (hit.textarea || hit.raw) {
+        revealTextareaHit(hit);
+      } else if (hit.card) {

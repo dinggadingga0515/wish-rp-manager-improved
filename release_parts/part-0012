@@ -1,0 +1,1000 @@
+  function saveSemanticApiKey(value){
+    const key=String(value||'').trim();if(!key)throw new Error('의미검색용 Gemini API 키를 입력해 주세요.');
+    const old=readSemanticApiKey();
+    if(!writeAiSecret('semanticGemini',key)||readAiSecret('semanticGemini').trim()!==key)throw new Error('검색용 키를 저장하지 못했습니다. 다시 시도해 주세요.');
+    if(old!==key){
+      for(const runtime of semanticRuntime.rooms.values()){runtime.epoch++;runtime.query=null;runtime.error='';runtime.retryAt=0;}
+      semanticRuntime.queries.clear();semanticRuntime.queryRequests.clear();semanticRuntime.cooldowns.clear();
+    }
+    if(state.currentRoom)semanticRefreshUi(state.currentRoom);
+  }
+  function semanticRoom(room){
+    const id=String(room.chatId);let runtime=semanticRuntime.rooms.get(id);
+    if(!runtime){runtime={rows:new Map(),loaded:false,loading:null,indexing:null,rerun:false,timer:null,epoch:0,query:null,status:'의미 검색 준비 필요',error:'',retryAt:0};semanticRuntime.rooms.set(id,runtime);}
+    return runtime;
+  }
+  function semanticSourceHash(text){return `${String(text).length}:${simpleHash(text)}:${simpleHash([...String(text)].reverse().join(''))}`;}
+  function semanticDocuments(room){
+    const logs=parseDatedLogBlocks((room.slots||[]).find(slot=>slot.id==='logSummary')?.content||'').map(block=>{
+      const source=JSON.stringify([logTimelineLabelOfBlock(block),block.titleText,block.events,block.body,block.raw]);
+      return {kind:'log',key:String(block.key),id:'log:'+block.key,source,sourceHash:semanticSourceHash(source),text:`시간선: ${logTimelineLabelOfBlock(block)}\n날짜·제목: ${block.titleText}\n사건: ${block.events||''}\n${block.body||block.raw}`};
+    });
+    const lore=[];
+    for(const pack of lorePacksFor(room))for(const card of pack.cards||[]){
+      if(!card.id||pack.enabled===false||card.enabled===false||card.mode!=='auto')continue;
+      const fields=loreCardContentFields(card);
+      const source=JSON.stringify([String(pack.id),card.title,card.type,card.aliases||[],card.triggers||[],card.entities||[],fields]);
+      lore.push({kind:'lore',key:`${pack.id}:${card.id}`,id:`lore:${pack.id}:${card.id}`,source,sourceHash:semanticSourceHash(source),text:`제목: ${card.title||''}\n유형: ${card.type||''}\n별칭: ${(card.aliases||[]).join(' · ')}\n감지어: ${(card.triggers||[]).join(' · ')}\n연결 대상: ${(card.entities||[]).join(' · ')}\n${JSON.stringify(fields)}`});
+    }
+    return logs.concat(lore);
+  }
+  function semanticValidRow(row,doc){return !!row&&row.sourceHash===doc.sourceHash&&row.source===doc.source&&row.model===SEMANTIC_SEARCH.model&&row.dimensions===SEMANTIC_SEARCH.dimensions&&Array.isArray(row.vector)&&row.vector.length===SEMANTIC_SEARCH.dimensions&&row.vector.every(Number.isFinite);}
+  function semanticNormalizeVector(vector){
+    if(!Array.isArray(vector)||vector.length!==SEMANTIC_SEARCH.dimensions||!vector.every(Number.isFinite))throw new Error('임베딩 차원 또는 값이 올바르지 않습니다.');
+    const length=Math.hypot(...vector);if(!Number.isFinite(length)||length<=0)throw new Error('비어 있는 임베딩입니다.');return vector.map(value=>value/length);
+  }
+  function semanticCosine(a,b){if(a.length!==b.length)return 0;return Math.max(-1,Math.min(1,a.reduce((sum,value,index)=>sum+value*b[index],0)));}
+  function semanticOpenDb(){
+    if(semanticRuntime.db)return semanticRuntime.db;
+    semanticRuntime.db=new Promise((resolve,reject)=>{const request=indexedDB.open('wish-rp-semantic-derived-v1',1);request.onupgradeneeded=()=>{const store=request.result.createObjectStore('vectors',{keyPath:'id'});store.createIndex('roomId','roomId');};request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);request.onblocked=()=>reject(new Error('의미 검색 저장소가 다른 탭에서 준비 중입니다.'));});
+    semanticRuntime.db.catch(()=>{semanticRuntime.db=null;});return semanticRuntime.db;
+  }
+  async function semanticLoad(room,refresh=false){
+    const runtime=semanticRoom(room);if(runtime.loading)return runtime.loading;if(refresh)runtime.loaded=false;if(runtime.loaded)return;
+    runtime.loading=(async()=>{const db=await semanticOpenDb();const rows=await new Promise((resolve,reject)=>{const tx=db.transaction('vectors','readonly'),request=tx.objectStore('vectors').index('roomId').getAll(String(room.chatId));request.onsuccess=()=>wishResolveStorageRecord(request,[],resolve,reject);request.onerror=()=>reject(request.error);tx.onabort=()=>reject(tx.error||new Error('의미 검색 인덱스 조회 취소'));tx.onerror=()=>reject(tx.error||new Error('의미 검색 인덱스 조회 실패'));});
+      const docs=new Map(semanticDocuments(room).map(doc=>[doc.id,doc]));for(const row of rows)if(semanticValidRow(row,docs.get(row.documentId)||{}))runtime.rows.set(row.documentId,row);runtime.loaded=true;
+    })().finally(()=>{runtime.loading=null;});return runtime.loading;
+  }
+  async function semanticStoreRows(room, rows) {
+    if (!rows.length) return true;
+    const runtime=semanticRoom(room), epoch=runtime.epoch, roomId=String(room.chatId);
+    const current=()=>state.currentRoom===room && semanticEnabled(room) && runtime.epoch===epoch && String(room.chatId)===roomId;
+    const valid=()=>{
+      if (!current()) return false;
+      const docs=new Map(semanticDocuments(room).map(doc=>[doc.id,doc]));
+      return rows.every(row=>row.roomId===roomId && row.id===JSON.stringify([roomId,row.documentId,row.sourceHash,row.model,row.dimensions]) && semanticValidRow(row,docs.get(row.documentId)||{}));
+    };
+    if (!valid()) {runtime.rerun=true;return false;}
+    // A stale tab's local source cannot authorize deleting newer stored indexes.
+    let persistedDocs=new Map();
+    try {const stored=await readManualStoredRoom(room);if(stored)persistedDocs=new Map(semanticDocuments(stored).map(doc=>[doc.id,doc]));}catch(_){}
+    const replacements=new Map(rows.map(row=>[row.documentId,row]));
+    const gcAllowed=new Set(rows.filter(row=>{const doc=persistedDocs.get(row.documentId);return doc?.source===row.source && doc?.sourceHash===row.sourceHash;}).map(row=>row.documentId));
+    const db=await semanticOpenDb();
+    if (!valid()) {runtime.rerun=true;return false;}
+    let removed=0, removedBytes=0, keysChecked=0, rowsRead=0;
+    await new Promise((resolve,reject)=>{
+      const tx=db.transaction('vectors','readwrite'), store=tx.objectStore('vectors');
+      let failure=null;
+      const abort=error=>{failure=error;try{tx.abort();}catch(_){};};
+      tx.oncomplete=resolve;
+      tx.onabort=()=>reject(failure||tx.error||new Error('검색 인덱스 저장·정리 취소'));
+      tx.onerror=()=>reject(tx.error||new Error('검색 인덱스 저장·정리 실패'));
+      const commit=oldRows=>{
+        try {
+          if (!valid()) {runtime.rerun=true;throw new Error('검색 원문이 바뀌어 색인 저장·정리를 중단했습니다.');}
+          for (const row of rows) store.put(row);
+          for (const old of oldRows) {
+            const fresh=replacements.get(old?.documentId);
+            if (!fresh || !gcAllowed.has(old.documentId) || old.roomId!==roomId || old.id===fresh.id || old.model!==fresh.model || old.dimensions!==fresh.dimensions) continue;
+            if (String(old.updatedAt||'')>String(fresh.updatedAt||'')) continue;
+            store.delete(old.id);removed++;removedBytes+=utf8ByteLength(JSON.stringify(old));
+          }
+        } catch(error) {abort(error);}
+      };
+      if (!gcAllowed.size) {commit([]);return;}
+      // Read keys instead of all original text and vectors for every batch.
+      const request=store.index('roomId').getAllKeys(roomId);
+      request.onerror=()=>abort(request.error||new Error('검색 인덱스 정리 대상 조회 실패'));
+      request.onsuccess=()=>{
+        try {
+          const keys=(request.result||[]).filter(key=>{
+            keysChecked++;let parts;try{parts=JSON.parse(key);}catch(_){return false;}
+            if(!Array.isArray(parts)||parts.length!==5||parts[0]!==roomId)return false;
+            const fresh=replacements.get(parts[1]);
+            return fresh && gcAllowed.has(parts[1]) && key!==fresh.id && parts[3]===fresh.model && parts[4]===fresh.dimensions;
+          });
+          if (!keys.length) {commit([]);return;}
+          let waiting=keys.length;const oldRows=[];
+          for (const key of keys) {
+            rowsRead++;const get=store.get(key);
+            get.onerror=()=>abort(get.error||new Error('검색 인덱스 이전 버전 조회 실패'));
+            get.onsuccess=()=>{if(get.result)oldRows.push(get.result);if(--waiting===0)commit(oldRows);};
+          }
+        }catch(error){abort(error);}
+      };
+    });
+    runtime.maintenance={written:rows.length,removed,removedBytes,keysChecked,rowsRead,checkedAt:nowIso()};
+    return true;
+  }
+  // Derived quota state contains no credentials or source text. Web Locks coordinate tabs.
+  const semanticApiQueues=new Map();
+  function semanticQuotaKey(secret){return 'RPCM_semantic_quota_v1:'+semanticSourceHash(secret);}
+  function semanticQuotaGate(secret){
+    try{return JSON.parse(GM_getValue(semanticQuotaKey(secret),'{}'))||{};}catch(_){return {};}
+  }
+  function semanticWriteQuota(secret,value){GM_setValue(semanticQuotaKey(secret),JSON.stringify(value));}
+  function semanticApiError(response,data){
+    const error=new Error(`Gemini 의미검색 오류 ${response.status}`);error.httpStatus=response.status;error.diagnostic={service:'embedding',host:'generativelanguage.googleapis.com',httpStatus:Number(response.status)};error.retryMs=Math.max(rpcmNetRetryAfter(response.responseHeaders),rpcmAiRetryInfo(data));
+    if(response.status===429){
+      const details=Array.isArray(data?.error?.details)?data.error.details:[];
+      const quota=details.flatMap(row=>row.violations||[]).map(row=>String(row.quotaId||row.quotaMetric||row.description||''));
+      const meta=details.map(row=>JSON.stringify(row.metadata||{})).join(' ');
+      const description=quota.join(' ')+' '+meta+' '+String(data?.error?.message||'');
+      error.dailyQuota=/per.?day|\/d(?:ay)?\b|daily/i.test(description);
+      error.zeroQuota=details.some(row=>(row.violations||[]).some(v=>v.quotaValue==='0'));
+      const delay=details.find(row=>String(row['@type']||'').endsWith('RetryInfo'))?.retryDelay;
+      const seconds=typeof delay==='object'?Number(delay.seconds||0)+Number(delay.nanos||0)/1e9:parseFloat(String(delay||'0'));
+      const header=String(response.responseHeaders||'').match(/^retry-after:\s*(.+)$/im)?.[1];
+      const headerMs=header?(Number.isFinite(Number(header))?Number(header)*1000:Math.max(0,Date.parse(header)-Date.now())):0;
+      error.retryMs=Math.max(Number.isFinite(seconds)?seconds*1000:0,headerMs||0);
+      error.message=error.zeroQuota?'Gemini 의미검색 429 · 검색 모델의 허용량이 0입니다. AI Studio 한도를 확인해 주세요':error.dailyQuota?'Gemini 의미검색 429 · 일일 허용량 초과':'Gemini 의미검색 429 · 요청량 제한';
+    }
+    return error;
+  }
+  async function semanticApiRequest(secret,texts,taskType,timeout,valid=()=>true){
+    const deadline=Date.now()+timeout,lockName=semanticQuotaKey(secret);
+    const run=async()=>{
+      if(!valid())throw new Error('의미 검색이 중지되었습니다.');
+      const gate=semanticQuotaGate(secret),now=Date.now();
+      if(now<(gate.retryAt||0))throw new Error(`${gate.message} · 재시도 대기 중`);
+      const wait=Math.max(0,(gate.nextAt||0)-now);
+      if(wait+250>=deadline-now)throw new Error('검색 API 요청 간격 대기 · 이번에는 로컬 검색 사용');
+      if(wait)await new Promise(resolve=>setTimeout(resolve,wait));
+      if(!valid())throw new Error('의미 검색이 중지되었습니다.');
+      const remaining=deadline-Date.now();if(remaining<=0)throw new Error('의미검색 대기 시간 초과 · 로컬 검색 사용');
+      try{
+        // A batch represents multiple embedding inputs; space large batches farther apart.
+        semanticWriteQuota(secret,{...gate,nextAt:Date.now()+Math.max(2000,texts.length*200)});
+        const result=await semanticRawApiRequest(secret,texts,taskType,remaining);
+        semanticWriteQuota(secret,{nextAt:semanticQuotaGate(secret).nextAt||Date.now(),retryAt:0,strikes:0,message:''});
+        return result;
+      }catch(error){
+        if(error.httpStatus===429){
+          const strikes=Math.min(6,Number(gate.strikes||0)+1);
+          const backoff=error.dailyQuota||error.zeroQuota?3600000:Math.min(900000,60000*2**(strikes-1));
+          semanticWriteQuota(secret,{nextAt:Date.now(),retryAt:Date.now()+Math.max(error.retryMs||0,backoff)+Math.floor(Math.random()*1000),strikes,message:error.message});
+        }
+        throw error;
+      }
+    };
+    if(navigator.locks?.request){
+      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),Math.max(1,timeout));
+      try{return await navigator.locks.request(lockName,{mode:'exclusive',signal:controller.signal},run);}
+      catch(error){if(error.name==='AbortError')throw new Error('의미검색 요청 대기 시간 초과 · 로컬 검색 사용');throw error;}
+      finally{clearTimeout(timer);}
+    }
+    const previous=semanticApiQueues.get(lockName)||Promise.resolve();
+    const next=previous.catch(()=>{}).then(run);semanticApiQueues.set(lockName,next);
+    try{return await next;}finally{if(semanticApiQueues.get(lockName)===next)semanticApiQueues.delete(lockName);}
+  }
+  function semanticScheduleQuotaRetry(room,retryAt){
+    if(!semanticEnabled(room)||state.currentRoom!==room)return;
+    const runtime=semanticRoom(room);clearTimeout(runtime.timer);
+    runtime.timer=setTimeout(()=>{runtime.timer=null;if(state.currentRoom===room&&semanticEnabled(room))void prepareSemanticSearchIndex(room).catch(()=>{});},Math.max(2000,retryAt-Date.now()+1200));
+  }
+
+  function semanticRawApiRequest(secret,texts,taskType,timeout){
+    const model=SEMANTIC_SEARCH.model,list=texts.map(String),base={outputDimensionality:SEMANTIC_SEARCH.dimensions,taskType};
+    const body=list.length===1?{...base,content:{parts:[{text:list[0]}]}}:{requests:list.map(text=>({...base,model:`models/${model}`,content:{parts:[{text}]}}))};
+    return new Promise((resolve,reject)=>{
+      GM_xmlhttpRequest({method:'POST',url:`https://generativelanguage.googleapis.com/v1beta/models/${model}:${list.length===1?'embedContent':'batchEmbedContents'}`,headers:{'Content-Type':'application/json','x-goog-api-key':secret},data:JSON.stringify(body),timeout,
+        onload(response){let data;try{data=JSON.parse(response.responseText);}catch(_){reject(rpcmNetError('임베딩 응답 형식 오류',{service:'embedding',status:response.status,code:'EMBEDDING_RESPONSE_PARSE',retryAfterMs:rpcmNetRetryAfter(response.responseHeaders)}));return;}
+          if(response.status<200||response.status>=300){reject(semanticApiError(response,data));return;}
+          try{const embeddings=list.length===1?[data.embedding]:data.embeddings;if(!Array.isArray(embeddings)||embeddings.length!==list.length)throw new Error('임베딩 결과 개수가 맞지 않습니다.');resolve({vectors:embeddings.map(row=>semanticNormalizeVector(row?.values)),tokens:Number(data.usageMetadata?.promptTokenCount)||0});}catch(error){reject(error);}},
+        ontimeout:()=>reject(new Error('의미검색 요청 시간 초과 · 키워드 검색 사용')),onerror:()=>reject(new Error('의미검색 네트워크 오류 · 키워드 검색 사용'))});
+    });
+  }
+  async function semanticEmbed(room,texts,taskType,timeout){
+    const key=semanticSecret(),epoch=semanticRoom(room).epoch,started=Date.now();if(!key)throw new Error('Gemini API Key 필요');
+    // Encode every field of long documents without relying on silent API truncation.
+    const chunks=[],owners=[],sums=texts.map(()=>Array(SEMANTIC_SEARCH.dimensions).fill(0));
+    texts.forEach((text,owner)=>{const chars=Array.from(String(text));for(let start=0;start<Math.max(1,chars.length);start+=SEMANTIC_SEARCH.chunkChars){chunks.push(chars.slice(start,start+SEMANTIC_SEARCH.chunkChars).join('')||' ');owners.push(owner);}});
+    for(let start=0;start<chunks.length;start+=SEMANTIC_SEARCH.batchSize){
+      if(!semanticEnabled(room)||state.currentRoom!==room||semanticRoom(room).epoch!==epoch||semanticSecret()!==key)throw new Error('의미 검색이 중지되었습니다.');
+      const remaining=taskType==='RETRIEVAL_QUERY'?timeout-(Date.now()-started):timeout;
+      if(remaining<=0)throw new Error('의미검색 요청 시간 초과 · 키워드 검색 사용');
+      const batch=chunks.slice(start,start+SEMANTIC_SEARCH.batchSize),response=await semanticApiRequest(key,batch,taskType,remaining,()=>semanticEnabled(room)&&state.currentRoom===room&&semanticRoom(room).epoch===epoch&&semanticSecret()===key);
+      recordRoomAiUsage(room,taskType==='RETRIEVAL_QUERY'?'semanticQuery':'semanticIndex','gemini',SEMANTIC_SEARCH.model,{inputTokens:response.tokens,outputTokens:0},{},{prompt:batch.join('')});
+      response.vectors.forEach((vector,index)=>vector.forEach((value,dimension)=>sums[owners[start+index]][dimension]+=value));
+      refreshAiRoomUsageUi(room);queueRoomAutoSave(room,800);
+    }
+    return sums.map(semanticNormalizeVector);
+  }
+  function semanticStatus(room){
+    if(!semanticEnabled(room))return '의미 검색 OFF';
+    if(semanticManualMode())return '외부 AI 복붙 모드 · 키워드 검색 사용';
+    if(!semanticSecret())return '의미검색용 Gemini 키 필요 · 로컬 검색 사용';
+    const runtime=semanticRoom(room),gate=semanticQuotaGate(semanticSecret());if(gate.retryAt>Date.now())return `${gate.message} · 약 ${Math.ceil((gate.retryAt-Date.now())/1000)}초 후 재확인 · 로컬 검색 사용`;if(runtime.indexing)return runtime.status;
+    const docs=semanticDocuments(room),stale=docs.filter(doc=>!semanticValidRow(runtime.rows.get(doc.id),doc)).length;
+    if(runtime.error)return runtime.error+' · 키워드 검색 병행';
+    return !runtime.loaded?'의미 검색 준비 필요':stale?`변경된 ${stale}개 재준비 필요`:'의미 검색 최신';
+  }
+  function semanticRefreshUi(room){if(state.currentRoom!==room)return;state.modal?.querySelectorAll('[data-semantic-status]').forEach(node=>node.textContent=semanticStatus(room));state.modal?.querySelectorAll('[data-semantic-enabled]').forEach(node=>node.checked=semanticEnabled(room));const progress=semanticRoom(room).checkStatus;if(progress)state.modal?.querySelectorAll('[data-semantic-progress]').forEach(node=>node.textContent=progress);}
+  function semanticUiHtml(room){return `<article class="rpcm-pref-card rpcm-semantic-settings"><header><h3>의미 검색</h3><span class="rpcm-pref-scope">현재 방</span></header><label class="rpcm-pref-row"><span>의미 검색 사용<small>키워드 검색에 의미가 가까운 로그·자동 자료집을 더합니다. AI 맥락 검토는 별도로 적용됩니다.</small></span><input type="checkbox" data-semantic-enabled aria-label="의미 검색 사용" ${semanticEnabled(room)?'checked':''}></label><div class="rpcm-pref-row"><button type="button" class="rpcm-btn secondary" data-semantic-prepare>검색 인덱스 재확인</button><span data-semantic-status role="status">${esc(semanticStatus(room))}</span></div><small data-semantic-progress role="status" aria-live="polite">${esc(semanticRoom(room).checkStatus||'AI → API·모델 설정의 의미검색 전용 연결에서 Gemini 키를 저장하세요. 다른 AI 기능은 공용 연결을 사용합니다.')}</small></article>`;}
+  function semanticClearQueries(room){const id=String(room.chatId);semanticRoom(room).query=null;semanticRoom(room).epoch++;for(const [key,row]of semanticRuntime.queries)if(row.roomId===id)semanticRuntime.queries.delete(key);}
+  async function semanticSetEnabled(room,enabled){
+    const old=room.semanticSearchEnabled;room.semanticSearchEnabled=enabled;semanticClearQueries(room);
+    try{await saveRoom(room);}catch(error){room.semanticSearchEnabled=old;semanticRefreshUi(room);throw error;}
+    semanticRefreshUi(room);if(enabled)queueSemanticIndexRefresh(room,'enabled');
+  }
+  function bindSemanticUi(overlay,room){
+    overlay.querySelectorAll('[data-semantic-enabled]').forEach(node=>node.onchange=()=>{void semanticSetEnabled(room,node.checked).catch(error=>notify('의미검색 설정 저장 실패: '+error.message,'error'));});
+    overlay.querySelectorAll('[data-semantic-prepare]').forEach(node=>node.onclick=async()=>{node.disabled=true;semanticRoom(room).checkStatus='검색 인덱스 재확인 시작';semanticRefreshUi(room);try{if(!semanticEnabled(room))await semanticSetEnabled(room,true);await prepareSemanticSearchIndex(room,true);}catch(error){semanticRoom(room).error=error.message;semanticRoom(room).checkStatus='검색 인덱스 재확인 실패 · '+error.message;semanticRefreshUi(room);}finally{node.disabled=false;}});
+    if(semanticEnabled(room))void semanticLoad(room).then(()=>semanticRefreshUi(room)).catch(()=>{});
+  }
+  function queueSemanticIndexRefresh(room,reason='change'){
+    if(!room||!semanticEnabled(room)){if(room)semanticClearQueries(room);return;}
+    const runtime=semanticRoom(room);if(runtime.indexing){runtime.rerun=true;return;}
+    clearTimeout(runtime.timer);runtime.timer=setTimeout(()=>{runtime.timer=null;if(state.currentRoom!==room||!semanticEnabled(room))return;void prepareSemanticSearchIndex(room).catch(error=>{runtime.error=error.message;semanticRefreshUi(room);});},1800);
+  }
+  async function prepareSemanticSearchIndex(room,force=false){
+    const runtime=semanticRoom(room),update=text=>{runtime.status=text;runtime.checkStatus=text;semanticRefreshUi(room);};
+    if(runtime.indexing){runtime.rerun=true;runtime.checkStatus='진행 중인 검색 인덱스 확인을 기다립니다. '+runtime.status;semanticRefreshUi(room);return runtime.indexing;}
+    if(state.currentRoom!==room)return;
+    if(!semanticEnabled(room)){update('의미 검색 OFF · 재확인하지 않았습니다.');return;}
+    if(!semanticSecret()){update(semanticManualMode()?'외부 AI 복붙 모드 · 검색 인덱스를 만들지 않습니다.':'의미검색용 Gemini 키가 없어 재확인하지 못했습니다.');return;}
+    const gate=semanticQuotaGate(semanticSecret());
+    if(Date.now()<Math.max(runtime.retryAt,gate.retryAt||0)){const retryAt=Math.max(runtime.retryAt,gate.retryAt||0);semanticScheduleQuotaRetry(room,retryAt);update(`검색 인덱스 재확인 대기 · 약 ${Math.ceil((retryAt-Date.now())/1000)}초 후 자동 재시도`);return;}
+    const epoch=runtime.epoch,roomId=String(room.chatId);runtime.error='';runtime.indexError='';
+    const current=()=>state.currentRoom===room&&semanticEnabled(room)&&runtime.epoch===epoch&&String(room.chatId)===roomId;
+    const runIndex=async()=>{
+      update('검색 인덱스 확인 중 · 저장된 자료 읽는 중');
+      await semanticLoad(room,true);if(!current())return;
+      const docs=semanticDocuments(room),ids=new Set(docs.map(doc=>doc.id));for(const id of runtime.rows.keys())if(!ids.has(id))runtime.rows.delete(id);
+      const stale=docs.filter(doc=>!semanticValidRow(runtime.rows.get(doc.id),doc)),valid=docs.length-stale.length;let done=0;
+      update(`검색 인덱스 확인 ${valid}/${docs.length}개 · 재준비 ${stale.length}개`);
+      for(let index=0;index<stale.length;index+=SEMANTIC_SEARCH.batchSize){
+        if(!current())return;update(`검색 인덱스 준비 ${valid+done}/${docs.length}개 · 변경 ${done}/${stale.length}개`);
+        const batch=stale.slice(index,index+SEMANTIC_SEARCH.batchSize),vectors=await semanticEmbed(room,batch.map(doc=>stripAutomationNoise(doc.text)),'RETRIEVAL_DOCUMENT',SEMANTIC_SEARCH.indexTimeoutMs);
+        if(!current())return;const latest=new Map(semanticDocuments(room).map(doc=>[doc.id,doc])),rows=[];
+        batch.forEach((doc,i)=>{const fresh=latest.get(doc.id);if(!fresh||fresh.source!==doc.source){runtime.rerun=true;return;}rows.push({id:JSON.stringify([roomId,doc.id,doc.sourceHash,SEMANTIC_SEARCH.model,SEMANTIC_SEARCH.dimensions]),roomId,documentId:doc.id,key:doc.key,kind:doc.kind,source:doc.source,sourceHash:doc.sourceHash,model:SEMANTIC_SEARCH.model,dimensions:SEMANTIC_SEARCH.dimensions,vector:vectors[i],updatedAt:nowIso()});});
+        const stored=await semanticStoreRows(room,rows);if(!stored||!current())return;
+        const stillCurrent=new Map(semanticDocuments(room).map(doc=>[doc.id,doc]));for(const row of rows){if(semanticValidRow(row,stillCurrent.get(row.documentId)||{}))runtime.rows.set(row.documentId,row);else runtime.rerun=true;}
+        done+=batch.length;update(`검색 인덱스 준비 ${valid+done}/${docs.length}개 · 변경 ${done}/${stale.length}개`);
+      }
+      update(runtime.rerun?'검색 인덱스 재확인 계속 · 자료 상태를 다시 확인합니다.':!docs.length?'검색 인덱스 재확인 완료 · 대상 자료 0개 · API 호출 없음':`검색 인덱스 재확인 완료 ${docs.length}/${docs.length}개 · ${stale.length?done+'개 준비':'변경 없음 · API 호출 없음'}`);runtime.retryAt=0;
+    };
+    // Tabs share only the derived index lock; the Manager's save locks are untouched.
+    update('검색 인덱스 재확인 대기 · 다른 탭의 잠금 확인 중');
+    const work=navigator.locks?.request?navigator.locks.request('wish-semantic-index:'+roomId,{mode:'exclusive'},async()=>{if(current())return runIndex();}):runIndex();runtime.indexing=work;
+    try{await work;}catch(error){if(current()){runtime.error=String(error.message||error);runtime.indexError=runtime.error;update('검색 인덱스 재확인 실패 · '+runtime.error);runtime.retryAt=Math.max(Date.now()+60000,semanticQuotaGate(semanticSecret()).retryAt||0);semanticScheduleQuotaRetry(room,runtime.retryAt);throw error;}}
+    finally{runtime.indexing=null;if(!current())runtime.checkStatus='검색 인덱스 재확인 중단 · 방 또는 검색 설정이 변경되었습니다.';semanticRefreshUi(room);if(runtime.rerun){runtime.rerun=false;if(current())queueSemanticIndexRefresh(room,'changed-during-indexing');}}
+  }
+  function buildSemanticQueryText(userText,previousAssistant=''){
+    const user=stripAutomationNoise(String(userText||''),true).trim().slice(0,1800);
+    if(!user)return '';
+    const short=user.length<90||/(그거|그때|걔|아까|그 사람|그곳|그걸|그 일이|그 물건)/.test(user);
+    const previous=short?stripAutomationNoise(String(previousAssistant||''),true).trim().slice(-1800):'';
+    return `CURRENT_USER:\n${user}${previous?'\n\nPREVIOUS_ASSISTANT_CONTEXT:\n'+previous:''}`.slice(0,SEMANTIC_SEARCH.queryChars);
+  }
+  function semanticQueryForContext(context,messages=null){
+    if(messages){const list=messages.filter(message=>['user','assistant'].includes(messageRoleOf(message))),at=list.findIndex(message=>messageRoleOf(message)==='user');if(at>=0){const previous=list.slice(at+1).find(message=>messageRoleOf(message)==='assistant');return buildSemanticQueryText(messageTextOf(list[at]),messageTextOf(previous));}}
+    return buildSemanticQueryText(String(context||'').slice(-1800));
+  }
+  function semanticContextHash(context){return semanticSourceHash(stripAutomationNoise(String(context||'')));}
+  async function prepareSemanticRecall(room,context,messages=null){
+    const runtime=semanticRoom(room);if(!semanticEnabled(room)){semanticClearQueries(room);return;}
+    if(semanticRuntime.activeRoom!==String(room.chatId)){semanticRuntime.queries.clear();semanticRuntime.activeRoom=String(room.chatId);}
+    if(!semanticSecret()){runtime.query=null;semanticRefreshUi(room);return;}
+    const epoch=runtime.epoch,contextHash=semanticContextHash(context);
+    if(!messages&&runtime.query?.contextHash===contextHash)return;
+    const queryText=semanticQueryForContext(context,messages);
+    if(!queryText)return;
+    try{
+      await semanticLoad(room);if(!semanticEnabled(room)||runtime.epoch!==epoch||state.currentRoom!==room)return;
+      // Validate sources on every read; partial fresh indexes can already serve a query.
+      const docs=semanticDocuments(room);if(docs.some(doc=>!semanticValidRow(runtime.rows.get(doc.id),doc)))queueSemanticIndexRefresh(room,'search-stale');
+      if(!docs.some(doc=>semanticValidRow(runtime.rows.get(doc.id),doc))){runtime.query=null;return;}
+      const key=JSON.stringify([String(room.chatId),SEMANTIC_SEARCH.model,SEMANTIC_SEARCH.dimensions,semanticSourceHash(queryText)]);
+      let cached=semanticRuntime.queries.get(key);
+      if(cached?.text!==queryText){
+        if(Date.now()<(semanticRuntime.cooldowns.get(String(room.chatId))||0)){runtime.query=null;return;}
+        let request=semanticRuntime.queryRequests.get(key);
+        if(!request){request=semanticEmbed(room,[queryText],'RETRIEVAL_QUERY',SEMANTIC_SEARCH.timeoutMs).then(vectors=>({roomId:String(room.chatId),text:queryText,vector:vectors[0]}));semanticRuntime.queryRequests.set(key,request);request.finally(()=>{if(semanticRuntime.queryRequests.get(key)===request)semanticRuntime.queryRequests.delete(key);}).catch(()=>{});}
+        cached=await request;
+        if(!semanticEnabled(room)||runtime.epoch!==epoch||state.currentRoom!==room)return;
+        semanticRuntime.queries.set(key,cached);while(semanticRuntime.queries.size>SEMANTIC_SEARCH.queryCacheLimit)semanticRuntime.queries.delete(semanticRuntime.queries.keys().next().value);
+      }else{semanticRuntime.queries.delete(key);semanticRuntime.queries.set(key,cached);}
+      if(!semanticEnabled(room)||runtime.epoch!==epoch||state.currentRoom!==room)return;
+      runtime.query={contextHash,vector:cached.vector};if(!runtime.indexError)runtime.error='';
+    }catch(error){if(runtime.epoch===epoch){runtime.query=null;runtime.error=String(error.message||error);semanticRuntime.cooldowns.set(String(room.chatId),Math.max(Date.now()+60000,semanticQuotaGate(semanticSecret()).retryAt||0));semanticRefreshUi(room);}}
+  }
+  function semanticScoresForContext(room,context,kind){
+    const scores=new Map();if(!semanticEnabled(room)||!semanticSecret())return scores;const runtime=semanticRoom(room),query=runtime.query;
+    if(!query||query.contextHash!==semanticContextHash(context))return scores;
+    for(const doc of semanticDocuments(room)){if(doc.kind!==kind)continue;const row=runtime.rows.get(doc.id);if(semanticValidRow(row,doc))scores.set(doc.key,semanticCosine(query.vector,row.vector));}
+    return scores;
+  }
+
+  // Read-through cache: raw completed turns only; gates/cursors/counts are recalculated.
+  const aiMemoryHistoryCache=new Map();
+  const AI_MEMORY_HISTORY_AUDIT_MS=120000;
+  let aiMemoryHistoryGeneration=0;
+  function invalidateAiMemoryHistory(){aiMemoryHistoryCache.clear();aiMemoryHistoryGeneration++;storyReviewSnapshotCache.clear();}
+  function aiMemoryCacheBasis(room){const config=aiMemoryConfig(room);return JSON.stringify([apiChatIdOf(room),room._rpcmRevision,room.updatedAt,aiMemoryHistoryGeneration,config.enabled,Object.entries(config.areas).map(([area,row])=>[area,row.enabled,row.interval,row.baseline,row.cursor,row.lastAttemptKey,row.failedEnd]),Object.entries(room.manualUpdateCheckpoints||{}).map(([task,row])=>[task,row.endMessageId,row.appliedAt]),room.activeLogTimeline]);}
+  async function aiMemoryPlanningTurns(room,force=false){
+    const roomId=String(room.chatId),recent=await fetchRecentMessages(apiChatIdOf(room),30);
+    if(state.currentRoom!==room)throw new Error('RP 조회 중 채팅방이 바뀌었습니다.');
+    const signature=JSON.stringify(recent.map(message=>[messageIdOf(message),messageRoleOf(message),messageTextOf(message),message.status,message.updatedAt,message.generationStatus]));
+    const basis=aiMemoryCacheBasis(room),cached=aiMemoryHistoryCache.get(roomId),now=Date.now();
+    // Empty/pending responses and forced checks use the original full-history path.
+    const certain=recent.length>0&&!recent.some(message=>isIncompleteAiSourceMessage(message));
+    if(!force&&certain&&cached&&cached.signature===signature&&cached.basis===basis&&now-cached.at<AI_MEMORY_HISTORY_AUDIT_MS)return settledAutomaticTurns(cached.turns);
+    const config=aiMemoryConfig(room),areas=Object.keys(AI_MEMORY_AREAS).filter(area=>config.areas[area].enabled);
+    const turns=await aiMemoryScopedTurns(room,areas.length?areas:Object.keys(AI_MEMORY_AREAS));
+    if(state.currentRoom!==room)throw new Error('RP 조회 중 채팅방이 바뀌었습니다.');
+    aiMemoryHistoryCache.clear(); // Keep at most the current room's full history.
+    if(certain)aiMemoryHistoryCache.set(roomId,{signature,basis:aiMemoryCacheBasis(room),at:Date.now(),turns});
+    return settledAutomaticTurns(turns);
+  }
+
+  // Local precision layer. Never changes the legacy eligibility gate or the budget.
+  const LOCAL_RECALL = Object.freeze({contextChars:1200,contextWeight:.3,contextCap:2.2,aliasWeight:.35,aliasCap:1.6,fuzzyCap:.8,compoundCap:2.4,duplicateCap:2.4});
+  const localRecallCache=new WeakMap(),localRecallQueries=new WeakMap();
+  const LOCAL_OBJECT_TERMS=new Set(['목걸이','군번줄','도그태그','반지','시계','손목시계','열쇠','편지','상자','권총','칼','사진','휴대폰','지갑']);
+  const LOCAL_LOCATION_TERMS=new Set(['호숫가','호수','해변','숙소','기지','병원','식당','사무실','은행','공항','창고','복도','부두','학교','저택']);
+  function localRecallClean(value){return stripAutomationNoise(String(value||''),true).replace(/```[^\n]*\n\s*\[(?:속마음|INFO|상태|상태창|HUD)[^\]]*\][\s\S]*?```/gi,'').replace(/<(?:info|hud|status)\b[^>]*>[\s\S]*?<\/(?:info|hud|status)>/gi,'').replace(/^\s*(?:CURRENT_USER|PREVIOUS_ASSISTANT_CONTEXT|system|assistant|user)\s*:\s*/gim,'').trim();}
+  function buildLocalRecallQueryText(currentUserText,previousAssistantText=''){
+    const primary=localRecallClean(currentUserText),tokens=tokenizeRecallText(primary);
+    const references=(primary.match(/그거|그걸|그때|걔|아까|그 사람|그곳|그 물건|그 일/g)||[]).length;
+    // A long, concrete USER message always wins, even when it contains a pronoun.
+    const concrete=tokens.filter(t=>!/(그거|그걸|그때|누구|어디|아까|있어|있었|걔)/.test(t));
+    const assisted=!!primary&&(primary.length<=40||(primary.length<=90&&references>0&&concrete.length<=4));
+    const context=assisted?localRecallClean(previousAssistantText).slice(-LOCAL_RECALL.contextChars):'',fuzzyCompactTokens=tokens.filter(t=>localCompactTerm(t).length>=3),words=(primary.match(/[\p{L}\p{N}]+/gu)||[]).slice(0,24),fuzzyPairs=words.flatMap((_,i)=>[words.slice(i,i+2).join(' '),words.slice(i,i+3).join(' ')]).filter(t=>t.includes(' '));
+    return {primary,context,primaryTokens:tokens,contextTokens:tokenizeRecallText(context).filter(t=>!tokens.includes(t)),contextWeight:LOCAL_RECALL.contextWeight,fuzzyCompactTokens,fuzzyPairs};
+  }
+  function prepareLocalRecall(room,context,messages=null){
+    if(!room)return;const hash=semanticContextHash(context),existing=localRecallQueries.get(room);
+    if(!messages&&existing?.hash===hash)return;
+    let user=context,previous='';
+    if(messages){const list=messages.filter(m=>['user','assistant'].includes(messageRoleOf(m))),at=list.findIndex(m=>messageRoleOf(m)==='user');if(at>=0){user=messageTextOf(list[at]);previous=messageTextOf(list.slice(at+1).find(m=>messageRoleOf(m)==='assistant'));}}
+    localRecallQueries.set(room,{hash,...buildLocalRecallQueryText(user,previous)});
+  }
+  function localRecallQuery(room,context){const row=room&&localRecallQueries.get(room);return row?.hash===semanticContextHash(context)?row:buildLocalRecallQueryText(context);}
+  function localCompactTerm(value){return normalizedRecallTerm(value).normalize('NFKC').replace(/[\s\-‐‑–—]+/g,'');}
+  function localRecallIndex(room){
+    if(!room)return {groups:[],explicitAliasGroups:[],categories:new Map()};
+    const slots=(room.slots||[]).filter(s=>['character','item'].includes(s.group));
+    const packs=lorePacksFor(room),basis=JSON.stringify([slots.map(s=>[s.id,s.group,s.title,s.aliases,s.content]),packs.map(p=>[p.id,p.cards.map(c=>[c.id,c.title,c.type,c.aliases,c.triggers,c.entities])])]);
+    const cached=localRecallCache.get(room);if(cached?.basis===basis)return cached;
+    const groups=[],explicitAliasGroups=[],categories=new Map();
+    const register=(words,category,explicitWords=null)=>{
+      // Existing soft terms retain ranking value; only declared title/aliases
+      // may create a hard equivalence link for non-person recall.
+      if(explicitWords&&['object','event','location'].includes(category)){
+        const exact=[...new Set(explicitWords.map(normalizedRecallTerm).filter(t=>t.length>=2&&t.length<=60))];
+        if(exact.length>1)explicitAliasGroups.push(exact);
+      }
+      const terms=[...new Set(words.map(normalizedRecallTerm).filter(t=>t.length>=2&&t.length<=60))];if(terms.length>1)groups.push(terms);for(const term of terms){if(category)categories.set(term,category);for(const token of tokenizeRecallText(term))if(category)categories.set(token,category);}};
+    for(const slot of slots)register(slot.group==='character'?characterDetectionTerms(slot):[slot.title,...(slot.aliases||[])],slot.group==='character'?'entity':'object',slot.group==='item'?[slot.title,...(slot.aliases||[])]:null);
+    const generic=new Set(['인물','세계관','장소','사건','물건','설정','가족','과거','현재','정보']);
+    const registeredNames=new Set([...categories.keys()].map(localCompactTerm));
+    for(const pack of packs)for(const card of pack.cards||[]){const category=/장소/.test(card.type)?'location':/물품|물건|복장/.test(card.type)?'object':/인물/.test(card.type)?'entity':'event';
+      const explicitNames=[card.title,...(card.aliases||[]),...(card.entities||[])].map(localCompactTerm);
+      const names=(card.triggers||[]).filter(t=>/^[\p{L}\p{N} .'-]{2,32}$/u.test(String(t))&&!generic.has(t)&&!/[?!。！？]|(?:했|하는|있는|했다|할 때|이후)/.test(t)&&(registeredNames.has(localCompactTerm(t))||explicitNames.includes(localCompactTerm(t))||/^[A-Z][A-Za-z0-9'-]*(?: [A-Z][A-Za-z0-9'-]*)*$/.test(t)));
+      register([card.title,...(card.aliases||[]),...names],category,[card.title,...(card.aliases||[])]);
+    }
+    const value={basis,groups,explicitAliasGroups,categories};localRecallCache.set(room,value);return value;
+  }
+  function localAliasTerms(index,query){const expanded=new Set();for(const group of index.groups)if(group.some(term=>aliasAppears(query.primary,term)))for(const term of group)if(!aliasAppears(query.primary,term))expanded.add(term);return [...expanded].slice(0,40);}
+  function localOneTypo(a,b){
+    if(a.length<5||b.length<5||Math.abs(a.length-b.length)>1)return false;
+    let i=0,j=0,edits=0;while(i<a.length&&j<b.length){if(a[i]===b[j]){i++;j++;continue;}if(++edits>1)return false;if(a.length>=b.length)i++;if(b.length>=a.length)j++;}return edits+(i<a.length||j<b.length?1:0)===1;
+  }
+  function localClueGroup(term,index,characters,rare=false){if(characters.has(term))return 'entity';return index.categories.get(term)||(LOCAL_OBJECT_TERMS.has(term)?'object':LOCAL_LOCATION_TERMS.has(term)?'location':rare?'rare':'event');}
+  function localRecallAdjust(entry,doc,query,index,characters,N,df,averageLength,profile=null){
+    const totalStarted=profile?performance.now():0;
+    if(profile)profile.adjustCalls=(profile.adjustCalls||0)+1;
+    const bodyFactor=Math.max(.65,Math.min(1.08,1/(.8+.2*Math.max(1,String(doc.block.body||'').length)/Math.max(1,averageLength))));
+    const direct=query.primaryTokens,groups=new Set(),matches=[];let keyword=0,character=0,context=0,alias=0,fuzzy=0;
+    const directStarted=profile?performance.now():0;
+    for(const token of direct){if(!doc.text.includes(token))continue;const idf=1+Math.log((N+1)/((df.get(token)||0)+1)),inTitle=doc.titleLower.includes(token);
+      if(characters.has(token))character+=(inTitle?.95:.28)*idf;else keyword+=(inTitle?6.4:1.45*bodyFactor)*idf;
+      groups.add(localClueGroup(token,index,characters,!inTitle&&idf>=1.75));matches.push(token);
+    }
+    if(profile){profile.adjustDirectMs=(profile.adjustDirectMs||0)+(performance.now()-directStarted);profile.adjustDirectChecks=(profile.adjustDirectChecks||0)+direct.length;profile.adjustDirectMatches=(profile.adjustDirectMatches||0)+matches.length;}
+    const phraseStarted=profile?performance.now():0;
+    for(const phrase of doc.phrases)if(query.primary.toLowerCase().includes(phrase)){const tokens=tokenizeRecallText(phrase),char=characters.has(phrase)||(tokens.length&&tokens.every(t=>characters.has(t)));if(char)character+=1.6;else keyword+=11;groups.add(char?'entity':localClueGroup(phrase,index,characters));}
+    if(profile){profile.adjustPhraseMs=(profile.adjustPhraseMs||0)+(performance.now()-phraseStarted);profile.adjustPhraseChecks=(profile.adjustPhraseChecks||0)+doc.phrases.length;}
+    keyword+=Math.min(2.6,character);
+    // These terms do NOT participate in legacy eligibility or character-only gates.
+    const contextStarted=profile?performance.now():0;
+    for(const token of query.contextTokens)if(doc.text.includes(token))context+=(doc.titleLower.includes(token)?6.4:1.45*bodyFactor)*LOCAL_RECALL.contextWeight;
+    if(profile){profile.adjustContextMs=(profile.adjustContextMs||0)+(performance.now()-contextStarted);profile.adjustContextChecks=(profile.adjustContextChecks||0)+query.contextTokens.length;}
+    const aliasTerms=query.aliasTerms||localAliasTerms(index,query),aliasStarted=profile?performance.now():0;
+    for(const term of aliasTerms)if(aliasAppears(doc.text,term)){alias+=(doc.titleLower.includes(term)?2:1)*LOCAL_RECALL.aliasWeight;groups.add(localClueGroup(term,index,characters));}
+    if(profile){profile.adjustAliasMs=(profile.adjustAliasMs||0)+(performance.now()-aliasStarted);profile.adjustAliasChecks=(profile.adjustAliasChecks||0)+aliasTerms.length;}
+    const anchored=matches.some(t=>!characters.has(t))||entry.matchedTitleTokens.length||alias>0;
+    const fuzzyStarted=profile?performance.now():0;
+    if(anchored){const exact=new Set(matches),compactTokens=[];for(const token of query.fuzzyCompactTokens){if(!exact.has(token)){compactTokens.push(token);if(compactTokens.length>=32)break;}}const fuzzyTerms=[...compactTokens,...query.fuzzyPairs];
+      if(profile){profile.adjustFuzzyDocs=(profile.adjustFuzzyDocs||0)+1;profile.adjustFuzzyTerms=(profile.adjustFuzzyTerms||0)+fuzzyTerms.length;}
+      for(const term of fuzzyTerms){if(fuzzy>=LOCAL_RECALL.fuzzyCap)break;const normalized=localCompactTerm(term);if(normalized.length>=3&&!doc.text.includes(term.toLowerCase())&&doc.localCompact.includes(normalized)){fuzzy+=.2;continue;}
+        if(normalized.length>=5&&doc.localTokens.slice(0,180).some(t=>localOneTypo(normalized,t)))fuzzy+=.15;
+      }
+    }
+    if(profile)profile.adjustFuzzyMs=(profile.adjustFuzzyMs||0)+(performance.now()-fuzzyStarted);
+    const compound=groups.size>=2?Math.min(LOCAL_RECALL.compoundCap,(groups.size-1)*.8):0;
+    entry.keywordScore=keyword;entry.contextScore=Math.min(LOCAL_RECALL.contextCap,context);entry.aliasScore=Math.min(LOCAL_RECALL.aliasCap,alias);entry.fuzzyScore=Math.min(LOCAL_RECALL.fuzzyCap,fuzzy);entry.compoundScore=compound;entry.lengthFactor=bodyFactor;entry.clueGroups=[...groups];
+    entry.score=keyword+entry.contextScore+entry.aliasScore+entry.fuzzyScore+compound+(entry.semanticScore>=SEMANTIC_SEARCH.threshold?entry.semanticScore*SEMANTIC_SEARCH.weight:0);
+    if(profile)profile.adjustTotalMs=(profile.adjustTotalMs||0)+(performance.now()-totalStarted);
+    return entry;
+  }
+  function localEventNearlySame(a,b){
+    if(a===b)return true;
+    if(Math.min(a.length,b.length)<12||Math.min(a.length,b.length)/Math.max(a.length,b.length)<.9)return false;
+    if((a.match(/\d+/g)||[]).join('|')!==(b.match(/\d+/g)||[]).join('|'))return false;
+    const grams=value=>new Set(Array.from({length:value.length-1},(_,i)=>value.slice(i,i+2))),left=grams(a),right=grams(b);
+    return 2*[...left].filter(x=>right.has(x)).length/(left.size+right.size)>=.92;
+  }
+  function localRecallDiversity(entries){
+    // Compare only within date + timeline buckets of at most 60 ranked results.
+    const shortlist=entries.slice(0,60),buckets=new Map();
+    for(const entry of shortlist){const block=entry.block,title=localCompactTerm(block.events),key=[normalizedLogTimelineKey(logTimelineLabelOfBlock(block)),block.fullDate].join('|');
+      if(!title||!block.fullDate||block.isUnknown||timelineBranchHint(block.events+' '+block.body))continue;
+      const terms=new Set(entry.matchedCoreTokens),prior=buckets.get(key)||[],duplicate=prior.some(row=>{const overlap=[...terms].filter(t=>row.terms.has(t)).length;return localEventNearlySame(title,row.title)&&terms.size>0&&overlap/Math.max(terms.size,row.terms.size)>=.85;});
+      entry.duplicatePenalty=duplicate?Math.min(LOCAL_RECALL.duplicateCap,entry.score*.2):0;entry.score-=entry.duplicatePenalty;prior.push({title,terms});buckets.set(key,prior);
+    }
+    return entries.sort((a,b)=>a.coreTier-b.coreTier||b.score-a.score||b.block.index-a.block.index);
+  }
+  function localRecallReason(entry){if(!entry)return '';return [entry.compoundScore>0?'복합 단서':null,entry.contextScore>0?'직전 문맥 보조':null,entry.aliasScore>0?'등록 별칭 보조':null,entry.fuzzyScore>0?'표기 보정':null,entry.duplicatePenalty>0?'동일 사건 중복 감점':null].filter(Boolean).join(' · ');}
+  function localRecallExtras(entry){return {contextScore:entry.contextScore,aliasScore:entry.aliasScore,fuzzyScore:entry.fuzzyScore,compoundScore:entry.compoundScore,duplicatePenalty:entry.duplicatePenalty};}
+  function localLoreRankBonus(card,evidence,room,context){
+    if(!evidence)return 0;const query=localRecallQuery(room,context),entities=Array.isArray(card.entities)?card.entities:[];
+    return Math.min(3,entities.filter(name=>aliasAppears(query.primary,String(name))).length);
+  }
+
+  function scoreRelatedLogBlocks(blocks, contextText, excludedKeys = new Set(), room = state.currentRoom, semanticScores = null, profile = null) {
+    const totalStarted=profile?performance.now():0;
+    if(profile)profile.calls=(profile.calls||0)+1;
+    semanticScores=semanticEnabled(room)?(semanticScores||semanticScoresForContext(room,contextText,'log')):new Map();
+    const queryStarted=profile?performance.now():0;
+    const query = stripAutomationNoise(contextText);
+    if (!query || !blocks.length) { if(profile)profile.totalMs=(profile.totalMs||0)+(performance.now()-totalStarted); return []; }
+    const queryLower = query.toLowerCase();
+    const queryTokens = tokenizeRecallText(query);
+    if(profile){profile.queryMs=(profile.queryMs||0)+(performance.now()-queryStarted);profile.queryChars=(profile.queryChars||0)+query.length;profile.queryTokens=(profile.queryTokens||0)+queryTokens.length;profile.docs=(profile.docs||0)+blocks.length;}
+    const characterStarted=profile?performance.now():0;
+    const characterTerms = characterRecallTermSet(room);
+    if(profile)profile.characterTermsMs=(profile.characterTermsMs||0)+(performance.now()-characterStarted);
+    const docsStarted=profile?performance.now():0;
+    const docs = blocks.map(block=>recallDocForBlock(block,profile));
+    if(profile)profile.docBuildMs=(profile.docBuildMs||0)+(performance.now()-docsStarted);
+    const dfStarted=profile?performance.now():0;
+    const df = new Map(),matchedQueryTokenIndexes=Array.from({length:docs.length},()=>[]);
+    for (let ti=0;ti<queryTokens.length;ti++) {
+      const t=queryTokens[ti];let n = 0;
+      for (let di=0;di<docs.length;di++) {
+        const d=docs[di],textMatch=d.text.includes(t);
+        if (d.tokens.has(t) || textMatch) n++;
+        if (textMatch) matchedQueryTokenIndexes[di].push(ti);
+      }
+      df.set(t, n);
+    }
+    if(profile){profile.dfMs=(profile.dfMs||0)+(performance.now()-dfStarted);profile.dfChecks=(profile.dfChecks||0)+queryTokens.length*docs.length;}
+    const N = Math.max(1, blocks.length);
+    const localStarted=profile?performance.now():0;
+    const localQuery=localRecallQuery(room,contextText),localIndex=localRecallIndex(room);
+    localQuery.aliasTerms=localAliasTerms(localIndex,localQuery);
+    const causalLinks = rpcmCausalRecallLinks(localIndex, localQuery, characterTerms);
+    const averageLength=docs.reduce((sum,d)=>sum+String(d.block.body||'').length,0)/N;
+    if(profile)profile.localPrepMs=(profile.localPrepMs||0)+(performance.now()-localStarted);
+    const scored = [];
+    const scoreStarted=profile?performance.now():0;let scoreChecks=0;
+    for (let di=0;di<docs.length;di++) {
+      const d=docs[di];
+      if (excludedKeys.has(d.block.key)) continue;
+      let coreScore = 0;
+      let characterScore = 0;
+      const matchedCoreTokens = [];
+      const matchedTitleTokens = [];
+      const matchedRareTokens = [];
+      const matchedCharacterTerms = [];
+      const matchedPhrases = [];
+
+      const matchedTokenIndexes=matchedQueryTokenIndexes[di];scoreChecks+=matchedTokenIndexes.length;
+      for (const ti of matchedTokenIndexes) {
+        const token=queryTokens[ti];
+        const idf = 1 + Math.log((N + 1) / ((df.get(token) || 0) + 1));
+        const inTitle = d.titleLower.includes(token);
+        const isCharacter = characterTerms.has(token);
+        if (isCharacter) {
+          // 인물명은 어디에 있든 보조점수. 여러 명이 반복되어도 총 기여도를 제한합니다.
+          characterScore += (inTitle ? 0.95 : 0.28) * idf;
+          matchedCharacterTerms.push(token);
+        } else {
+          // 사건명/장소/물건/특이 단어는 제목 일치에 큰 가중치, 본문 희귀어에도 유효 가중치.
+          coreScore += (inTitle ? 6.4 : 1.45) * idf;
+          matchedCoreTokens.push(token);
+          if (inTitle) matchedTitleTokens.push(token);
+          if (!inTitle && idf >= 1.75) matchedRareTokens.push(token);
+        }
+      }
+
+      for (const phrase of d.phrases) {
+        if (!queryLower.includes(phrase)) continue;
+        const phraseTokens = tokenizeRecallText(phrase);
+        const isCharacterPhrase = characterTerms.has(phrase) || (phraseTokens.length > 0 && phraseTokens.every(t => characterTerms.has(t)));
+        if (isCharacterPhrase) {
+          characterScore += 1.6;
+          matchedCharacterTerms.push(phrase);
+        } else {
+          coreScore += 11;
+          matchedPhrases.push(phrase);
+        }
+      }
+
+      // 인물명 여러 개가 겹쳐도 핵심 사건 키워드보다 앞서지 못하도록 보조점수 상한을 둡니다.
+      const matchedCausalAliases = causalLinks.filter(link => aliasAppears(d.text, link.term));
+      if (matchedCausalAliases.length) coreScore += Math.min(11, 8 + matchedCausalAliases.length);
+      const cappedCharacterScore = Math.min(characterScore, 2.6);
+      const keywordScore = coreScore + cappedCharacterScore;
+      const semanticScore=Number(semanticScores.get(String(d.block.key))||0);
+      const semanticMatch=semanticScore>=SEMANTIC_SEARCH.threshold;
+      const score=keywordScore+(semanticMatch?semanticScore*SEMANTIC_SEARCH.weight:0);
+      const hasCoreMatch = coreScore >= 1.8;
+      const hasCharacterOnlyMatch = !hasCoreMatch && cappedCharacterScore >= 1.8;
+      if (hasCoreMatch || hasCharacterOnlyMatch || semanticMatch) {
+        const adjusted = localRecallAdjust({
+          block: d.block,
+          score,
+          coreScore,
+          characterScore: cappedCharacterScore,
+          keywordScore, semanticScore,
+          coreTier: hasCoreMatch ? 0 : semanticMatch ? 1 : semanticScores.size ? 2 : 1,
+          matchedCausalAliases,
+          matchedTokens:[...new Set([...matchedCoreTokens, ...matchedCharacterTerms])],
+          matchedCoreTokens:[...new Set(matchedCoreTokens)],
+          matchedTitleTokens:[...new Set(matchedTitleTokens)],
+          matchedRareTokens:[...new Set(matchedRareTokens)],
+          matchedCharacterTerms:[...new Set(matchedCharacterTerms)],
+          matchedPhrases:[...new Set(matchedPhrases)],
+        },d,localQuery,localIndex,characterTerms,N,df,averageLength,profile);
+        if (matchedCausalAliases.length) {
+          const aliasBoost=Math.min(11, 8 + matchedCausalAliases.length);
+          adjusted.score += aliasBoost;
+          adjusted.aliasScore = Number(adjusted.aliasScore || 0) + aliasBoost;
+        }
+        scored.push(adjusted);
+      }
+    }
+    if(profile){profile.scoreMs=(profile.scoreMs||0)+(performance.now()-scoreStarted);profile.scoreChecks=(profile.scoreChecks||0)+scoreChecks;profile.candidateCount=(profile.candidateCount||0)+scored.length;}
+    // 핵심 키워드가 하나라도 맞는 로그를 항상 인물명-only 로그보다 앞세웁니다.
+    const result=scored.sort((a,b) => a.coreTier - b.coreTier || b.score - a.score || b.block.index - a.block.index);
+    const compareStarted=profile?performance.now():0;
+    rpcmRecordRecallComparison(room,blocks,query,result);
+    if(profile){profile.compareMs=(profile.compareMs||0)+(performance.now()-compareStarted);profile.totalMs=(profile.totalMs||0)+(performance.now()-totalStarted);}
+    return result;
+  }
+
+  function relatedLogReason(scored) {
+    const reason=relatedLogKeywordReason(scored),local=localRecallReason(scored);
+    const linked=(scored?.matchedCausalAliases || []).map(link => `${link.anchor}→${link.term}`).join(' · ');
+    const keyword=reason+(linked?' / 등록된 사건·물건·장소 별칭: '+linked:'')+(local?' / '+local:'');
+    if(Number(scored?.semanticScore||0)<SEMANTIC_SEARCH.threshold)return keyword;
+    const similarity=`의미 유사 ${Math.round(scored.semanticScore*100)}%`;
+    return Number(scored.keywordScore||0)<1.8?`표현은 달라도 ${similarity}`:`${keyword} / ${similarity}`;
+  }
+
+  function relatedLogKeywordReason(scored) {
+    if (!scored) return '현재 RP와 관련';
+    const coreTerms = [...new Set([
+      ...(scored.matchedPhrases || []),
+      ...(scored.matchedCoreTokens || []),
+      ...(scored.matchedRareTokens || []),
+    ].filter(Boolean))].slice(0, 4);
+    const characterTerms = [...new Set((scored.matchedCharacterTerms || []).filter(Boolean))].slice(0, 3);
+    if (coreTerms.length && characterTerms.length) return `핵심 일치: ${coreTerms.join(' · ')} / 인물 보조: ${characterTerms.join(' · ')}`;
+    if (coreTerms.length) return `핵심 일치: ${coreTerms.join(' · ')}`;
+    if (characterTerms.length) return `인물 보조 일치: ${characterTerms.join(' · ')} (핵심 키워드 없음)`;
+    return `관련도 ${Number(scored.score || 0).toFixed(1)}`;
+  }
+
+  function recentLogInjectionCount(room) {
+    const raw = room?.autoLogRecentBlocks;
+    if (raw === undefined || raw === null || raw === '') return 2;
+    return Math.max(0, Math.min(10, Math.floor(Number(raw) || 0)));
+  }
+  function relatedLogInjectionCount(room) {
+    const raw = room?.autoLogRelatedBlocks;
+    if (raw === undefined || raw === null || raw === '') return APP.defaultRelatedLogBlocks;
+    return Math.max(0, Math.min(10, Math.floor(Number(raw) || 0)));
+  }
+  function logCountOptionsHtml(value) {
+    return Array.from({ length:11 },(_,i)=>`<option value="${i}" ${i===value?'selected':''}>${i}개</option>`).join('');
+  }
+
+  function logRelevanceSetting(room) {
+    return ['strict','balanced','broad'].includes(room?.autoLogRelevance) ? room.autoLogRelevance : 'balanced';
+  }
+
+  // One generic body token and a repeated character name are not enough to recall old RP.
+  // This score filter governs related history; the one-block continuity floor is separate.
+  function eligibleRelatedLogScores(room, blocks, contextText, skip = new Set()) {
+    const active = normalizedLogTimelineKey(activeLogTimelineLabel(room));
+    const latest = selectRecentLogBlocks(blocks.filter(block => normalizedLogTimelineKey(logTimelineLabelOfBlock(block)) === active), 1)[0];
+    const setting = logRelevanceSetting(room);
+    return localRecallDiversity(scoreRelatedLogBlocks(blocks, contextText, skip, room).filter(entry => {
+      const core = Number(entry.coreScore || 0);
+      const causal = (entry.matchedCausalAliases || []).length > 0;
+      const title = (entry.matchedTitleTokens || []).length > 0;
+      const phrase = (entry.matchedPhrases || []).length > 0;
+      const rare = (entry.matchedRareTokens || []).length > 0;
+      const multiple = (entry.matchedCoreTokens || []).length >= 2;
+      if (normalizedLogTimelineKey(logTimelineLabelOfBlock(entry.block)) !== active) {
+        return causal || phrase || (title && core >= 8) || (rare && multiple && core >= 8);
+      }
+      if(Number(entry.semanticScore||0)>=SEMANTIC_SEARCH.threshold)return true;
+      if (setting === 'strict') return causal || phrase || (title && core >= 8) || (rare && multiple && core >= 8);
+      if (setting === 'broad') return causal || phrase || title || (core >= 2.2 && (rare || multiple));
+      if (causal || phrase || title || (core >= 2.8 && multiple) || (core >= 2.2 && rare)) return true;
+      return entry.block.key === latest?.key && core >= 2.2 && (rare || multiple);
+    }));
+  }
+
+  function logItemPriority(item) {
+    if (item?.autoType === 'pinned-log') return 0;
+    if (item?.autoType === 'manual-log') return 1;
+    if (item?.autoType === 'recent-log') return 2;
+    if (item?.autoType === 'related-log') return 3;
+    if (item?.autoType === 'legacy-log') return 4;
+    return 9;
+  }
+
+  function makeLogRecallItem(block, slot, autoType, prefix, reason, extra = {}) {
+    const timeline = logTimelineLabelOfBlock(block);
+    return {
+      slotId: `auto-log:${block.key}`,
+      sourceSlotId: 'logSummary',
+      autoType,
+      sourceKey: block.key,
+      // 기본 시간선 블록은 저장 원문 제목에 시간선명이 없으므로 주입 제목에 항상
+      // 시간선을 붙입니다. 회귀/다회차 장면에서 어느 과거의 기억인지 모델이 구분할 수 있습니다.
+      title: `${prefix} [${timeline}] ${block.titleText}`,
+      group: 'log-auto',
+      content: block.raw,
+      totalTurns: normalizeRetentionTurns(slot.retentionTurns),
+      usedTurns: 0,
+      recallReason: reason,
+      recallScore: extra.score ?? null,
+      recallKeywordScore: extra.keywordScore ?? null,
+      recallSemanticScore: extra.semanticScore ?? null,
+      recallContextScore:extra.contextScore ?? null, recallAliasScore:extra.aliasScore ?? null,
+      recallFuzzyScore:extra.fuzzyScore ?? null, recallCompoundScore:extra.compoundScore ?? null,
+      recallDuplicatePenalty:extra.duplicatePenalty ?? null,
+      recallCoreScore: extra.coreScore ?? null,
+      recallCharacterScore: extra.characterScore ?? null,
+      recallRank: extra.rank ?? null,
+      recallCandidateCount: extra.candidateCount ?? null,
+      matchedTerms: extra.matchedTerms || [],
+      matchedCoreTerms: extra.matchedCoreTerms || [],
+      matchedCharacterTerms: extra.matchedCharacterTerms || [],
+      logIndex: block.index,
+      logPriority: logItemPriority({ autoType }),
+    };
+  }
+
+  function makeRecentContinuityLogItem(block, slot, scored = null, rank = null, candidateCount = null) {
+    const reason = scored
+      ? `최근 연속성 + 관련도 일치 · ${logTimelineLabelOfBlock(block)} · ${relatedLogReason(scored)}`
+      : `최근이라 포함 · ${logTimelineLabelOfBlock(block)}의 직전 흐름`;
+    return makeLogRecallItem(block, slot, 'recent-log', '최근 연속성', reason, scored ? {
+      score:scored.score, coreScore:scored.coreScore, keywordScore:scored.keywordScore, semanticScore:scored.semanticScore, ...localRecallExtras(scored), characterScore:scored.characterScore,
+      rank, candidateCount,
+      matchedTerms:[...(scored.matchedPhrases || []), ...(scored.matchedCoreTokens || []), ...(scored.matchedCharacterTerms || [])],
+      matchedCoreTerms:[...(scored.matchedPhrases || []), ...(scored.matchedCoreTokens || []), ...(scored.matchedRareTokens || [])],
+      matchedCharacterTerms:[...(scored.matchedCharacterTerms || [])],
+    } : {});
+  }
+
+  function collectLogRecallCandidates(room, contextText = '') {
+    const slot = (room.slots || []).find(s => s.id === 'logSummary');
+    if (!slot?.enabled || !String(slot.content || '').trim()) return [];
+    const blocks = parseDatedLogBlocks(slot.content);
+    if (!blocks.length) {
+      const whole = String(slot.content || '').trim();
+      if (whole.length <= APP.legacyWholeLogFallbackMax) {
+        return [{
+          slotId: slot.id, sourceSlotId: 'logSummary', autoType:'legacy-log', title:`${slot.title} (날짜블록 미감지)`, group:'log-auto', content:whole,
+          totalTurns:normalizeRetentionTurns(slot.retentionTurns), usedTurns:0, recallReason:'날짜 블록 미감지 · 소형 로그 호환 주입', logPriority:4, logIndex:0,
+        }];
+      }
+      return [];
+    }
+
+    const excludedKeys = new Set((room.autoLogExcludedKeys || []).map(String));
+    const pinnedKeys = new Set((room.autoLogPinnedKeys || []).map(String));
+    const manualKeys = new Set((room.manualLogSelectedKeys || []).map(String));
+    const eligibleAuto = autoRecallVisibleLogBlocks(blocks, room).filter(b => !excludedKeys.has(b.key));
+    const byKey = new Map();
+
+    const put = (item) => {
+      const prev = byKey.get(item.sourceKey || item.slotId);
+      if (!prev || logItemPriority(item) < logItemPriority(prev)) byKey.set(item.sourceKey || item.slotId, item);
+    };
+
+    for (const b of blocks.filter(b => pinnedKeys.has(b.key))) put(makeLogRecallItem(b, slot, 'pinned-log', '항상주입', '사용자 항상 주입'));
+    for (const b of blocks.filter(b => manualKeys.has(b.key))) put(makeLogRecallItem(b, slot, 'manual-log', '직접주입', '사용자 직접 주입'));
+
+    if (room.autoLogRecallEnabled) {
+      const occupied = new Set([...pinnedKeys, ...manualKeys]);
+      const relatedScored = eligibleRelatedLogScores(room, eligibleAuto, contextText, new Set([...excludedKeys, ...occupied]));
+      const recentActive = recentContinuityLogBlocks(room, eligibleAuto, excludedKeys);
+      for (const block of recentActive) if (!occupied.has(String(block.key))) {
+        const rank = relatedScored.findIndex(entry => entry.block.key === block.key);
+        put(makeRecentContinuityLogItem(block, slot, rank < 0 ? null : relatedScored[rank], rank < 0 ? null : rank + 1, relatedScored.length));
+      }
+      const recentKeys = new Set(recentActive.map(block => String(block.key)));
+      const relatedHistory = relatedScored.filter(entry => !recentKeys.has(String(entry.block.key))).slice(0, relatedLogInjectionCount(room));
+      for (let relatedIndex = 0; relatedIndex < relatedHistory.length; relatedIndex++) {
+        const scored = relatedHistory[relatedIndex];
+        put(makeLogRecallItem(scored.block, slot, 'related-log', '관련로그', `${logTimelineLabelOfBlock(scored.block)} · ${relatedLogReason(scored)}`, {
+          score: scored.score,
+          coreScore: scored.coreScore,
+          keywordScore: scored.keywordScore, semanticScore: scored.semanticScore, ...localRecallExtras(scored),
+          characterScore: scored.characterScore,
+          rank: relatedIndex + 1,
+          candidateCount: relatedHistory.length,
+          matchedTerms:[...(scored.matchedPhrases || []), ...(scored.matchedCoreTokens || []), ...(scored.matchedCharacterTerms || [])],
+          matchedCoreTerms:[...(scored.matchedPhrases || []), ...(scored.matchedCoreTokens || []), ...(scored.matchedRareTokens || [])],
+          matchedCharacterTerms:[...(scored.matchedCharacterTerms || [])],
+        }));
+      }
+    }
+    return [...byKey.values()];
+  }
+
+  function contextBudgetForPreview(room) {
+    return Math.min(Number(room.maxChars) || APP.defaultMaxChars, APP.safeChars);
+  }
+
+  function contextBudgetForCarrier(room, originalChars = 0) {
+    return Math.max(0, (Number(room.maxChars) || APP.defaultMaxChars) - Number(originalChars || 0) - 2);
+  }
+
+  function utf8ByteLength(value) {
+    const text = String(value || '');
+    if (typeof TextEncoder === 'function') return new TextEncoder().encode(text).length;
+    let bytes = 0;
+    for (let index = 0; index < text.length; index++) {
+      const code = text.charCodeAt(index);
+      if (code < 0x80) bytes += 1;
+      else if (code < 0x800) bytes += 2;
+      else if (code >= 0xD800 && code <= 0xDBFF && index + 1 < text.length && text.charCodeAt(index + 1) >= 0xDC00 && text.charCodeAt(index + 1) <= 0xDFFF) {
+        bytes += 4;
+        index++;
+      } else bytes += 3;
+    }
+    return bytes;
+  }
+
+  // TEMP35: Core-style wire encoding is limited to Crack message PATCH bodies.
+  // Page-local negotiation; never changes auxiliary AI requests or stored narrative text.
+  const RPCM_CARRIER_UTF16_REFUSED_KEY='RPCM_carrier_utf16_refused_v1';
+  const RPCM_CARRIER_UTF16_REFUSAL_MS=7*864e5;
+  function rpcmCarrierUtf16Refusal() {
+    try{
+      const row=JSON.parse(localStorage.getItem(RPCM_CARRIER_UTF16_REFUSED_KEY)||'null');let name='',version='';
+      try{if(typeof GM_info==='object'&&GM_info){name=String(GM_info.scriptHandler||'');version=String(GM_info.version||'');}}catch(_){}
+      return row&&row.name===name&&row.version===version&&Number.isFinite(row.at)&&Date.now()-row.at>=0&&Date.now()-row.at<RPCM_CARRIER_UTF16_REFUSAL_MS?row:null;
+    }catch(_){return null;}
+  }
+  function rpcmPersistCarrierUtf16Refusal() {
+    let name='',version='';try{if(typeof GM_info==='object'&&GM_info){name=String(GM_info.scriptHandler||'');version=String(GM_info.version||'');}}catch(_){}
+    try{localStorage.setItem(RPCM_CARRIER_UTF16_REFUSED_KEY,JSON.stringify({name,version,at:Date.now()}));}catch(_){}
+  }
+  const rpcmCarrierUtf16BootRefusal=rpcmCarrierUtf16Refusal();
+  const rpcmCarrierWireState = { utf16:!rpcmCarrierUtf16BootRefusal, verified:false, reason:rpcmCarrierUtf16BootRefusal?'최근 UTF-16LE 서버 거부 · 7일간 UTF-8 사용':'', blocked:new Map() };
+
+  function rpcmCarrierEncoding(room=state.currentRoom){
+    const option=GM_getValue('RPCM_carrier_encoding_global_v1',null);
+    if(option!==null){if(option?.version!==1||!['utf-8','utf-16le'].includes(option.encoding))throw new Error('전역 인코딩 설정을 읽지 못했습니다. 저장소 진단 후 다시 선택해 주세요.');return option.encoding;}
+    // Until migration completes, use one conservative default for every room.
+    return 'utf-8';
+  }
+
+  function rpcmCarrierEncodingControl(room){
+    const selected=rpcmCarrierEncoding(room),effective=selected==='utf-16le'&&rpcmCarrierWireState.utf16?'UTF-16LE':'UTF-8';
+    const help='모든 방에 적용됩니다. ON: 한글이 많은 본문은 같은 B 한도 안에 더 담을 수 있습니다. 설정한 글자 한도와 요청 한도 101,400B는 유지됩니다. 영문·숫자 위주 본문은 오히려 커질 수 있습니다. 서버가 지원하지 않으면 UTF-8로 바꾸어 용량을 다시 확인하며, 한도를 넘으면 전송을 중단합니다. 실제 오류 발생률은 측정하지 않았습니다.';
+    return `<label class="rpcm-carrier-encoding" title="${esc(help)}" style="display:flex;gap:8px;align-items:center;margin-top:12px"><input type="checkbox" data-carrier-utf16 title="${esc(help)}" ${selected==='utf-16le'?'checked':''}> UTF-16LE 사용 · 모든 방</label><small style="display:block;margin-top:6px">전역 설정 · OFF: UTF-8 · ON: UTF-16LE · 실제 요청 ${effective}${selected==='utf-16le'&&!rpcmCarrierWireState.utf16?' · 대체: '+esc(rpcmCarrierWireState.reason||'지원 확인 필요'):''}</small>`;
+  }
+
+  async function setRpcmCarrierEncoding(_room,enabled){
+    if(state.carrierEncodingSettingBusy||state.fullBackupRestoreBusy||state.fullBackupRestoreNeedsReload||wrpmFullBackupV2.isBusy())throw new Error('다른 설정·백업·복원 작업이 끝난 뒤 변경해 주세요.');
+    if(rpcmCarrierWireState.activeWrites||state.pendingCarrierSyncQueues?.size)throw new Error('주입·교정 전송이 끝난 뒤 인코딩을 변경해 주세요.');
+    const next={version:1,encoding:enabled?'utf-16le':'utf-8',changeId:crypto.randomUUID()};
+    state.carrierEncodingSettingBusy=true;
+    try{
+      try{await GM_setValue('RPCM_carrier_encoding_global_v1',next);}
+      catch(error){if(GM_getValue('RPCM_carrier_encoding_global_v1',null)?.changeId!==next.changeId)throw error;}
+      const stored=GM_getValue('RPCM_carrier_encoding_global_v1',null);
+      if(stored?.changeId!==next.changeId||stored.encoding!==next.encoding)throw new Error('다른 탭에서 설정이 바뀌었습니다. 현재 전역 선택을 확인해 주세요.');
+      // Room records, active injections and server messages are never rewritten here.
+      if(enabled){try{localStorage.removeItem(RPCM_CARRIER_UTF16_REFUSED_KEY);}catch(_){}rpcmCarrierWireState.utf16=true;rpcmCarrierWireState.reason='';}
+      return stored.encoding;
+    }finally{state.carrierEncodingSettingBusy=false;}
+  }
+
+  function rpcmCarrierWire(message,room=state.currentRoom) {
+    const json=JSON.stringify({message:String(message||'')}),utf8Bytes=utf8ByteLength(json),utf16Bytes=json.length*2;
+    const selectedEncoding=rpcmCarrierEncoding(room),encoding=selectedEncoding==='utf-16le'&&rpcmCarrierWireState.utf16?'utf-16le':'utf-8';
+    return {json,utf8Bytes,bytes:encoding==='utf-16le'?utf16Bytes:utf8Bytes,encoding,selectedEncoding};
+  }
+
+  function rpcmUtf16leBlob(json) {
+    const bytes = new Uint8Array(json.length * 2);
+    for (let index=0; index<json.length; index++) {
+      const unit=json.charCodeAt(index); bytes[index*2]=unit & 255; bytes[index*2+1]=unit >>> 8;
+    }
+    return new Blob([bytes], {type:'application/json;charset=utf-16le'});
+  }
+
+  function rpcmDetectionOwners(items) {
+    const owners = new Map();
+    for (const item of items || []) {
+      const owner = normalizedRecallTerm(item?.title);
+      if (!owner) continue;
+      for (const term of characterDetectionTerms(item)) {
+        const key = normalizedRecallTerm(term);
+        if (!owners.has(key)) owners.set(key,new Set());
+        owners.get(key).add(owner);
+      }
+    }
+    return owners;
+  }
+
+  function rpcmPreparePersonScan(room) {
+    // A synchronous snapshot only. Nothing survives an await or goes into the DB.
+    const scan = {cards:normalizeKnowledgeCards(room), records:normalizePersonStateRecords(room)};
+    scan.player = currentPersonPlayerName(room,scan);
+    scan.conflicts = knowledgeConflicts(room,scan.cards);
+    scan.bundles = personInformationBundles(room,scan);
+    scan.slots = new Map();
+    const characters = (room.slots || []).filter(slot => slot.group === 'character');
+    const termSlots = new Map();
+    for (const slot of characters) {
+      const title=String(slot.title || '').trim();
+      if (!scan.slots.has(title)) scan.slots.set(title,slot);
+      for (const term of characterDetectionTerms(slot)) {
+        const key=normalizedRecallTerm(term);
+        if (!termSlots.has(key)) termSlots.set(key,new Set()); termSlots.get(key).add(slot);
+      }
+    }
+    const matches = new Map(), identities = new Map();
+    for (const bundle of scan.bundles) {
+      const exact = scan.slots.get(bundle.name);
+      const candidates = exact ? [exact] : [...(termSlots.get(normalizedRecallTerm(bundle.name)) || [])];
+      if (candidates.length !== 1) continue;
+      const slot=candidates[0]; matches.set(bundle.name,slot);
+      if (!identities.has(slot)) identities.set(slot,new Set()); identities.get(slot).add(bundle.name);
+    }
+    for (const [name,slot] of matches) {
+      // One slot representing multiple independent person names is not an identity merge.
+      if (identities.get(slot).size > 1 && String(slot.title || '').trim() !== name) continue;
+      scan.slots.set(name,{...slot,title:name,aliases:[...characterAutomaticTerms(slot),...(Array.isArray(slot.aliases) ? slot.aliases : [])]});
+    }
+    const ownerItems = characters.map(slot => {
+      const names=identities.get(slot);
+      if (names?.size !== 1) return slot;
+      return scan.slots.get([...names][0]) || slot;
+    });
+    scan.owners = rpcmDetectionOwners([...ownerItems,...scan.bundles.map(bundle => ({title:bundle.name}))]);
+    return scan;
+  }
+
+  function rpcmCausalRecallLinks(index, query, characters) {
+    // Explicit non-person alias equivalence, never an inferred causal event or rewritten log.
+    const allowed = new Set(['object','event','location']);
+    const groups = (index.explicitAliasGroups || []).filter(group => group.every(term => !characters.has(term))
+      && group.some(term => allowed.has(index.categories.get(term))));
+    const owners = new Map();
+    groups.forEach((group,i) => group.forEach(term => {
+      if (!owners.has(term)) owners.set(term,new Set()); owners.get(term).add(i);
+    }));
+    const links = [], seen=new Set();
+    for (const group of groups) {
+      const anchor = group.find(term => term.length >= 3 && owners.get(term)?.size === 1 && aliasAppears(query.primary,term));
+      if (!anchor) continue;
+      for (const term of group) {
+        if (term.length < 3 || owners.get(term)?.size !== 1 || aliasAppears(query.primary,term) || seen.has(term)) continue;
+        seen.add(term); links.push({anchor,term});
+        if (links.length >= 12) return links;
+      }
+    }
+    return links;
+  }
+
+
+  function carrierRequestMetrics(nextText,room=state.currentRoom) {
+    const message = String(nextText || '');
+    const wire = rpcmCarrierWire(message,room);
+    return { chars:message.length, messageBytes:utf8ByteLength(message),
+      payloadBytes:wire.bytes, utf8PayloadBytes:wire.utf8Bytes, encoding:wire.encoding };
+  }
+
+  function carrierRequestWithinLimits(room, nextText, limits = null) {
+    const metrics = carrierRequestMetrics(nextText,room),maxChars=Number(room?.maxChars)||APP.defaultMaxChars;
+    const byteLimit=Math.min(APP.safeCarrierPayloadBytes,Number.isFinite(Number(limits?.byteBudget))?Math.max(0,Number(limits.byteBudget)):APP.safeCarrierPayloadBytes);
+    return metrics.chars <= maxChars && metrics.payloadBytes <= byteLimit;
+  }
+
+  function assertCarrierRequestWithinLimits(room, nextText, prefix = 'carrier 총 길이', limits = null) {
+    const metrics = carrierRequestMetrics(nextText,room);
+    const maxChars = Number(room?.maxChars) || APP.defaultMaxChars;
+    const byteLimit=Math.min(APP.safeCarrierPayloadBytes,Number.isFinite(Number(limits?.byteBudget))?Math.max(0,Number(limits.byteBudget)):APP.safeCarrierPayloadBytes);
+    if (metrics.chars > maxChars) throw new Error(`${prefix}가 ${formatCount(metrics.chars)}자입니다. 설정 한도 ${formatCount(maxChars)}자를 넘습니다.`);
+    if (metrics.payloadBytes > byteLimit) {
+      throw new Error(`${prefix}의 ${metrics.encoding.toUpperCase()} 요청 크기가 ${formatCount(metrics.payloadBytes)}바이트입니다. 서버 안전선 ${formatCount(byteLimit)}바이트를 넘습니다. 날짜로그를 모두 제외해도 초과하므로 현재상태·타임라인·캐릭터·중요 물품·기타 중 일부를 줄이거나 주입 해제해 주세요.`);
+    }
+    return metrics;
+  }
+
+  function carrierOriginalCharsForUi(room) {
+    if (room?.pending) {
+      const chars = Number(room.pending.originalChars);
+      return Number.isFinite(chars) && chars >= 0 ? chars : null;
+    }
+    const preview = state.carrierCapacityPreview;
+    if (!preview || String(preview.roomId || '') !== String(room?.chatId || '') || preview.loading || preview.error) return null;
+    const chars = Number(preview.originalChars);
+    return Number.isFinite(chars) && chars >= 0 ? chars : null;
+  }
+
+  function carrierOriginalTextForUi(room) {
+    if (room?.pending) return String(room.pending.originalText || '');
+    const preview = state.carrierCapacityPreview;
+    if (!preview || String(preview.roomId || '') !== String(room?.chatId || '') || preview.loading || preview.error || typeof preview.originalText !== 'string') return null;
+    return preview.originalText;
+  }
+
+  function carrierCapacityForUi(room, contextChars = 0, contextBlock = '') {
+    const max = Number(room?.maxChars) || APP.defaultMaxChars;
+    const context = Math.max(0, Number(contextChars) || 0);
+    const original = carrierOriginalCharsForUi(room);
+    const known = original !== null;
+    const separator = context > 0 ? 2 : 0;
+    const originalText = carrierOriginalTextForUi(room);
+    const payloadMetrics = originalText !== null && String(contextBlock || '')
+      ? carrierRequestMetrics(buildInjectedMessage(originalText, String(contextBlock || '')),room)
+      : null;
+    const stored=room?.pending,storedBytes=Number(stored?.carrierPayloadBytes)||0;
+    const verifiedStorage=!!stored?.verified&&['utf-8','utf-16le'].includes(stored?.carrierEncoding)&&storedBytes>0;
+    return {
+      max,
+      context,
+      original:known ? original : 0,
+      separator:known ? separator : 0,
+      total:known ? original + separator + context : context,
+      availableContext:known ? Math.max(0, max - original - separator) : max,
+      payloadBytes:storedBytes||payloadMetrics?.payloadBytes||0,
+      messageBytes:Number(stored?.carrierMessageBytes)||payloadMetrics?.messageBytes||0,
+      encoding:verifiedStorage?stored.carrierEncoding:payloadMetrics?.encoding||'',
+      byteSource:verifiedStorage?'verified':storedBytes?'legacy':payloadMetrics?'estimate':'unknown',
+      estimatedPayloadBytes:payloadMetrics?.payloadBytes??null,
+      estimatedEncoding:payloadMetrics?.encoding||'',
+      byteLimit:APP.safeCarrierPayloadBytes,
+      byteKnown:!!storedBytes||!!payloadMetrics,
+      known,
+      loading:!room?.pending && !!state.carrierCapacityPreview?.loading && String(state.carrierCapacityPreview?.roomId || '') === String(room?.chatId || ''),
+      error:!room?.pending && String(state.carrierCapacityPreview?.roomId || '') === String(room?.chatId || '') ? String(state.carrierCapacityPreview?.error || '') : '',
+    };
+  }
+
+  function carrierCapacityDetailText(room, capacity) {
+    if (capacity.known) {
+      const answerLabel = room?.pending ? '현재 AI 답변' : '최신 AI 답변';
+      const encoding=capacity.encoding==='utf-16le'?'UTF-16LE':'UTF-8';
+      const estimate=capacity.estimatedEncoding==='utf-16le'?'UTF-16LE':'UTF-8';
+      const byteText = !capacity.byteKnown?'':capacity.byteSource==='verified'
+        ? ` · 검증된 저장본 ${encoding} 요청 ${formatCount(capacity.payloadBytes)} / ${formatCount(capacity.byteLimit)}B 안전선${capacity.estimatedPayloadBytes!==null&&(capacity.estimatedPayloadBytes!==capacity.payloadBytes||capacity.estimatedEncoding!==capacity.encoding)?` · 현재 설정 예상 ${estimate} ${formatCount(capacity.estimatedPayloadBytes)}B`:''}`
+        : capacity.byteSource==='legacy'
+          ? ` · 기존 요청 기록 ${formatCount(capacity.payloadBytes)}B (인코딩 미확인)${capacity.estimatedPayloadBytes!==null?` · 현재 설정 예상 ${estimate} ${formatCount(capacity.estimatedPayloadBytes)} / ${formatCount(capacity.byteLimit)}B`:''}`
+          : ` · 다음 주입 예상 ${estimate} 요청 ${formatCount(capacity.payloadBytes)} / ${formatCount(capacity.byteLimit)}B 안전선`;
+      return `주입 자료 ${formatCount(capacity.context)}자 + ${answerLabel} ${formatCount(capacity.original)}자 + 연결 ${capacity.separator}자 = 총 ${formatCount(capacity.total)}자${byteText}`;
+    }
+    if (capacity.loading) return `주입 자료 ${formatCount(capacity.context)}자 · 최신 AI 답변 길이 확인 중…`;
+    if (capacity.error) return `주입 자료 ${formatCount(capacity.context)}자 · 최신 AI 답변 길이를 확인하지 못했습니다.`;
+    return `주입 자료 ${formatCount(capacity.context)}자 · 실제 한도에는 최신 AI 답변 본문도 포함됩니다.`;
+  }
+
+  function fitLogItemsToBudget(room, baseItems, logItems, contextBudget = null, appendBudgetInfo = false) {

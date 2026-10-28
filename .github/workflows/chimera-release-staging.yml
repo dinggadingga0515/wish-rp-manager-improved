@@ -1,0 +1,35 @@
+name: Assemble Chimera 0.17.30.1
+on:
+  push:
+    branches:
+      - chimera-0.17.30.1-upload
+    paths:
+      - 'release_parts/**'
+permissions:
+  contents: write
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Reassemble and verify exact release file
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find release_parts -type f -name 'part-*' | wc -l)" -eq 47
+          cat release_parts/part-* > '위시_RP_Manager_개선.user.js'
+          echo "6199dd44646e4baf21c6dad2887b27e4cf954ac6beb1686563a61663ae28111f  위시_RP_Manager_개선.user.js" | sha256sum -c -
+          node --check '위시_RP_Manager_개선.user.js'
+          grep -q '^// @name         🪽위시 RP Manager(키메라 버전)$' '위시_RP_Manager_개선.user.js'
+          grep -q '^// @version      0.17.30.1$' '위시_RP_Manager_개선.user.js'
+      - name: Commit verified release only to staging branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- '위시_RP_Manager_개선.user.js'
+          git commit -m 'Assemble verified Chimera 0.17.30.1 installer'
+          git push origin HEAD:chimera-0.17.30.1-upload

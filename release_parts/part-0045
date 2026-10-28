@@ -1,0 +1,1000 @@
+        if (BLOCK_TAGS.has(cur.tagName)) return cur;
+        cur = cur.parentElement;
+      }
+      return root;
+    };
+
+    if (nearestBlock(a) !== nearestBlock(b)) return true;
+
+    try {
+      const range = document.createRange();
+      range.setStartAfter(a);
+      range.setEndBefore(b);
+      const frag = range.cloneContents();
+      if (frag.querySelector?.('br,p,div,li,blockquote,pre,h1,h2,h3,h4,h5,h6,table,tr,td,th,section,article')) return true;
+    } catch (_) {}
+
+    return false;
+  }
+
+  function buildRenderedTextIndex(root) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const segments = [];
+    let flat = '';
+    let prev = null;
+
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const raw = String(node.nodeValue || '');
+      if (prev && logicalBreakBetweenTextNodes(prev, node, root)) flat += RENDER_BOUNDARY;
+      const start = flat.length;
+      flat += raw;
+      segments.push({ node, start, end:flat.length });
+      prev = node;
+    }
+    return { flat, segments };
+  }
+
+  function findUniqueRenderedRange(root, source) {
+    const needle = normalizeCrackLinebreaks(source);
+    if (!needle || needle.includes('\n') || needle.includes(RENDER_BOUNDARY)) return null;
+
+    const index = buildRenderedTextIndex(root);
+    const at = index.flat.indexOf(needle);
+    if (at < 0) return null;
+    if (index.flat.indexOf(needle, at + 1) >= 0) return null;
+
+    const end = at + needle.length;
+    const overlaps = index.segments.filter(seg => seg.end > at && seg.start < end);
+    if (!overlaps.length) return null;
+
+    // 논리적 문단/줄바꿈 경계를 가로질러서는 절대 즉시 패치하지 않습니다.
+    if (index.flat.slice(at, end).includes(RENDER_BOUNDARY)) return null;
+
+    return { index, at, end, overlaps };
+  }
+
+  function replacePlainTextAcrossNodes(root, from, to) {
+    const source = normalizeCrackLinebreaks(from);
+    const replacement = normalizeCrackLinebreaks(to);
+    if (!source || source.includes('\n') || replacement.includes('\n')) return false;
+
+    const match = findUniqueRenderedRange(root, source);
+    if (!match) return false;
+
+    const { at, end, overlaps } = match;
+    let remaining = replacement;
+
+    overlaps.forEach((seg, i) => {
+      const node = seg.node;
+      const raw = String(node.nodeValue || '');
+      const localStart = Math.max(0, at - seg.start);
+      const localEnd = Math.min(raw.length, end - seg.start);
+      const matchedLen = Math.max(0, localEnd - localStart);
+
+      let piece = '';
+      if (i === overlaps.length - 1) {
+        piece = remaining;
+        remaining = '';
+      } else {
+        const take = Math.min(matchedLen, remaining.length);
+        piece = remaining.slice(0, take);
+        remaining = remaining.slice(take);
+      }
+
+      node.nodeValue = raw.slice(0, localStart) + piece + raw.slice(localEnd);
+    });
+
+    return remaining.length === 0;
+  }
+
+  function domStructureSignature(root) {
+    const out = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (node.nodeType === Node.TEXT_NODE) out.push('#text');
+      else out.push(`<${node.nodeName}>`);
+    }
+    return out.join('|');
+  }
+
+  function simulateSafeRenderedReplacements(root, replacements) {
+    if (!(root instanceof Element)) return false;
+    const clone = root.cloneNode(true);
+    const beforeSig = domStructureSignature(clone);
+
+    for (const rep of replacements) {
+      const fromPlain = stripMarkdown(String(rep?.from ?? ''));
+      const toPlain = stripMarkdown(String(rep?.to ?? ''));
+      if (!fromPlain || fromPlain.includes('\n') || toPlain.includes('\n')) return false;
+      if (!replacePlainTextAcrossNodes(clone, fromPlain, toPlain)) return false;
+    }
+
+    return domStructureSignature(clone) === beforeSig;
+  }
+
+  function singlePlainDiff(oldText, newText) {
+    const a = normalizeCrackLinebreaks(oldText);
+    const b = normalizeCrackLinebreaks(newText);
+    let start = 0;
+    while (start < a.length && start < b.length && a[start] === b[start]) start++;
+    let aEnd = a.length;
+    let bEnd = b.length;
+    while (aEnd > start && bEnd > start && a[aEnd - 1] === b[bEnd - 1]) {
+      aEnd--;
+      bEnd--;
+    }
+    return { from:a.slice(start, aEnd), to:b.slice(start, bEnd) };
+  }
+
+  function findVisibleMessageMarkdown(target) {
+    const id = String(target?.id || '');
+    if (id) {
+      try {
+        const escaped = CSS.escape(id);
+        const host = document.querySelector(
+          `[data-message-id="${escaped}"],[data-message-group-id="${escaped}"]`
+        );
+        const exact = host?.matches?.('.wrtn-markdown') ? host : host?.querySelector?.('.wrtn-markdown');
+        if (exact) return exact;
+      } catch (_) {}
+    }
+
+    const oldPlain = stripMarkdown(target?.content || '');
+    const snippet = normalizeText(oldPlain.length > 48 ? oldPlain.slice(-48) : oldPlain);
+    if (!snippet) return null;
+    for (const node of document.querySelectorAll('.wrtn-markdown')) {
+      if (normalizeText(node.textContent).includes(snippet)) return node;
+    }
+    return null;
+  }
+
+  /*
+   * 서버 원문은 PATCH로 수정하되, 화면의 .wrtn-markdown 전체를 innerHTML로 다시 만들지 않습니다.
+   * Crack의 기존 DOM 구조(문단/줄바꿈/서식)는 그대로 두고 안전하게 찾을 수 있는 텍스트 조각만
+   * Text node 수준에서 바꿉니다. 이렇게 하면 <p> 경계가 개행으로 재직렬화되어
+   * 한 줄씩 빈 줄이 끼는 현상을 피할 수 있습니다.
+   *
+   * 첨부된 "수정창 줄바꿈 보존" 확프와 같은 원칙으로, 줄바꿈은 paragraph 재생성이 아니라
+   * 필요한 경우에만 <br>로 표현합니다. 안전한 위치를 찾지 못하면 DOM을 억지로 재구성하지 않고
+   * 서버 반영만 유지하여 Crack의 네이티브 렌더가 형식을 결정하도록 둡니다.
+   */
+  // NEXT-10 · Response Refiner live sync / TEMP32 strict verification
+  // 서버 readback이 정본이다. 이 계층은 서버에서 확정된 rawContent를 현재 Crack message store에
+  // 복사해 새로고침을 생략하기 위한 선택적 보조계층이다. 어떤 불확실성도 성공으로 추정하지 않는다.
+  // Keep read-only diagnostics for existing archived records. No page-store probing.
+  function refinerCorrectionIntent(previousText,correctedText,parsed){
+    const before=normalizeCrackLinebreaks(String(previousText??'')),after=normalizeCrackLinebreaks(String(correctedText??''));
+    if(!Array.isArray(parsed?.replacements)||!parsed.replacements.length)return {ok:true,mode:'manual-or-full',selected:before===after?0:1};
+    try{
+      const pack={...parsed,replacements:parsed.replacements.map(row=>({...row,from:normalizeCrackLinebreaks(String(row.from??'')),to:normalizeCrackLinebreaks(String(row.to??''))}))};
+      const units=correctionUnits(before,pack);
+      // An accepted selected proposal must reproduce the exact intended raw
+      // result. This protects every span outside the selected replacements.
+      if(applyCorrectionUnits(before,units)!==after)return {ok:false,reason:'selected-correction-mismatch',mode:'selected',selected:units.length};
+      return {ok:true,mode:'selected',selected:units.length};
+    }catch(_){return {ok:false,reason:'selected-correction-invalid',mode:'selected',selected:0};}
+  }
+
+  function refinerSafeSyncDiagnostics(value){
+    if(!value||typeof value!=='object')return null;
+    const stages=['page-store-after-server-save'],representations=['raw','raw-mismatch','visible-body-before','visible-body-after'];
+    if(!stages.includes(value.stage)||!representations.includes(value.representation))return null;
+    const out={stage:value.stage,representation:value.representation};
+    for(const key of ['storeChars','beforeChars','afterChars','storeChecks','storeWaitMs','screenChars','screenBeforeChars','screenAfterChars','screenChecks','screenWaitMs','screenDiffIndex','selectedVerified','unchangedVerified','deletedVisibleChars','insertedVisibleChars','postCheckCount','postCheckWindowMs'])if(Number.isSafeInteger(value[key])&&value[key]>=0)out[key]=value[key];
+    for(const key of ['storeHasContext','beforeHasContext','afterHasContext','malformed','visibleBeforeMatches','visibleAfterMatches','suffixMatches','screenBeforeMatches','screenAfterMatches','coverageVerified'])if(typeof value[key]==='boolean')out[key]=value[key];
+    for(const key of ['screenDiffExpected','screenDiffActual'])if(typeof value[key]==='string')out[key]=value[key].slice(0,80);
+    if(['verified','unchanged-format-not-compared'].includes(value.inlineCheck))out.inlineCheck=value.inlineCheck;
+    if(['story-body','full-response'].includes(value.screenRegion))out.screenRegion=value.screenRegion;
+    if(['unchanged-not-compared','changed-verified','changed-unverified','not-separated'].includes(value.statusCheck))out.statusCheck=value.statusCheck;
+    if(['verified','unverified','selected-change-not-visible','untouched-content-mismatch','unexpected-extra-content'].includes(value.contentCheck))out.contentCheck=value.contentCheck;
+    if(['finished','diverged','scope-changed','native-edit','generation-started','not-visible','superseded','unverified'].includes(value.postCheckState))out.postCheckState=value.postCheckState;
+    if(typeof value.postCheckReason==='string')out.postCheckReason=value.postCheckReason.slice(0,80);
+    if(typeof value.postContentCheck==='string')out.postContentCheck=value.postContentCheck.slice(0,80);
+    return out;
+  }
+
+  function refinerLiveSyncDiagnosticsLabel(value){
+    const row=refinerSafeSyncDiagnostics(value);if(!row)return '';
+    const flag=key=>typeof row[key]==='boolean'?(row[key]?'있음':'없음'):'미확인';
+    const match=key=>typeof row[key]==='boolean'?(row[key]?'일치':'불일치'):'미확인';
+    const known=['visible-body-before','visible-body-after'].includes(row.representation);
+    return `비교 위치: 서버 저장 후 페이지 내부 응답 저장소（갱신 직전 비교） · 길이(본문+주입 포함): 페이지 ${row.storeChars??'?'}자 / 저장 직전 서버 ${row.beforeChars??'?'}자 / 교정 서버 ${row.afterChars??'?'}자\n숨김 주입: 페이지 ${flag('storeHasContext')} / 저장 직전 서버 ${flag('beforeHasContext')} / 교정 서버 ${flag('afterHasContext')} · 본문: 저장 직전 ${match('visibleBeforeMatches')} / 교정 후 ${match('visibleAfterMatches')}${known?'\n본문은 정확히 일치하고 페이지에만 숨김 주입이 빠져 있어, 서버에서 확인한 교정본과 주입문구를 함께 반영했습니다.':''}${Number.isSafeInteger(row.storeChecks)?`
+내부 갱신 확인: ${row.storeChecks}회 · ${row.storeWaitMs??0}ms`:''}${Number.isSafeInteger(row.screenChecks)?`
+최종 화면 확인: ${row.screenRegion==='story-body'?'상태창 아래 본문 · ':''}${row.screenChecks}회 · ${row.screenWaitMs??0}ms · 표시 ${row.screenChars??'?'}자 / 원문 표시 예상 ${row.screenBeforeChars??'?'}자 / 교정 표시 예상 ${row.screenAfterChars??'?'}자 · 원문과 ${match('screenBeforeMatches')} / 교정본과 ${match('screenAfterMatches')}`:''}${row.statusCheck==='unchanged-not-compared'?`
+상태창: 이번 교정에서 수정하지 않아 표시 세부 차이는 비교하지 않았습니다.`:row.statusCheck==='changed-verified'?`
+상태창: 선택한 수정 내용 반영 확인.`:row.statusCheck==='changed-unverified'?`
+상태창: 본문 확인과 별도로 선택한 상태창 수정의 반영은 확인하지 못했습니다.`:''}${Number.isSafeInteger(row.screenDiffIndex)?`
+최초 화면 차이: ${row.screenDiffIndex+1}번째 표시 문자 부근 · 교정 예상 ${JSON.stringify(row.screenDiffExpected??'')} / 실제 표시 ${JSON.stringify(row.screenDiffActual??'')}`:''}${row.contentCheck?`\n수정 구간·보존 구간 확인: 수정 표시 ${row.selectedVerified??0}구간 / 보존 표시 ${row.unchangedVerified??0}구간 · 전체 범위 ${row.coverageVerified?'확인':'미확인'}`:''}${row.postCheckState?`\n교정 이후 확인: ${row.postCheckCount??0}회 · ${row.postCheckState==='diverged'?'이상 감지':row.postCheckState==='finished'?'정해진 감시 구간 종료':'감시 중지·미확인'}${row.postCheckReason?' · '+refinerLiveSyncReasonLabel(row.postCheckReason):''}`:''}${row.inlineCheck==='unchanged-format-not-compared'?`
+본문·코드 반영 확인 완료. 변경하지 않은 강조·링크의 세부 비교는 검증기 지원 범위 밖이어서 기록으로만 남겼습니다.`:''}`;
+  }
+
+  function refinerLiveSyncReasonLabel(reason){
+    const code=String(reason||'').replace(/^final-visible-verify-failed:/,'');
+    const labels={
+      'disabled':'설정에서 새로고침 없는 수정을 꺼두었습니다',
+      'visible-text-mismatch':'화면 본문이 저장한 교정본과 일치하지 않았습니다',
+      'visible-code-mismatch':'화면 코드 내용이나 공백이 교정본과 일치하지 않았습니다',
+      'visible-inline-mismatch':'화면 강조나 링크가 교정본과 일치하지 않았습니다',
+      'visible-structure-mismatch':'화면의 문단·서식 구조를 교정본과 동일하다고 확인하지 못했습니다',
+      'target-revision-not-visible':'교정한 응답 버전이 현재 화면에서 확인되지 않았습니다',
+      'store-source-mismatch':'페이지 내부 응답이 서버 저장 직전 원문·저장된 교정본과 일치하지 않았습니다',
+      'store-reverted':'페이지 내부 응답이 저장한 교정본과 다릅니다',
+      'store-update-failed':'페이지 내부 응답 갱신에 실패했습니다',
+      'message-or-updater-missing':'페이지 내부의 대상 응답이나 갱신 수단을 찾지 못했습니다',
+      'chat-state-not-found':'현재 채팅 상태를 확인하지 못했습니다',
+      'store-not-found':'페이지 내부 응답 저장소를 찾지 못했습니다',
+      'store-read-failed':'페이지 내부 응답 저장소를 읽지 못했습니다',
+      'target-generating':'교정 대상 응답이 생성 중 상태로 바뀌었습니다',
+      'generation-unverified':'생성 중 표시가 남아 대상 응답의 완료 상태를 확정하지 못했습니다',
+      'chat-not-idle':'페이지 내부 채팅 상태가 대기로 전환되지 않았습니다',
+      'native-editor-open':'크랙의 기본 수정창이 열려 있습니다',
+      'visible-text-unsupported':'이 본문의 화면 텍스트를 엄격하게 비교할 수 없었습니다',
+      'visible-structure-unsupported':'이 본문의 서식 구조를 엄격하게 비교할 수 없었습니다',
+      'visible-inline-unsupported':'서버에는 저장됐지만 이 서식의 화면 표시를 비교할 수 없어, 화면 오류로 판정하지 않았습니다',
+      'visible-language-unverified':'변경한 코드 언어가 화면에 반영됐는지 확인하지 못했습니다',
+      'visible-status-anchor-unverified':'상태창과 본문의 경계를 확인하지 못했습니다. 표시 차이만으로 자동 새로고침하지 않습니다',
+      'visible-status-change-unverified':'본문 반영은 확인했으나 선택한 상태창 수정의 표시를 확인하지 못했습니다. 자동 새로고침하지 않습니다',
+      'visible-read-failed':'현재 화면을 읽어 검증하지 못했습니다',
+      'chat-mismatch':'연결된 채팅 상태가 현재 방과 다릅니다',
+      'scope-changed':'검증 중 현재 방이 바뀌었습니다'
+    };
+    return labels[code]||'즉시 반영 검증을 완료하지 못했습니다';
+  }
+
+  function patchVisibleMessage(target, newText, parsed = null) {
+    const node = findVisibleMessageMarkdown(target);
+    if (!node) return false;
+
+    const reps = Array.isArray(parsed?.replacements) ? parsed.replacements : [];
+    if (reps.length) {
+      // 실제 DOM을 만지기 전에 복제본에서 전체 교체를 먼저 시뮬레이션합니다.
+      // 모든 교체가 유일하게 식별되고 DOM 구조가 그대로일 때만 실화면에 적용합니다.
+      if(reps.some(rep=>String(rep.from)!==String(rep.to)&&stripMarkdown(rep.from)===stripMarkdown(rep.to)))return false;
+      if (!simulateSafeRenderedReplacements(node, reps)) return false;
+
+      // 실화면 적용 중 예상치 못한 DOM 변화가 끼어들어도 부분 적용 상태를 남기지 않습니다.
+      // Text node 값만 스냅샷하고 실패 시 그대로 되돌리므로 DOM 구조/이벤트는 건드리지 않습니다.
+      const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+      const snapshot = [];
+      for (let t = walker.nextNode(); t; t = walker.nextNode()) snapshot.push([t, String(t.nodeValue || '')]);
+
+      for (const rep of reps) {
+        const fromPlain = stripMarkdown(String(rep?.from ?? ''));
+        const toPlain = stripMarkdown(String(rep?.to ?? ''));
+        if (!replacePlainTextAcrossNodes(node, fromPlain, toPlain)) {
+          for (const [t, value] of snapshot) {
+            try { if (t?.isConnected) t.nodeValue = value; } catch (_) {}
+          }
+          return false;
+        }
+      }
+      return true;
+    }
+
+    // 사용자가 확인창에서 교정본을 직접 수정했거나 replacements가 없는 경우에도
+    // 단일 차이가 한 문단 안에서 유일하게 식별되는 경우만 복제본 검증 후 즉시 반영합니다.
+    const oldPlain = stripMarkdown(target?.content || '');
+    const newPlain = stripMarkdown(newText);
+    const diff = singlePlainDiff(oldPlain, newPlain);
+    if (!diff.from || diff.from.includes('\n') || diff.to.includes('\n')) return false;
+
+    const synthetic = [{ from:diff.from, to:diff.to }];
+    if (!simulateSafeRenderedReplacements(node, synthetic)) return false;
+
+    const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+    const snapshot = [];
+    for (let t = walker.nextNode(); t; t = walker.nextNode()) snapshot.push([t, String(t.nodeValue || '')]);
+    if (replacePlainTextAcrossNodes(node, diff.from, diff.to)) return true;
+    for (const [t, value] of snapshot) {
+      try { if (t?.isConnected) t.nodeValue = value; } catch (_) {}
+    }
+    return false;
+  }
+
+  async function applyCorrection(target, correctedText, reason, parsed = null, options = {}) {
+    const applyStarted=Date.now(),applyPhase={guardMs:0,recentCheckMs:0,precheckMs:0,bridgeMs:0,postStateMs:0,domMs:0,sourceMutatedMs:0};
+    const reviewScope=chatStateKey();
+    const assertCurrentScope=()=>{if(chatStateKey()!==reviewScope){const error=new Error('교정은 이전 방에 저장됐습니다. 현재 방에서는 응답을 다시 검수해 주세요.');error.code='RESPONSE_SAVED_SCOPE_CHANGED';throw error;}};
+    const guardNativeEdit=async()=>{
+      if(findOpenCrackEditDialog()){setStatus('수정창 닫힘 대기');await waitForCrackEditDialogToClose();}
+      if((target?.reviewScope&&target.reviewScope!==reviewScope)||chatStateKey()!==reviewScope){const error=new Error('방이 바뀌었습니다. 현재 응답을 다시 검수해 주세요.');error.code='STALE_RESPONSE_REVIEW';throw error;}
+      // writeReviewedResponse checks the exact source inside the carrier queue and again immediately before PATCH.
+      // Keep dialog/room checks here; do not serially repeat those server reads in the UI.
+    };
+    let phaseStarted=Date.now();await guardNativeEdit();applyPhase.guardMs+=Date.now()-phaseStarted;setStatus('서버 반영 중');
+    phaseStarted=Date.now();const recent=await fetchRecentMessages(20);applyPhase.recentCheckMs=Date.now()-phaseStarted;
+    phaseStarted=Date.now();
+    if(looksLikeUserCopy(correctedText,recent))throw new Error('사용자 입력과 같은 교정본은 적용할 수 없습니다.');
+    const safeText=normalizeCrackLinebreaks(correctedText),intent=refinerCorrectionIntent(target.content,safeText,parsed);
+    if(!intent.ok){const error=new Error('선택한 수정 외의 원문이 달라졌거나 선택 변경을 확인하지 못했습니다. 수정안을 다시 검토해 주세요.');error.code='INVALID_SELECTED_CORRECTION';throw error;}
+    let archiveWarning=saveCorrectionArchive(target,safeText,reason,'적용 대기')?.saveError||'',result;applyPhase.precheckMs=Date.now()-phaseStarted;
+    try{phaseStarted=Date.now();await guardNativeEdit();applyPhase.guardMs+=Date.now()-phaseStarted;phaseStarted=Date.now();result=await patchMessage(target,safeText);applyPhase.bridgeMs=Date.now()-phaseStarted;}catch(error){saveCorrectionArchive(target,safeText,reason+' · '+String(error.message||error),'적용 확인 실패');throw error;}
+    phaseStarted=Date.now();assertCurrentScope();baselineFingerprint=messageFingerprint(result);markProcessed({id:result.id,content:result.content});
+    autoObservedStableId=String(result.id||autoObservedStableId);rememberAutoObservedId({id:result.id});
+    autoGenerationEvidence=null;autoReviewRetryPermit=false;lastAutoAssistantKey=messageAutoKey({id:result.id,content:result.content});
+    const pendingWarning=String(result.pendingSaveError||'');
+    if(pendingWarning){window.__WISH_RP_MANAGER_AI_BRIDGE__?.reportRefinerIssue('error','응답 교정은 저장됐지만 주입 복구 정보의 로컬 저장을 확인해 주세요: '+pendingWarning,target.id);toast('교정 저장 완료 · 로컬 주입 정보 확인 필요','error');}applyPhase.postStateMs=Date.now()-phaseStarted;
+    phaseStarted=Date.now();let domOk=false;
+    try{const node=findVisibleMessageMarkdown(target);domOk=patchVisibleMessage(target,result.content,parsed);if(domOk&&node){const expected=node.textContent;await sleep(180);domOk=node.isConnected&&node.textContent===expected;}}catch(_){domOk=false;}applyPhase.domMs=Date.now()-phaseStarted;
+    assertCurrentScope();
+    let mutationWarning='',mutationTiming=null;phaseStarted=Date.now();
+    try{mutationTiming=await window.__WISH_RP_MANAGER_AI_BRIDGE__?.sourceMutated(target.id,messageFingerprint(target),messageFingerprint({id:result.id,content:result.content}),getRoomScopeKey(getChatId()));}
+    catch(error){mutationWarning=String(error?.message||error);window.__WISH_RP_MANAGER_AI_BRIDGE__?.reportRefinerIssue('error','교정은 서버에 저장됐지만 관련 초안 상태 저장에 실패했습니다. 원문을 다시 검증해 주세요.',target.id);toast('교정 저장 완료 · 관련 초안 상태 확인 필요','error');}applyPhase.sourceMutatedMs=Date.now()-phaseStarted;
+    assertCurrentScope();
+    if(reviewTiming){const applyMs=Date.now()-applyStarted,bridgeInner=Number(result.applyTiming?.totalMs)||applyPhase.bridgeMs,bridgeKnown=(Number(result.applyTiming?.queueMs)||0)+(Number(result.applyTiming?.sourceReadMs)||0)+(Number(result.applyTiming?.writeMs)||0)+(Number(result.applyTiming?.localSaveMs)||0),knownTop=applyPhase.guardMs+applyPhase.recentCheckMs+applyPhase.precheckMs+applyPhase.bridgeMs+applyPhase.postStateMs+applyPhase.domMs+applyPhase.sourceMutatedMs;Object.assign(reviewTiming,{applyMs,applyQueueMs:Number(result.applyTiming?.queueMs)||0,applyQueueBlockers:Array.isArray(result.applyTiming?.queueBlockers)?result.applyTiming.queueBlockers:[],applySourceReadMs:Number(result.applyTiming?.sourceReadMs)||0,applyWriteMs:Number(result.applyTiming?.writeMs)||0,applyLocalSaveMs:Number(result.applyTiming?.localSaveMs)||0,applyGuardMs:applyPhase.guardMs,applyRecentCheckMs:applyPhase.recentCheckMs,applyPrecheckMs:applyPhase.precheckMs,applyBridgeMs:applyPhase.bridgeMs,applyBridgeResidualMs:Math.max(0,bridgeInner-bridgeKnown),applyPostStateMs:applyPhase.postStateMs,applyDomMs:applyPhase.domMs,applySourceMutatedMs:applyPhase.sourceMutatedMs,applySourceMutationFailed:Boolean(mutationWarning),applySourceSaveMs:Number(mutationTiming?.saveMs)||0,applySourceSaveQueueMs:Number(mutationTiming?.saveQueueMs)||0,applySourceSaveBlockedBy:String(mutationTiming?.saveBlockedBy||''),applySourceAffected:Array.isArray(mutationTiming?.affected)?mutationTiming.affected:[],applyResidualMs:Math.max(0,applyMs-knownTop)});}
+    const archive=saveCorrectionArchive(target,safeText,reason,domOk?'서버 저장·화면 반영 확인 · 새로고침 예정':'서버 저장 확인 · 화면 새로고침 필요',{reflectionState:'reload',liveSyncReason:'server-refresh'});
+    archiveWarning ||= archive?.saveError||'';
+    if(archiveWarning){window.__WISH_RP_MANAGER_AI_BRIDGE__?.reportRefinerIssue('error','교정 기록 저장 확인 필요: '+archiveWarning,target.id);toast('교정 저장 완료 · 교정 기록 확인 필요','error');}
+    const warning=pendingWarning||mutationWarning||archiveWarning;
+    addProcessHistory('교정 적용',reason,{target,corrected:{id:result.id,content:result.content},verdict:parsed?.verdict||''});
+    if(options.reloadAfter===false){
+      markDeferredRefinerReload('남은 교정 검토가 끝나면 서버 저장본으로 화면을 다시 불러옵니다.',result.id);
+      setStatus('교정 저장 완료 · 남은 교정 검토 후 새로고침',warning?'error':'ok');
+      showReviewNotice('교정 저장 완료 · 남은 검토 대기',warning?'저장은 완료됐으나 로컬 기록 확인이 필요합니다. 오류 알림을 확인해 주세요.':'남은 수정안을 확인한 뒤 저장된 화면을 다시 불러옵니다.',warning?'error':'ok',5000);
+    }else{
+      clearDeferredRefinerReload(result.id);setStatus('교정 완료 · 새로고침 준비',warning?'error':'ok');
+      scheduleRefinerReload(domOk?650:350,warning?'서버 저장은 완료됐으나 로컬 기록 확인이 필요합니다. 저장된 화면을 다시 불러옵니다.':'서버에 저장된 최신 교정본을 다시 불러옵니다.',warning?'error':'ok',{messageId:result.id,fingerprint:messageFingerprint(result)});
+    }
+    return {...target,id:result.id,content:result.content};
+  }
+
+  function refinerGenerationVisible() {
+    // Crack UI의 중지 버튼/aria-label은 렌더 상태에 따라 응답 완료 뒤에도 잠깐 남을 수 있습니다.
+    // 따라서 이 값은 '힌트'로만 사용하고 서버 응답의 안정성을 영구 차단하는 근거로 쓰지 않습니다.
+    const candidates=document.querySelectorAll('[data-state="streaming"],[data-status="generating"],[aria-label="생성 중"],[aria-label="응답 생성 중"],button[aria-label*="생성 중지"],button[aria-label*="응답 중지"]');
+    return [...candidates].some(node=>{
+      if(node.closest('[id^="rpcm-"],.rr-settings-sheet,.rr-confirm-box'))return false;
+      const style=getComputedStyle(node);
+      return style.display!=='none'&&style.visibility!=='hidden'&&node.getClientRects().length>0;
+    });
+  }
+  async function waitStableAssistant() {
+    let previous=null,stableSamples=0;
+    const roomId=getChatId();
+    // 서버 본문이 연속해서 동일한지를 최우선으로 봅니다. DOM의 '생성 중' 표시는 보조 신호일 뿐입니다.
+    for(let i=0;i<12;i++){
+      if(getChatId()!==roomId)return null;
+      const current=await findLastAssistant();
+      const status=String(current?.raw?.status||current?.raw?.state||'');
+      const explicitPending=/^(streaming|generating|pending|in_progress|inprogress)$/i.test(status);
+      if(!current||explicitPending){previous=null;stableSamples=0;}
+      else {
+        stableSamples=previous&&messageFingerprint(previous)===messageFingerprint(current)?stableSamples+1:0;
+        previous=current;
+        // Explicit server completion overrides a lingering stop control. An unknown-status
+        // response with a visible generator is not complete merely because text paused.
+        const domGenerating=refinerGenerationVisible();
+        const explicitlyComplete=/^(completed|complete|done|success)$/i.test(status);
+        const requiredSamples=domGenerating&&!explicitlyComplete?Infinity:3;
+        if(stableSamples>=requiredSamples){
+          const final=await findLastAssistant();
+          if(getChatId()!==roomId||!final||messageFingerprint(final)!==messageFingerprint(current))return null;
+          const finalStatus=String(final.raw?.status||final.raw?.state||'');
+          if(/^(streaming|generating|pending|in_progress|inprogress)$/i.test(finalStatus))return null;
+          if(refinerGenerationVisible()&&!/^(completed|complete|done|success)$/i.test(finalStatus))return null;
+          return final;
+        }
+      }
+      if(i<11)await sleep(1000);
+    }
+    return null;
+  }
+
+  function buildRefinerReviewPrompt(snapshot,target,recent) {
+      const core = buildWishCoreReference(snapshot, target.content, recent);
+      const contextText = buildContextText(recent, target);
+      const formatAnalysis=outputFormatAnalysis(recent,target);
+
+      const template = settings.template === 'custom' ? String(settings.customPrompt || '').trim() : currentBasicPrompt();
+      if (!template) throw new Error('커스텀지침이 비어 있습니다.');
+      const prompt = fillPrompt(template, {
+        ...core,
+        context: contextText,
+        message: target.content,
+        structuralHints:structuralHintsText(target.content),
+        formatReference:buildOutputFormatReference(recent,target),
+      });
+      const policy=(settings.exceptions||[]).filter(row=>row.enabled!==false).map(row=>row.text).join('\n');
+      const evidencePrompt=prompt+(policy?'\n[USER_APPROVED_REVIEW_POLICY]\n'+policy+'\n[/USER_APPROVED_REVIEW_POLICY]':'');
+      const reviewPrompt=evidencePrompt+(snapshot?.reference?.partial?'\n[REFERENCE COVERAGE] Additional memory retrieval was incomplete. Use only retrieved evidence; unretrieved records do not establish absence. Do not invent a contradiction from missing evidence.':'');
+      const cacheNote=snapshot?.reference?.cached?`\n[REFERENCE AGE] Crack long-term inventory reused from RAM; ${snapshot.reference.cacheAgeTurns||0} completed turns since full retrieval, refresh interval ${snapshot.reference.cacheInterval||30}. New or externally edited memories may not yet be included. Recent Context and current Manager data remain primary for current state.`:'';
+      return {prompt:reviewPrompt+cacheNote,evidencePrompt,core,formatAnalysis};
+  }
+
+  async function refineCorrectionProposal(target,context,selectedText,feedback,control) {
+    const scope=chatStateKey(),chatId=getChatId(),check=()=>{
+      if(control.cancelled)throw Object.assign(new Error('보강 검토를 중단했습니다.'),{code:'RPCM_USER_ABORT'});
+      if(scope!==chatStateKey()||context.scope!==scope||target.reviewScope&&target.reviewScope!==scope)throw Object.assign(new Error('방 또는 검토 대상이 바뀌었습니다.'),{code:'STALE_RESPONSE_REVIEW'});
+    };
+    const staleLatest=()=>Object.assign(new Error('새 응답이 있어 현재 교정안의 보강을 중단했습니다.'),{code:'STALE_RESPONSE_REVIEW'});
+    check();await assertReviewSource(target,chatId);check();
+    const started=Date.now();control.referenceBudget={deadline:Date.now()+20000};const readOptions={referenceBudget:control.referenceBudget};
+    let recent=context.recent,historical=context.historical,historyUnverified=!!context.historyUnverified,recentPartial=!!context.recentPartial;
+    if(!historical||historyUnverified){
+      try{const latest=await findLastAssistant(readOptions);check();if(!latest)throw staleLatest();if(historyUnverified){historical=String(latest.id)!==String(target.id);historyUnverified=false;}else if(String(latest.id)!==String(target.id))throw staleLatest();}
+      catch(error){if(error.code!=='RPCM_REFERENCE_BUDGET')throw error;historical=true;historyUnverified=true;}
+    }
+    if(recentPartial){try{recent=await fetchRecentMessages(context.recentLimit||50,readOptions);recentPartial=false;}catch(error){if(error.code!=='RPCM_REFERENCE_BUDGET')throw error;}}
+    let snapshot=context.snapshot;
+    if(!historical&&!truncationOnly())snapshot=await readWishCoreSnapshot(target.content,recent,{includeLongTerm:!structuralOnly(),longTermProgress:context.longTermProgress,referenceBudget:control.referenceBudget,check,longTermInterval:settings.longTermRefreshTurns});
+    else snapshot={...snapshot,reference:{...snapshot.reference,partial:false}};
+    if(recentPartial||historyUnverified)snapshot={...snapshot,reference:{...snapshot.reference,partial:true}};
+    check();const built=buildRefinerReviewPrompt(snapshot,target,recent),evidencePrompt=built.evidencePrompt??built.prompt,note=String(feedback||'').trim(),referenceMs=Date.now()-started;
+    const nextContext={recent,recentPartial,historical,historyUnverified,snapshot,partial:snapshot.reference?.partial===true};
+    if(evidencePrompt===context.referencePrompt&&(!note||note===context.feedback)){Object.assign(context,nextContext);return {unchanged:true,reference:snapshot.reference};}
+    const assertLatest=async()=>{if(!historical){const latest=await findLastAssistant();check();if(!latest||String(latest.id)!==String(target.id))throw staleLatest();}};
+    await assertLatest();
+    const prompt=built.prompt+'\n[REFINE CURRENT PROPOSAL]\n'+JSON.stringify({currentSelectedProposal:selectedText,userFeedback:note})+'\nKeep the selected proposal unless added evidence or explicit feedback supports changing it. Do not reintroduce rejected edits without a new stated reason. Return the final correction issues against the ORIGINAL [New Speech], with exact from substrings. Preserve unaffected text. The current proposal is a draft, not evidence of story facts.';
+    const requested=Date.now(),response=await callModel(prompt,{control,noAutoRetry:true});check();
+    if(/MAX_TOKENS|LENGTH|BUDGET_EXCEEDED|TOKEN_LIMIT|INCOMPLETE/i.test(String(response.finishReason||'')))throw reviewOutputLimitError(response);
+    const text=String(response.text||'').trim(),parsed=/^PASS\s*$/i.test(text)?{verdict:'PASS',reason:'보강 근거에서 원문 수정이 필요하지 않다고 판단했습니다.',replacements:[]}:normalizeReviewResult(parseJsonLoose(text));
+    if(!parsed)throw new Error('보강 교정 결과를 해석하지 못했습니다.');
+    const corrected=applyCorrectionUnits(target.content,validateReviewUnits(target.content,parsed));
+    if(looksLikeUserCopy(corrected,recent))throw new Error('사용자 입력과 같은 보강 교정본은 제안하지 않습니다.');
+    await assertReviewSource(target,chatId);await assertLatest();check();
+    Object.assign(context,nextContext,{referencePrompt:evidencePrompt,feedback:note});
+    return {parsed,corrected,reason:String(parsed.reason||'추가 근거로 다듬은 교정안'),reference:snapshot.reference,referenceMs,requestMs:Date.now()-requested};
+  }
+
+  function startRefinerWaitChoice(scope) {
+    const budget={deadline:null,cancelled:false};
+    let button,chosen=false;
+    const finish=()=>{clearTimeout(timer);button?.remove();};
+    const timer=setTimeout(()=>{
+      if(chatStateKey()!==scope)return;
+      button=document.createElement('button');button.type='button';button.className='wish-rpcore-refiner-ui';button.dataset.reviewManualChoice='';
+      button.textContent='현재까지 수집한 장기기억으로 응답교정을 시작할까요?';button.title='누르면 추가 기억 조회만 멈추고 AI 검토를 시작합니다. 누르지 않으면 끝까지 수집합니다.';
+      button.style.cssText='position:fixed;right:18px;bottom:170px;z-index:2147483647;max-width:calc(100vw - 36px);padding:12px 16px;border:1px solid var(--rr-accent-line);border-radius:10px;background:var(--rr-sheet);color:var(--rr-accent);box-shadow:var(--rr-shadow);font-size:13px;cursor:pointer';
+      button.onclick=()=>{if(chosen||chatStateKey()!==scope)return;chosen=true;budget.cancelled=true;try{budget.abort?.();}finally{finish();}};
+      document.body.appendChild(button);
+    },20000);
+    return {budget,finish};
+  }
+
+  async function runRefiner({ force = false, targetOverride = null, maxOutputTokens = 0, reviewMode = '' } = {}) {
+    if (workerBusy) {
+      if (force) toast('이미 교정 작업이 진행 중이야.');
+      return;
+    }
+    if (!force && !settings.enabled) return;
+    if(!enabledReviewTopics().length){setStatus('검사 항목 OFF');showReviewNotice('응답을 유지했어요','검사 항목이 모두 꺼져 있습니다. 검사할 항목을 선택해 주세요.','info',5000);return;}
+    if (!connectionOk) {
+      if(!force){const target=targetOverride||await findLastAssistant();if(target&&isProcessed(target)){skipAutoReview(target);return;}if(target){setReviewGate(target,'error');showReviewFailure(target,new Error('공용 AI 연결 확인이 필요합니다.'));}}
+      if (force) openSettings();
+      setStatus('AI 연결 확인 필요','error');showReviewNotice('아직 검토하지 못했어요','AI 연결이 종료되어 있습니다. 설정에서 현재 연결 방식 테스트를 눌러 주세요.','error');
+      return;
+    }
+    if (!providerReady()) {
+      const target=targetOverride||await findLastAssistant();
+      if(!force&&target&&isProcessed(target)){skipAutoReview(target);return;}
+      if(target){setReviewGate(target,'error');showReviewFailure(target,new Error('기존 공용 AI 연결 설정을 확인해 주세요.'));}
+      setStatus('AI 설정 확인 필요','error');showReviewNotice('아직 검토하지 못했어요','RP Manager의 공용 AI 연결 설정을 확인해 주세요.','error');
+      return;
+    }
+    const runScope=chatStateKey();
+    const chatId = getChatId();
+    if (!chatId) { if (force) toast('채팅방 ID 감지 실패', 'error'); return; }
+
+    const reviewEpoch=autoPrimeEpoch;
+    workerBusy = true;syncQuickReviewButton();activeReviewMode=reviewMode||settings.reviewMode;
+    reviewTiming={startedAt:Date.now(),thinkingLevel:selectedThinkingLevel(),model:currentModelId(),mode:activeReviewMode};let waitChoice=null;
+    try {
+      setStatus('응답 완료 기다리는 중');
+      const target = targetOverride ? normalizeMessage(targetOverride) : await waitStableAssistant();
+      reviewTiming.stableMs=Date.now()-reviewTiming.startedAt;
+      if (!target) {setStatus('응답 완료 확인 대기');showReviewNotice('아직 검토하지 못했어요','응답 완료를 아직 확인하지 못했습니다. 잠시 후 다시 검수해 주세요.','info',5000);return;}
+      if(!force&&isProcessed(target)){skipAutoReview(target);return;}
+      if(isPendingResponse(target))throw new Error('선택한 응답이 아직 생성 중입니다. 완료된 뒤 다시 검수해 주세요.');
+      if(targetOverride)await assertReviewSource(target,chatId);
+      if (target.contextMalformed) throw new Error('숨김 주입 블록이 완전하지 않습니다. 주입 재검증 후 다시 검수해 주세요.');
+      if (!target.content.trim()) throw new Error('검수할 응답 본문이 없습니다.');
+
+
+      if(!enabledReviewTopics().length){markProcessed(target);setStatus('검사 항목 OFF');showReviewNotice('응답을 유지했어요','검사 항목이 모두 꺼져 있습니다. 검사할 항목을 선택해 주세요.','info',5000);return;}
+      target.reviewScope=chatStateKey();activeReviewTarget=target;activeReviewStartedAt=Date.now();setReviewGate(target,'review-running');
+      if(!force){autoReviewRetryPermit=false;rememberAutoObservedId(target);autoObservedStableId=messageStableId(target);autoGenerationEvidence=null;}
+      syncQuickReviewButton();
+      if(!force){
+        const autoKey=messageAutoKey(target);
+        if(autoFailureKey&&autoFailureKey!==autoKey){autoFailureKey='';autoFailureCount=0;}
+        lastAutoAssistantKey=autoKey;
+      }
+      setStatus('관련 기억 찾는 중');
+      const referenceStarted=Date.now();
+      // WRPM_REF_REVIEW_TIMING_DIAG_V1 BEGIN: one diagnostics object for this review only.
+      const referenceDetail={};reviewTiming.referenceDetail=referenceDetail;
+      waitChoice=startRefinerWaitChoice(runScope);
+      const referenceBudget=waitChoice.budget,longTermProgress={items:[],cursor:'',seen:[],complete:false,pages:0};
+      let historical=false,recent=[],readPartial=false,historyUnverified=!!targetOverride,recentLimit=50;
+      const recentStarted=performance.now();
+      try{
+        const latest=targetOverride?await findLastAssistant({referenceBudget}):target;
+        historical=!!latest&&String(latest.id)!==String(target.id);historyUnverified=false;
+        recentLimit=historical?50:truncationOnly()?Math.min(8,Math.max(4,2*Math.min(2,settings.contextTurns)+2)):Math.max(12,2*settings.contextTurns+8);
+        recent=await fetchRecentMessages(recentLimit,{referenceBudget});
+      }catch(error){if(error.code!=='RPCM_REFERENCE_BUDGET')throw error;readPartial=true;if(historyUnverified)historical=true;recent=[target];}
+      finally{referenceDetail.recentMs=performance.now()-recentStarted;}
+      const snapshotStarted=performance.now();
+      let snapshot;
+      try {
+        snapshot = historical?{room:null,activePacks:[],available:false,reason:'과거 응답 검수 · 대상 이전 대화만 사용; 이후의 저장 상태를 소급 적용하지 않음'}:truncationOnly()?{room:null,activePacks:[],available:false,reason:'문장 끊김 전용 검사 · 기억 조회 생략'}:await readWishCoreSnapshot(target.content,recent,{includeLongTerm:!structuralOnly(),referenceBudget,longTermProgress,diagnostics:referenceDetail,longTermInterval:settings.longTermRefreshTurns});
+      } catch (coreError) {
+        console.warn('[Wish Response Refiner] RP Manager optional read failed; falling back to Recent Context only.', coreError);
+        snapshot = {
+          room:null, activePacks:[],
+          apiChatId:chatId, roomKey:getRoomScopeKey(chatId), available:false,
+          reference:{partial:true},
+          reason:`RP Manager 읽기 실패: ${coreError?.message || coreError}`
+        };
+      }finally{referenceDetail.snapshotMs=performance.now()-snapshotStarted;}
+      if(readPartial)snapshot.reference={...snapshot.reference,partial:true};
+      const promptStarted=performance.now();
+      const built=buildRefinerReviewPrompt(snapshot,target,recent),formatAnalysis=built.formatAnalysis,reviewPrompt=built.prompt;
+      referenceDetail.promptBuildMs=performance.now()-promptStarted;
+      // WRPM_REF_REVIEW_TIMING_DIAG_V1 END
+      const reviewContext={scope:runScope,recent,snapshot,historical,historyUnverified,recentPartial:readPartial,recentLimit,longTermProgress,referencePrompt:built.evidencePrompt,feedback:'',partial:snapshot.reference?.partial===true};
+      reviewTiming.referenceMs=Date.now()-referenceStarted;
+      waitChoice.finish();
+      setStatus('응답 받아오는 중');
+      reviewTiming.promptChars=reviewPrompt.length;
+      const requestStarted=Date.now();let response;
+      try{response=await callModel(reviewPrompt,{maxOutputTokens});}finally{reviewTiming.requestMs=Date.now()-requestStarted;}
+      waitChoice.finish();
+      if(response?.model)reviewTiming.model=response.model;
+      if(response?.fallbackFromModel){reviewTiming.fallbackFromModel=response.fallbackFromModel;reviewTiming.fallbackModel=response.model||response.fallbackModel||'gemini-3.8-flash';}
+      reviewTiming.inputTokens=response.usage?.inputTokens||0;reviewTiming.outputTokens=response.usage?.outputTokens||0;
+      if(/MAX_TOKENS|LENGTH|BUDGET_EXCEEDED|TOKEN_LIMIT|INCOMPLETE/i.test(String(response.finishReason||'')))throw reviewOutputLimitError(response,{maxOutputTokens});
+      // 최신 응답을 검수하는 동안 Crack 네이티브 수정창에서 사용자가 직접 편집했으면
+      // 수정 전 원문 기준 제안은 폐기합니다. 과거 응답 수동 검수는 기존 source fingerprint 검증만 사용합니다.
+      if(!historical){
+        const latestGuard=await reconcileLatestTargetBeforeCorrection(target,force);
+        if(latestGuard.discard){
+          if(latestGuard.reason==='user-edited'&&latestGuard.target){
+            markProcessed(latestGuard.target);autoObservedStableId=messageStableId(latestGuard.target);autoGenerationEvidence=null;autoReviewRetryPermit=false;lastAutoAssistantKey=messageAutoKey(latestGuard.target);baselineFingerprint=messageFingerprint(latestGuard.target);
+            addProcessHistory('사용자 수정 · 교정 폐기','검수 중 사용자가 같은 응답을 직접 수정해 수정 전 원문 기준 교정안을 폐기했습니다.',{target:latestGuard.target});
+            setStatus('사용자 수정 · 기존 교정 생략');showReviewNotice('사용자 수정본을 유지했어요','수정 전 원문을 기준으로 만든 교정 제안은 적용하지 않았습니다. 필요하면 최근 AI 응답 재검수를 누르세요.','info',5500);
+          }else{setStatus('검수 대상 변경 · 원본 유지');}
+          return;
+        }
+        if(latestGuard.rerun&&latestGuard.target){
+          setReviewGate(target,'stale');setStatus('최신 응답 재검수');
+          if(force)setTimeout(()=>runRefiner({force:true,targetOverride:latestGuard.target}),80);
+          else{lastAutoAssistantKey='';autoCheckQueued=true;setTimeout(()=>scheduleAutoCheck(400),80);}
+          return;
+        }
+      }
+      await assertReviewSource(target,chatId);
+      if(!force&&(!settings.enabled||reviewEpoch!==autoPrimeEpoch)){setReviewGate(target,'settled');setStatus('자동 검수 중지 · 원본 유지');showReviewNotice('검수 중단 · 원본 유지',settings.enabled?'검수 도중 방 또는 설정 기준이 바뀌어 결과를 적용하지 않았습니다.':'자동 검수를 꺼서 결과를 적용하지 않았습니다. 다시 검수할 수 있어요.','info');return;}
+      setStatus('교정 결과 확인 중');
+      const text = String(response.text || '').trim();
+
+      reviewTiming.completedAt=Date.now();reviewTiming.validationMs=reviewTiming.completedAt-reviewTiming.startedAt-reviewTiming.stableMs-reviewTiming.referenceMs-reviewTiming.requestMs;
+      let parsed=/^PASS\s*$/i.test(text)?{verdict:'PASS',reason:'',replacements:[]}:normalizeReviewResult(parseJsonLoose(text));
+      if (!parsed) throw new Error(`응답 해석 실패: ${text.slice(0, 120)}`);
+      if(parsed.verdict==='PASS'&&formatAnalysis.missing.length){
+        parsed={verdict:'AMBIGUOUS',replacements:[],reason:`최근 ${formatAnalysis.history.length}개 AI 응답에서 반복된 ${formatAnalysis.missing.join(' / ')} 블록이 이번 응답에 없거나 코드블록 형식이 깨졌습니다. AI가 복구 내용을 확정하지 못해 원본을 유지했습니다.`,evidence:'최근 완료 AI 응답의 필수 블록 구조와 비교한 누락 후보'};
+      }
+      const verdict=String(parsed.verdict||'').toUpperCase();
+      if(verdict==='MEMORY_STALE'||verdict==='AMBIGUOUS'){
+        markProcessed(target);baselineFingerprint=messageFingerprint(target);
+        const reason=String(parsed.reason||parsed.evidence||'최신 RP와 저장 기억의 관계를 확인해 주세요.');
+        addProcessHistory(verdict==='MEMORY_STALE'?'기억 검토 필요':'근거 불충분',reason,{target,verdict});
+        setStatus(verdict==='MEMORY_STALE'?'기억 검토 필요':'판단 보류');
+        if(verdict==='MEMORY_STALE')window.__WISH_RP_MANAGER_AI_BRIDGE__?.reportMemoryStale(reason,target.id);else window.__WISH_RP_MANAGER_AI_BRIDGE__?.reportRefinerIssue('ambiguous',reason,target.id);
+        showReviewNotice(verdict==='MEMORY_STALE'?'응답 유지 · 기억 확인 필요':'응답 유지 · 근거 불충분',reason,'info',5500);
+        return;
+      }
+      if (verdict==='PASS') {
+        markProcessed(target);
+        baselineFingerprint = messageFingerprint(target);
+        addProcessHistory(reviewContext.partial?'부분 검토 · 수정 제안 없음':'PASS',reviewContext.partial?'추가 기억 일부 미조회':'',{target});
+        setStatus(reviewContext.partial?'부분 검토 완료':'이상 없음', 'ok');
+        showReviewNotice(reviewContext.partial?'부분 검토 완료 · 수정 제안 없음':'검토 완료 · 이상 없음',reviewContext.partial?'확보한 근거에서는 수정할 내용을 찾지 못했습니다. 추가 기억 일부는 조회하지 못했습니다.':'선택한 검사 항목에서 교정할 내용을 찾지 못했습니다.');
+        return;
+      }
+      if(verdict==='CONTINUITY_DRIFT'&&!parsed.replacements.length&&!parsed.refined_text){addProcessHistory(verdict,parsed.reason||'연속성 판단을 확인해 주세요.',{target,verdict});await showCorrectionConfirm({reviewContext,target,corrected:target.content,reason:parsed.reason||'연속성 판단을 확인해 주세요.',parsed});return;}
+      if (!parsed.replacements && !parsed.refined_text) throw new Error('Gemini 응답 구조가 교정 형식이 아님');
+
+      const corrected = applyCorrectionUnits(target.content,validateReviewUnits(target.content,parsed));
+      if (normalizeCrackLinebreaks(corrected) === normalizeCrackLinebreaks(target.content)) {
+        markProcessed(target);
+        baselineFingerprint = messageFingerprint(target);
+        addProcessHistory('PASS');
+        setStatus('변경 없음', 'ok');
+        showReviewNotice('검토 완료 · 변경 없음','교정 제안이 원본과 같아 응답을 그대로 유지했습니다.');
+        return;
+      }
+      if (looksLikeUserCopy(corrected, recent)) {
+        markProcessed(target);
+        baselineFingerprint = messageFingerprint(target);
+        addProcessHistory('교정미적용');
+        setStatus('유저 입력 복사 감지', 'error');
+        showReviewNotice('응답을 유지했어요','교정본이 사용자 입력과 거의 같아 잘못 적용되지 않도록 원본을 유지했습니다.','info',5500);
+        return;
+      }
+
+      const reason = String(parsed.reason || '교정 필요');
+      addProcessHistory(verdict,reason,{target,verdict});
+      setStatus(verdict==='CONTINUITY_DRIFT'?'연속성 이탈 · 확인 필요':'응답 오류 · 처리 중');
+      if(settings.autoApply&&!reviewContext.partial){
+        // 논리적 issue 하나에 묶인 여러 replacement는 자동반영에서도 원자적으로 처리합니다.
+        const issueGroups=correctionIssueGroups(target.content,parsed);
+        const objectiveGroups=issueGroups.filter(group=>group.verdict==='RESPONSE_ERROR'&&reviewAutoApplyEligible(target.content,{...parsed,verdict:'RESPONSE_ERROR',replacements:group.units}));
+        const objectivePack=reindexCorrectionGroups(objectiveGroups),objective=objectivePack.replacements;
+        if(objective.length){
+          const objectiveResult={...parsed,verdict:'RESPONSE_ERROR',replacements:objectivePack.replacements,issues:objectivePack.issues};
+          const objectiveSet=new Set(objectiveGroups.flatMap(group=>group.units)),remainingGroups=issueGroups.filter(group=>group.units.some(unit=>!objectiveSet.has(unit))),remainingPack=reindexCorrectionGroups(remainingGroups),remaining=remainingPack.replacements;
+          const appliedTarget=await applyCorrection(target,applyCorrectionUnits(target.content,validateReviewUnits(target.content,objectiveResult)),reason,objectiveResult,{reloadAfter:!remaining.length});
+          if(remaining.length){
+            const remainingResult={...parsed,replacements:remainingPack.replacements,issues:remainingPack.issues,verdict:remaining.some(unit=>unit.verdict==='CONTINUITY_DRIFT')?'CONTINUITY_DRIFT':'RESPONSE_ERROR'};
+            activeReviewTarget=appliedTarget;
+            const proposed=applyCorrectionUnits(appliedTarget.content,validateReviewUnits(appliedTarget.content,remainingResult));
+            await showCorrectionConfirm({reviewContext:{...reviewContext,historical:true},target:appliedTarget,corrected:proposed,reason:reason+' · 확정된 오류는 반영했고 나머지 제안은 확인을 기다립니다.',parsed:remainingResult});
+          }
+        }else await showCorrectionConfirm({reviewContext,target,corrected,reason,parsed});
+      }else await showCorrectionConfirm({reviewContext,target,corrected,reason,parsed});
+    } catch (e) {
+      if(chatStateKey()!==runScope)return;
+      // Automatic auth loss is not a Gemini failure. Preserve the target as
+      // unreviewed; manual reviews still report the actionable error.
+      if(!force&&(e.code==='CRACK_AUTH_REQUIRED'||(['crack-read','crack-write'].includes(e.diagnostic?.service)&&[401,403].includes(rpcmNetStatus(e))))){
+        autoBaselineReady=false;autoBaselineReadSucceeded=false;autoReviewRetryPermit=false;
+        setStatus('Crack 인증정보 대기');return;
+      }
+      addProcessHistory('오류', formatErrorHistory(e));
+      setStatus('오류', 'error');
+      console.error('[Crack Response Refiner RP Manager]', e);
+      if(!force&&activeReviewTarget){
+        const failedKey=messageAutoKey(activeReviewTarget);
+        if(autoFailureKey===failedKey)autoFailureCount+=1;else{autoFailureKey=failedKey;autoFailureCount=1;}
+        const retryable=rpcmRefinerCanAutoRetry(e);
+        if(retryable&&autoFailureCount<=2){
+          if(lastAutoAssistantKey===failedKey)lastAutoAssistantKey='';
+          autoCheckQueued=true;autoReviewRetryPermit=true;
+        }else{autoReviewRetryPermit=false;}
+      }
+      if(activeReviewTarget){setReviewGate(activeReviewTarget,e.code==='STALE_RESPONSE_REVIEW'?'stale':'error');showReviewFailure(activeReviewTarget,e);}
+      window.__WISH_RP_MANAGER_AI_BRIDGE__?.reportRefinerIssue(e.code==='STALE_RESPONSE_REVIEW'?'stale':'error',e.message,activeReviewTarget?.id);
+      if(e.code!=='RESPONSE_READBACK_UNVERIFIED')showReviewNotice('응답 검토를 마치지 못했어요',String(e.message||e),'error',6000);
+    } finally {
+      waitChoice?.finish();clearInterval(reviewProgressTimer);reviewProgressTimer=0;
+      workerBusy = false;activeReviewTarget=null;activeReviewMode='';syncQuickReviewButton();
+      if (badge && !badge.dataset.result && !confirmOverlay) hideReviewNotice();
+    }
+  }
+
+  function dismissFailedRefinerReview(target,scope,failureReceipt=null){
+    // Dismissal is a USER decision, not a server write: do not revalidate
+    // the source or require an API connection just to end this review.
+    if(!target||!scope||scope!==chatStateKey()||(target.reviewScope&&target.reviewScope!==scope))return false;
+    markProcessed(target);
+    setReviewGate(target,'skipped');
+    rememberAutoObservedId(target);
+    const key=messageAutoKey(target);
+    if(autoFailureKey===key){autoReviewRetryPermit=false;autoFailureKey='';autoFailureCount=0;}
+    if(lastAutoAssistantKey===key||autoObservedStableId===messageStableId(target)||!autoObservedStableId)lastAutoAssistantKey=key;
+    // Hiding the badge does not dismiss its persisted error receipt.
+    // Match the displayed failure so a different response's notice survives.
+    const receipt=loadReviewReceipt();
+    if(failureReceipt&&receipt&&!receipt.dismissedAt&&receipt.kind==='error'
+      &&(!receipt.messageId||String(receipt.messageId)===String(target.id))
+      &&receipt.title===failureReceipt.title&&receipt.detail===failureReceipt.detail) dismissReviewReceipt();
+    const keys=new Set(['proposal','error','stale','ambiguous'].map(kind=>`refiner:${kind}:${target.id}`));
+    for(const node of document.querySelectorAll?.('#rpcm-notice-popups [data-popup-key]')||[]){
+      if(scope.startsWith('chat:')&&node.dataset.room===scope.slice(5)&&keys.has(node.dataset.popupKey))node.remove();
+    }
+    addProcessHistory('검토 종료','사용자가 닫기 또는 교정 없이 계속을 선택하여 이 응답의 자동 검토를 종료했습니다.',{target});
+    return true;
+  }
+
+  function showReviewFailure(target,error) {
+    if(error?.code==='RESPONSE_READBACK_UNVERIFIED'){
+      showReviewNotice('응답 반영 확인 필요','응답이 반영되지 않았다면 새로고침해 주세요.','error',7000);
+      showRefinerRefreshPrompt(String(error.message||error));
+      return;
+    }
+    showReviewNotice('응답 검토를 마치지 못했어요',String(error.message||error),'error',6000);
+    if(confirmOverlay)return;
+    ensureThemeStyles();
+    const overlay=document.createElement('div');confirmOverlay=overlay;
+    overlay.id='wish-rpcore-refiner-confirm';overlay.className='wish-rpcore-refiner-ui';
+    overlay.style.cssText='position:fixed;inset:0;z-index:2147483646;background:var(--rr-scrim);display:grid;place-items:center;padding:16px';
+    const box=document.createElement('section');box.className='rr-confirm-box rr-failure-box';box.setAttribute('role','dialog');box.setAttribute('aria-modal','true');box.setAttribute('aria-labelledby','rr-failure-title');
+    box.innerHTML='<header class="rr-confirm-head"><div class="rr-confirm-heading"><small>WISH · RESPONSE REVIEW</small><h3 id="rr-failure-title">응답 검토를 마치지 못했어요</h3><p>원본 응답은 그대로 유지됩니다.</p></div><button data-close data-rpcm-close="icon" aria-label="닫기">×</button></header><div class="rr-confirm-body"><p data-reason></p></div><footer class="rr-confirm-foot"><div class="rr-confirm-actions"><button data-continue>교정 없이 계속</button><button data-retry class="rr-primary">다시 검수</button></div></footer>';
+    box.querySelector('[data-reason]').textContent=String(error.message||error);
+    if(deferredRefinerReload?.scope===chatStateKey())box.querySelector('.rr-confirm-heading p').textContent='일부 교정은 서버에 저장됐습니다. 검토를 종료하면 저장된 최신 응답을 다시 불러옵니다.';
+    const reviewScope=target.reviewScope||chatStateKey(),failureReceipt=loadReviewReceipt();let closed=false;
+    const close=(dismissed=true)=>{if(closed)return false;closed=true;if(dismissed&&dismissFailedRefinerReview(target,reviewScope,failureReceipt)){setStatus('원본 유지');hideReviewNotice();}overlay.remove();if(confirmOverlay===overlay)confirmOverlay=null;return flushDeferredRefinerReload('부분 자동반영 후 오류 검토가 종료되어 저장된 최신 응답을 다시 불러옵니다.');};
+    overlay.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();close();}};
+    overlay.onclick=e=>{if(e.target===overlay)close();};
+    box.querySelector('[data-close]').onclick=()=>close();
+    box.querySelector('[data-retry]').onclick=()=>{if(closed)return;if(chatStateKey()!==reviewScope){close(false);return;}if(autoFailureKey===messageAutoKey(target))autoReviewRetryPermit=false;if(close(false))return;setTimeout(()=>runRefiner({force:true,targetOverride:target,maxOutputTokens:error.code==='REVIEW_OUTPUT_LIMIT'?32768:0,reviewMode:error.code==='AI_REQUEST_TIMEOUT'?'normal':''}),0);};
+    box.querySelector('[data-continue]').onclick=()=>close();
+    overlay.append(box);document.body.append(overlay);
+  }
+
+  function renderCorrectionComparison(card,before,after) {
+    const a=String(before||''),b=String(after||'');
+    const left=card.querySelector('[data-before]'),right=card.querySelector('[data-after]');
+    const append=(node,text,changed)=>{if(!text)return;const part=changed?document.createElement('mark'):document.createTextNode(text);if(changed)part.textContent=text;node.append(part);};
+    const tokenize=text=>text.match(/[\p{L}\p{N}_]+|\s+|[^\p{L}\p{N}_\s]/gu)||[];
+    const aa=tokenize(a),bb=tokenize(b);
+    // 큰 전체 응답은 제한된 공통 앞/뒤 비교로 표시해 UI 비용을 제한합니다.
+    if(aa.length*bb.length>80000||aa.length+bb.length>2000){
+      let start=0,aEnd=a.length,bEnd=b.length;
+      while(start<a.length&&start<b.length&&a[start]===b[start])start++;
+      while(aEnd>start&&bEnd>start&&a[aEnd-1]===b[bEnd-1]){aEnd--;bEnd--;}
+      for(const [node,text,end] of [[left,a,aEnd],[right,b,bEnd]]){append(node,text.slice(0,start),false);append(node,text.slice(start,end),true);append(node,text.slice(end),false);}
+    }else{
+      const rows=Array.from({length:aa.length+1},()=>new Uint16Array(bb.length+1));
+      for(let i=aa.length-1;i>=0;i--)for(let j=bb.length-1;j>=0;j--)rows[i][j]=aa[i]===bb[j]?rows[i+1][j+1]+1:Math.max(rows[i+1][j],rows[i][j+1]);
+      let i=0,j=0;
+      while(i<aa.length||j<bb.length){
+        if(i<aa.length&&j<bb.length&&aa[i]===bb[j]){append(left,aa[i++],false);append(right,bb[j++],false);}
+        else if(i<aa.length&&(j===bb.length||rows[i+1][j]>=rows[i][j+1]))append(left,aa[i++],true);
+        else append(right,bb[j++],true);
+      }
+    }
+    if(!a)left.textContent='(없음)';if(!b)right.textContent='(없음)';
+  }
+
+  function showCorrectionConfirm({target,corrected,reason,parsed=null,reviewContext=null,directEdit=false}) {
+    return new Promise(resolve=>{
+      confirmOverlay?.remove();ensureThemeStyles();setReviewGate(target,'review-waiting-user');
+      window.__WISH_RP_MANAGER_AI_BRIDGE__?.reportRefinerIssue('proposal',reason,target.id);
+      const overlay=document.createElement('div');confirmOverlay=overlay;
+      overlay.id='wish-rpcore-refiner-confirm';overlay.className='wish-rpcore-refiner-ui';
+      overlay.style.cssText='position:fixed;inset:0;z-index:2147483646;background:var(--rr-scrim);display:flex;align-items:center;justify-content:center;padding:16px';
+      const box=document.createElement('section');
+      box.className='rr-confirm-box';box.setAttribute('role','dialog');box.setAttribute('aria-modal','true');box.setAttribute('aria-labelledby','rr-confirm-title');
+      box.innerHTML=`<header class="rr-confirm-head"><div class="rr-confirm-heading"><small>WISH · RESPONSE REVIEW</small><h3 id="rr-confirm-title">응답 교정 제안</h3><p>논리적 오류 단위로 선택하고, 전체 응답에서 실제 변경 위치를 확인하세요.</p></div><button type="button" data-close data-rpcm-close="icon" aria-label="닫기">×</button></header>
+        <div class="rr-confirm-body"><div class="rr-review-summary"><span data-verdict class="rr-verdict-pill"></span><p data-reason></p></div><p data-stale hidden>검수 중 원문이 바뀌었습니다. 최신 응답을 다시 검수해 주세요.</p>
+        <div data-supplement-panel class="rr-review-summary"><p data-reference-status></p><details><summary>자료 보강·교정 다듬기</summary><label>추가 근거·수정 방향 (선택)<textarea data-supplement-feedback aria-label="보강할 근거와 수정 방향" rows="3" style="display:block;width:100%;box-sizing:border-box"></textarea></label><button data-act="supplement">자료 보강해서 다듬기</button><p data-supplement-status role="status" aria-live="polite"></p><div data-supplement-choices hidden><button data-act="supplement-first">기존 교정안</button><button data-act="supplement-use" hidden>보강 교정안</button></div></details></div>
+        <div class="rr-selection-bar"><span data-total-count></span><button data-act="all">전체 선택</button></div><div data-changes></div>
+        <details class="rr-full-preview" open><summary>선택 적용 후 전체 응답 미리보기</summary><div data-change-preview tabindex="0" aria-label="선택 교정 전체 응답 미리보기"></div><p class="rr-preview-hint">반전된 부분이 선택한 교정으로 바뀌는 글자입니다. 〔삭제〕는 제거될 부분입니다. 항목을 켜고 꺼도 현재 읽던 위치를 최대한 유지합니다.</p></details>
+        <div data-manual-editor-wrap hidden><strong>직접 수정 · 최종 적용 텍스트</strong><textarea data-manual-editor aria-label="직접 수정 최종 교정 응답" spellcheck="false"></textarea><small>직접 수정 중에는 교정 항목 선택이 잠깁니다. 위 강조 미리보기는 AI 제안 기준으로 유지되고, 이 편집본이 실제 서버 적용 대상입니다.</small></div>
+        <label class="rr-exception"><input type="checkbox" data-exception> 원본 유지 시 이 검수 유형을 예외로 저장</label>
+        <input data-policy hidden aria-label="교정 예외 적용 범위" placeholder="허용할 표현과 적용할 장면을 직접 입력하세요"></div>
+        <footer class="rr-confirm-foot"><div class="rr-foot-note"><span data-selection-count></span><span>같은 오류에 묶인 변경은 함께 적용됩니다.</span></div><div class="rr-confirm-actions"><button data-act="keep">원본 유지</button><button data-act="memory">기억 오류로 표시</button><button data-act="review" hidden>최신 응답 다시 검수</button><button data-act="copy">교정본 복사</button><button data-act="manual">직접 수정</button><button data-act="apply" class="rr-primary">선택한 수정 적용</button></div></footer>`;
+      box.querySelector('[data-reason]').textContent=reason;
+      box.querySelector('[data-verdict]').textContent=(REVIEW_VERDICT_LABELS[parsed?.verdict]||'교정 제안')+(parsed?.verdict==='CONTINUITY_DRIFT'?' · 연속성 수정은 직접 확인 후 선택하세요.':'');
+      const reviewChatId=getChatId();
+      let groups=[],units=[],checks=[];
+      const list=box.querySelector('[data-changes]'),preview=box.querySelector('[data-change-preview]'),manualWrap=box.querySelector('[data-manual-editor-wrap]'),ta=box.querySelector('[data-manual-editor]'),manualBtn=box.querySelector('[data-act="manual"]'),apply=box.querySelector('[data-act="apply"]'),allBtn=box.querySelector('[data-act="all"]');
+      function renderIssueCards(selected=null){
+      groups=correctionIssueGroups(target.content,parsed||{refined_text:corrected,reason});units=groups.flatMap(group=>group.units);list.replaceChildren();
+      checks=groups.map((group,index)=>{
+        const card=document.createElement('article');card.className='rr-change-card';
+        card.innerHTML='<header class="rr-change-head"><label><input type="checkbox"><strong></strong></label><small data-item-verdict class="rr-change-meta"></small></header><p class="rr-change-reason"></p><div data-issue-comparisons></div><details class="rr-evidence"><summary>판정 근거 보기</summary><p></p></details>';
+        const label=REVIEW_TOPICS[group.category]?.label||'응답';
+        card.querySelector('strong').textContent=`${index+1}. ${label} 수정${group.units.length>1?` · 연동 ${group.units.length}개`:''}`;
+        card.querySelector('.rr-change-reason').textContent=group.reason||reason;
+        card.querySelector('[data-item-verdict]').textContent=(REVIEW_VERDICT_LABELS[group.verdict||parsed?.verdict]||'검토 필요')+' · '+(group.severity==='confirmed'?'확정 근거':'직접 확인 필요');
+        const host=card.querySelector('[data-issue-comparisons]');
+        group.units.forEach((unit,unitIndex)=>{
+          const compare=document.createElement('div');compare.className='rr-compare';compare.innerHTML='<div><small></small><p data-before></p></div><div><small></small><p data-after></p></div>';
+          compare.querySelector(':scope > div:first-child small').textContent=group.units.length>1?`원문 · 연동 변경 ${unitIndex+1}`:'원문';
+          compare.querySelector(':scope > div:last-child small').textContent=group.units.length>1?`교정 제안 · 연동 변경 ${unitIndex+1}`:'교정 제안';
+          renderCorrectionComparison(compare,unit.from,unit.to);host.append(compare);
+        });
+        card.querySelector('details p').textContent=[group.evidenceSource,group.evidence||parsed?.evidence||'근거 출처가 제공되지 않았습니다. 원문과 저장 기억을 직접 확인해 주세요.'].filter(Boolean).join('\n');
+        const check=card.querySelector('input');check.checked=selected?!!selected[index]:group.verdict!=='CONTINUITY_DRIFT'&&(group.verdict||parsed?.verdict)!=='CONTINUITY_DRIFT';check.onchange=renderSelection;list.append(card);return check;
+      });
+      box.querySelector('[data-total-count]').textContent=`수정 이슈 ${groups.length}개 · 실제 변경 ${units.length}개`;
+      if(!groups.length){const empty=document.createElement('p');empty.className='rr-empty-changes';empty.textContent='자동으로 적용할 수정 구간을 찾지 못했습니다. 판정 근거를 확인하거나 직접 수정 모드를 사용할 수 있습니다.';list.append(empty);}
+      }
+      let stale=false,busy=false,editMode=false,generatedText=corrected,refinePending=false,refineControl=null;
+      let pendingSupplement=null,showingChoice='first',choices={first:null,supplement:null},visibleReference={partial:reviewContext?.partial};
+      const supplementPanel=box.querySelector('[data-supplement-panel]'),supplement=box.querySelector('[data-act="supplement"]'),feedback=box.querySelector('[data-supplement-feedback]'),supplementStatus=box.querySelector('[data-supplement-status]'),choiceBar=box.querySelector('[data-supplement-choices]'),firstChoice=box.querySelector('[data-act="supplement-first"]'),supplementChoice=box.querySelector('[data-act="supplement-use"]');
+      supplementPanel.hidden=!reviewContext;
+      function updateCoverage(reference){visibleReference=reference;box.querySelector('[data-reference-status]').textContent=reference?.partial?'검토 자료 · 추가 기억 일부 미조회. 현재 안을 적용하거나 자료를 보강할 수 있습니다.':'검토 자료 · 이번 조회 범위 수집 완료';}
+      updateCoverage({partial:reviewContext?.partial});
+      function cancelSupplement(){if(refineControl){refineControl.cancelled=true;refineControl.referenceBudget?.abort?.();}}
+      function captureChoice(){return {parsed,reason,corrected,selected:checks.map(check=>check.checked),editMode,manualText:ta.value,reference:visibleReference};}
+      function useChoice(key){
+        if(stale||busy||refinePending||(key===showingChoice&&!(key==='supplement'&&pendingSupplement))||!(key==='supplement'&&pendingSupplement||choices[key])||!preserveManualDraft())return;
+        choices[showingChoice]=captureChoice();if(key==='supplement'&&pendingSupplement){choices.supplement=pendingSupplement;pendingSupplement=null;}const choice=choices[key];showingChoice=key;
+        parsed=choice.parsed;reason=choice.reason;corrected=choice.corrected;editMode=false;
+        renderIssueCards(choice.selected);renderSelection();setEditMode(choice.editMode);
+        if(choice.editMode){ta.value=choice.manualText;ta.dispatchEvent(new Event('input',{bubbles:true}));}
+        box.querySelector('[data-reason]').textContent=reason;box.querySelector('[data-verdict]').textContent=REVIEW_VERDICT_LABELS[parsed?.verdict]||'교정 제안';
+        updateCoverage(choice.reference);firstChoice.setAttribute('aria-pressed',String(key==='first'));supplementChoice.setAttribute('aria-pressed',String(key==='supplement'));updateApplyState();
+      }
+      firstChoice.onclick=()=>useChoice('first');supplementChoice.onclick=()=>useChoice('supplement');
+      supplement.onclick=async()=>{
+        if(stale||busy||refinePending||!reviewContext||!preserveManualDraft())return;
+        const baseChoice=captureChoice(),selectedText=currentFinalText(),note=feedback.value,control={cancelled:false};refineControl=control;refinePending=true;
+        const locked=[...box.querySelectorAll('input,textarea,button')].filter(node=>!node.matches('[data-close],[data-act="apply"],[data-act="keep"],[data-act="memory"]')),disabled=locked.map(node=>node.disabled);locked.forEach(node=>node.disabled=true);
+        supplementStatus.textContent='추가 자료 확인 중 · 기존 교정안은 적용할 수 있습니다.';
+        try{
+          const result=await refineCorrectionProposal(target,reviewContext,selectedText,note,control);
+          if(closed||control.cancelled||!overlay.isConnected)return;
+          if(result.unchanged){supplementStatus.textContent='새 근거나 새 피드백이 없어 추가 AI 호출을 생략했습니다.';return;}
+          if(showingChoice==='first')choices.first=baseChoice;
+          pendingSupplement={parsed:result.parsed,reason:result.reason,corrected:result.corrected,selected:null,editMode:false,manualText:'',reference:result.reference};
+          choiceBar.hidden=false;supplementChoice.hidden=false;firstChoice.setAttribute('aria-pressed',String(showingChoice==='first'));supplementChoice.setAttribute('aria-pressed','false');
+          supplementStatus.textContent='보강안 준비 완료 · 기존 안과 비교해 선택하세요. 자료 '+(result.referenceMs/1000).toFixed(1)+'초 · AI '+(result.requestMs/1000).toFixed(1)+'초';
+          addProcessHistory('보강 교정 제안',supplementStatus.textContent,{target,corrected:{id:target.id,content:result.corrected},verdict:result.parsed.verdict});
+        }catch(error){if(!closed&&!control.cancelled){supplementStatus.textContent='보강을 마치지 못해 기존 교정안을 유지합니다. '+String(error.message||error);if(error.code==='STALE_RESPONSE_REVIEW')markStale();}}
+        finally{refinePending=false;if(refineControl===control)refineControl=null;if(!closed&&!busy){locked.forEach((node,index)=>node.disabled=disabled[index]);setIssueSelectionLocked(editMode);supplement.disabled=stale;updateApplyState();}}
+      };
+      let storedManualDraft=loadCorrectionArchive(target.reviewScope||chatStateKey()).find(row=>row.key===String(target.id||'')+':'+messageFingerprint(target)&&(row.manualDraftText||row.status==='직접편집 초안'));
+      const restoreDraft=document.createElement('button');restoreDraft.type='button';restoreDraft.textContent='보관한 직접편집본 불러오기';restoreDraft.hidden=!storedManualDraft;
+      box.querySelector('.rr-confirm-actions').insertBefore(restoreDraft,manualBtn);
+      function preserveManualDraft(){
+        if(!editMode||ta.value===generatedText)return true;
+        const row=saveCorrectionArchive(target,ta.value,reason+' · 사용자 직접 수정','직접편집 초안');
+        if(row?.saveError){toast('직접편집본 보관 실패 · 편집창을 유지합니다. 복사 후 다시 시도해 주세요.','error');return false;}
+        storedManualDraft=row;restoreDraft.hidden=false;return true;
+      }
+      restoreDraft.onclick=()=>{if(stale||busy||!storedManualDraft)return;setEditMode(true);ta.value=String(storedManualDraft.manualDraftText??storedManualDraft.correctedText);ta.dispatchEvent(new Event('input',{bubbles:true}));};
+      let sourceWatchEpoch=0,sourceCheckBusy=false,closed=false;
+      function selectedGroups(){return groups.filter((_,index)=>checks[index]?.checked);}
+      function selectedUnits(){return selectedGroups().flatMap(group=>group.units);}
+      function currentFinalText(){return editMode?ta.value:generatedText;}
+      function selectionReason(){const rows=selectedGroups().map((group,index)=>`${index+1}. ${group.reason}`).filter(Boolean);return rows.length?rows.join('\n'):reason;}
+      function updateApplyState(){const changed=normalizeCrackLinebreaks(currentFinalText())!==normalizeCrackLinebreaks(target.content);apply.disabled=stale||busy||!changed;}
+      function renderSelection(){
+        if(editMode)return;
+        const anchor=capturePreviewScrollAnchor(preview),chosen=selectedUnits();generatedText=applyCorrectionUnits(target.content,chosen);ta.value=generatedText;renderCorrectionPreview(preview,target.content,chosen);restorePreviewScrollAnchor(preview,anchor);
+        checks.forEach(check=>check.closest('article').dataset.selected=String(check.checked));
+        box.querySelector('[data-selection-count]').textContent=`${selectedGroups().length} / ${groups.length}개 이슈 선택 · ${chosen.length}개 변경`;
+        allBtn.textContent=selectedGroups().length===groups.length&&groups.length?'전체 해제':'전체 선택';updateApplyState();
+      }
+      function setIssueSelectionLocked(locked){checks.forEach(check=>{check.disabled=!!locked||busy;});allBtn.disabled=!!locked||busy;}
+      function setEditMode(enabled){
+        if(busy||(!enabled&&!preserveManualDraft()))return;editMode=!!enabled;setIssueSelectionLocked(editMode);manualWrap.hidden=!editMode;manualBtn.textContent=editMode?'편집 취소':'직접 수정';apply.textContent=editMode?'수정본 적용':'선택한 수정 적용';
+        if(editMode){ta.value=generatedText;ta.focus({preventScroll:true});box.querySelector('[data-selection-count]').textContent='직접 편집 모드 · 교정 항목 선택 잠금';}
+        else renderSelection();
+        updateApplyState();
+      }
+      renderIssueCards();renderSelection();if(!storedManualDraft&&generatedText!==target.content)saveCorrectionArchive(target,generatedText,reason,'검토 제안');
+      box.querySelector('[data-act="copy"]').onclick=()=>{const value=currentFinalText();saveCorrectionArchive(target,value,editMode?reason+' · 사용자 직접 수정':selectionReason(),'복사용 교정본');copyCorrectionText(value,ta);};
+      ta.oninput=()=>{if(!editMode)return;box.querySelector('[data-selection-count]').textContent='직접 편집한 응답 · 교정 항목 선택 잠금';updateApplyState();};
+      manualBtn.onclick=()=>setEditMode(!editMode);
+      const exception=box.querySelector('[data-exception]'),policy=box.querySelector('[data-policy]');exception.onchange=()=>{policy.hidden=!exception.checked;};
+      const previousFocus=document.activeElement;
+      const onEscape=event=>{if(event.key==='Escape'&&!busy){event.preventDefault();event.stopPropagation();dismiss();}};
+      const close=(value,flushDeferred=false)=>{closed=true;cancelSupplement();sourceWatchEpoch++;clearInterval(timer);document.removeEventListener('keydown',onEscape,true);overlay.remove();confirmOverlay=null;if(previousFocus?.isConnected)previousFocus.focus?.({preventScroll:true});resolve(value);if(flushDeferred)setTimeout(()=>flushDeferredRefinerReload('부분 자동반영 뒤 남은 제안 검토가 종료되어 저장된 최신 응답을 다시 불러옵니다.'),0);};
+      const dismiss=()=>{if(busy||!preserveManualDraft())return;const pending=Boolean(deferredRefinerReload);close(false,pending);setStatus(pending?'검토 종료 · 새로고침 준비':'검토 보류');if(!pending)showReviewNotice('교정 검토를 보류했어요',storedManualDraft?'직접편집본은 이 방의 교정 기록에 보관했습니다. 같은 원문을 다시 검수하면 불러올 수 있어요.':'원본은 유지됩니다. 응답 교정에서 다시 검수할 수 있어요.','info');};
+      box.querySelector('[data-close]').onclick=dismiss;document.addEventListener('keydown',onEscape,true);
+      const markStale=()=>{stale=true;cancelSupplement();supplement.disabled=true;setReviewGate(target,'stale');box.querySelector('[data-stale]').hidden=false;box.querySelector('[data-act="review"]').hidden=false;apply.disabled=true;setStatus('최신 응답 재검수 필요','error');};
+      const timer=setInterval(async()=>{
+        if(!overlay.isConnected){clearInterval(timer);return;}
+        // This watcher protects a proposal while the user is choosing.
+        // Applying the accepted correction intentionally changes its source;
+        // applyCorrection owns the fresh source checks and post-write checks.
+        if(closed||busy||refinePending||stale||sourceCheckBusy)return;
+        const ticket=sourceWatchEpoch;sourceCheckBusy=true;
+        try{await assertReviewSource(target,reviewChatId);}
+        catch(error){if(error.code==='STALE_RESPONSE_REVIEW'&&!closed&&overlay.isConnected&&!busy&&ticket===sourceWatchEpoch)markStale();}
+        finally{sourceCheckBusy=false;}
+      },2000);
+      allBtn.onclick=()=>{if(busy||editMode)return;const selectAll=selectedGroups().length!==groups.length;checks.forEach(check=>check.checked=selectAll);renderSelection();};
+      box.querySelector('[data-act="review"]').onclick=()=>{if(busy)return;const pending=Boolean(deferredRefinerReload);close(false,pending);if(!pending)setTimeout(()=>runRefiner({force:true}),0);};
+      const keep=async memory=>{
+        if(busy||stale||!preserveManualDraft())return;
+        busy=true;cancelSupplement();sourceWatchEpoch++;
+        const controls=[...box.querySelectorAll('input,textarea,button')],disabled=controls.map(node=>node.disabled);
+        controls.forEach(node=>node.disabled=true);const button=box.querySelector(memory?'[data-act="memory"]':'[data-act="keep"]'),label=button.textContent;button.textContent='원문 확인 중…';
+        try{
+          await assertReviewSource(target,reviewChatId);
+          if(exception.checked){const text=policy.value.trim();if(!text)throw new Error('예외 정책의 적용 범위를 직접 입력해 주세요.');settings.exceptions=[...(settings.exceptions||[]),{id:Date.now().toString(36),text,enabled:true,createdAt:Date.now()}];saveSettings();}
+          if(memory)window.__WISH_RP_MANAGER_AI_BRIDGE__?.reportMemoryStale(reason+' · '+String(parsed?.evidence||''),target.id);
+          markProcessed(target);baselineFingerprint=messageFingerprint(target);addProcessHistory(memory?'기억 검토 필요':'원본 유지',reason,{target});const pending=Boolean(deferredRefinerReload);setStatus(pending?'검토 종료 · 새로고침 준비':'원본 유지');close(false,pending);if(!pending)showReviewNotice('응답을 유지했어요','교정을 적용하지 않고 원본으로 계속합니다.','info');
+        }catch(error){if(error.code==='STALE_RESPONSE_REVIEW')markStale();toast(error.message,'error');}
+        finally{busy=false;if(!closed){controls.forEach((node,index)=>node.disabled=disabled[index]);button.textContent=label;setIssueSelectionLocked(editMode);updateApplyState();}}
+      };
+      box.querySelector('[data-act="keep"]').onclick=()=>keep(false);box.querySelector('[data-act="memory"]').onclick=()=>keep(true);
+      apply.onclick=async()=>{
+        if(stale||busy)return;busy=true;cancelSupplement();sourceWatchEpoch++;
+        const interactive=[...box.querySelectorAll('input,textarea,button')];interactive.forEach(control=>control.disabled=true);apply.textContent='교정 적용·화면 확인 중…';
+        try{
+          const chosen=selectedUnits(),finalText=currentFinalText(),selectedReason=editMode?reason+' · 사용자 직접 수정':selectionReason();
+          const selectedPack=reindexCorrectionGroups(selectedGroups()),applyParsed=editMode?null:{...parsed,replacements:selectedPack.replacements,issues:selectedPack.issues};
+          await applyCorrection(target,finalText,selectedReason,applyParsed);close(true);
+        }
+        catch(error){addProcessHistory('오류',formatErrorHistory(error),{target});window.__WISH_RP_MANAGER_AI_BRIDGE__?.reportRefinerIssue(error.code==='STALE_RESPONSE_REVIEW'?'stale':'error',error.message,target.id);if(error.code==='STALE_RESPONSE_REVIEW')markStale();toast(error.message,'error');}
+        finally{
+          busy=false;interactive.forEach(control=>control.disabled=false);setIssueSelectionLocked(editMode);manualBtn.disabled=false;box.querySelector('[data-close]').disabled=false;box.querySelector('[data-act="review"]').disabled=false;
+          apply.textContent=editMode?'수정본 적용':'선택한 수정 적용';updateApplyState();
+        }
+      };
+      overlay.append(box);document.body.append(overlay);setStatus('사용자 확인 대기');
+      hideReviewNotice();if(directEdit)setEditMode(true);else box.querySelector('[data-close]').focus({preventScroll:true});
+    });
+  }
+  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+  // TEMP22 auto policy: new AI ID or explicit same-ID regeneration only.
+  // Saved pages, manually edited text and old responses never create new AI calls.
+  const rpcmAutoReadHolds=new Map();
+let rpcmAutoRejectedToken=null;
+function rpcmRefinerReadPolicy(error){
+  const status=rpcmNetStatus(error),code=String(error?.code||''),service=String(error?.diagnostic?.service||'');
+  if(code==='CRACK_AUTH_REQUIRED'||([401,403].includes(status)&&(service.startsWith('crack-')||code.startsWith('CRACK_'))))return {kind:'auth'};
+  if(status===429||code==='RPCM_RETRY_DEFERRED')return {kind:'deferred',until:Math.max(Date.now()+1000,Number(error.retryAt)||0,Date.now()+(Number(error.retryAfterMs||error.rpcmRetryAfterMs)||60000))};
+  if(error?.noAutoRetry||rpcmReadMustStop(error)||/^AI_/.test(code)||['STALE_RESPONSE_REVIEW','RESPONSE_READBACK_UNVERIFIED','REVIEW_OUTPUT_LIMIT'].includes(code))return {kind:'stop'};
+  return {kind:'retry'};
+}
+function rpcmRefinerReadGate(){
+  const token=getAuthToken();if(rpcmAutoRejectedToken!==null&&rpcmAutoRejectedToken===token)return 'auth';
+  if(rpcmAutoRejectedToken!==token)rpcmAutoRejectedToken=null;
+  const key=chatStateKey(),hold=rpcmAutoReadHolds.get(key);if(!hold)return '';
+  if(hold.kind==='stop')return 'stop';
+  if(Date.now()<hold.until)return 'deferred';
+  rpcmAutoReadHolds.delete(key);return '';
+}
+function rpcmRefinerReadContext(){return {epoch:autoPrimeEpoch,key:chatStateKey(),token:getAuthToken()};}
+function rpcmRefinerReadCurrent(scope){return !!scope&&scope.epoch===autoPrimeEpoch&&scope.key===chatStateKey()&&scope.token===getAuthToken();}
+function rpcmRefinerHoldRead(policy,scope){
+  if(!rpcmRefinerReadCurrent(scope))return;
+  if(policy.kind==='auth'){rpcmAutoRejectedToken=scope.token;return;}
+  if(!['stop','deferred'].includes(policy.kind))return;
+  rpcmAutoReadHolds.set(scope.key,policy);
+  while(rpcmAutoReadHolds.size>100)rpcmAutoReadHolds.delete(rpcmAutoReadHolds.keys().next().value);
+}
+function rpcmRefinerReadSucceeded(scope){
+  if(!rpcmRefinerReadCurrent(scope))return;
+  rpcmAutoRejectedToken=null;
+  const key=chatStateKey(),hold=rpcmAutoReadHolds.get(key);if(hold&&(hold.kind==='stop'||Date.now()>=hold.until))rpcmAutoReadHolds.delete(key);
+}
+
+function scheduleAutoCheck(delay=1200) {
+    if(!settings.enabled||!autoBaselineReady||rpcmRefinerReadGate())return;
+    autoCheckQueued=true;
+    if(debounceTimer)return;
+    debounceTimer=setTimeout(async()=>{
+      debounceTimer=null;
+      if(!settings.enabled||!autoBaselineReady||document.hidden||rpcmRefinerReadGate())return;
+      // TEMP25: auth may disappear briefly during Crack session refresh. Do not
+      // dispatch background API calls or emit persistent errors until it returns.
+      if(!getAuthToken()){autoBaselineReady=false;autoBaselineReadSucceeded=false;return;}
+      if(workerBusy||confirmOverlay||autoScanBusy){scheduleAutoCheck(1200);return;}
+      autoScanBusy=true;autoCheckQueued=false;
+      const epoch=autoPrimeEpoch,roomKey=chatStateKey(),readScope=rpcmRefinerReadContext();let retry=false;
+      try{
+        const latest=await findLastAssistant();
+        if(epoch!==autoPrimeEpoch||roomKey!==chatStateKey())return;
+        const latestKey=messageAutoKey(latest);
+        if(!latestKey||latestKey===lastAutoAssistantKey)return;
+        if(isPendingResponse(latest)){
+          signalAutoGeneration('server-pending',messageStableId(latest));
+          retry=++autoCheckWaits<=6;return;
+        }
+        if(isProcessed(latest)){skipAutoReview(latest);return;}
+        if(!autoReviewReason(latest)){skipAutoReview(latest);return;}
+        const target=await waitStableAssistant();
+        if(epoch!==autoPrimeEpoch||roomKey!==chatStateKey())return;
+        if(!target){retry=++autoCheckWaits<=6;return;}
+        const autoKey=messageAutoKey(target);
+        if(!autoKey||autoKey===lastAutoAssistantKey)return;
+        if(isProcessed(target)){skipAutoReview(target);return;}
+        if(!autoReviewReason(target)){skipAutoReview(target);return;}
+        autoCheckWaits=0;
+        rememberAutoObservedId(target);
+        // runRefiner's own source guard remains authoritative before any correction.
+        await runRefiner({force:false,targetOverride:target});
+      }catch(error){
+        if(!rpcmRefinerReadCurrent(readScope))return;
+        const policy=rpcmRefinerReadPolicy(error);rpcmRefinerHoldRead(policy,readScope);
+        if(policy.kind==='auth'){
+          // Not a failed AI review: no Gemini request was sent. Recover the
+          // baseline only when the auth cookie becomes readable again.
+          autoBaselineReady=false;autoBaselineReadSucceeded=false;
+          autoReviewRetryPermit=false;retry=false;
+          setStatus('Crack 인증정보 대기');
+        }else if(policy.kind==='deferred'||policy.kind==='stop'){
+          autoCheckQueued=false;retry=false;autoReviewRetryPermit=false;
+          setStatus(policy.kind==='deferred'?'Crack 조회 대기 · '+new Date(policy.until).toLocaleString('ko-KR'):'자동 조회 중단 · 수동 확인 필요');
+        }else{
+          retry=++autoCheckWaits<=6;
+          if(!retry){console.warn('[Wish Response Refiner] 자동 완료 확인 실패',error);showReviewNotice('자동 검토를 시작하지 못했어요',String(error.message||error)+' · 수동 검수 버튼으로 다시 확인해 주세요.','error',6000);}
+        }
+      }finally{
+        autoScanBusy=false;
+        if(epoch===autoPrimeEpoch&&roomKey===chatStateKey()&&(autoCheckQueued||retry))scheduleAutoCheck(retry?2500:1200);
+      }
+    },Math.max(0,Number(delay)||0));
+  }
+

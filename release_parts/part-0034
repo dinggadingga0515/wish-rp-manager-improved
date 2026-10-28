@@ -1,0 +1,1000 @@
+    return packet;
+  }
+  function longTermFirstStageCards(room,inventory){
+    const meta=longTermState(room),secondIds=new Set([...meta.finalCompressedIds,...meta.batches.filter(batch=>batch.mode==='manual-compress').flatMap(batch=>batch.crackSummaryIds||[])].map(String));
+    return inventory.filter(item=>longTermId(item)&&!secondIds.has(longTermId(item)));
+  }
+  function longTermPacketParts(packet, maxChars=170000){
+    const raw=String(packet.text||'').replace(/^\uFEFF/,'');
+    if(raw.length<=maxChars)return [raw];
+    // Prefer boundaries between RP turns, but allow splitting very long single turns.
+    const segments=[];let cursor=0;
+    while(cursor<raw.length){
+      let end=Math.min(raw.length,cursor+maxChars-1200);
+      if(end<raw.length){
+        const next=raw.lastIndexOf('\n[TURN ',end);
+        if(next>cursor+Math.floor(maxChars*.35))end=next;
+      }
+      if(end<=cursor)end=Math.min(raw.length,cursor+maxChars-1200);
+      segments.push(raw.slice(cursor,end));cursor=end;
+    }
+    return segments.map((segment,i)=>`[WISH_LONG_TERM_PACKET_PART]\nJOB_ID=${packet.jobId}\nPART=${i+1}/${segments.length}\n원본 작업자료를 순서대로 전부 읽은 뒤 하나의 통합 장기기억 결과를 작성하세요. 중간 PART만 보고 최종 결과를 작성하지 마세요.\n[/WISH_LONG_TERM_PACKET_PART]\n${segment}`);
+  }
+  GM_addStyle('\n#rpcm-ltm-parts-dialog{position:fixed;inset:0;z-index:2147483647;background:rgba(36,26,36,.48);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;font-family:inherit}\n#rpcm-ltm-parts-dialog .rpcm-ltm-parts-panel{box-sizing:border-box;width:min(560px,100%);max-height:min(85vh,740px);display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--wish-line,#ead7e3);border-radius:18px;background:var(--wish-card,#fff);color:var(--wish-fg,#322b32);box-shadow:0 18px 55px rgba(38,22,35,.18)}\n#rpcm-ltm-parts-dialog .rpcm-ltm-parts-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:22px 24px 16px;border-bottom:1px solid var(--wish-line,#ead7e3)}\n#rpcm-ltm-parts-dialog .rpcm-ltm-parts-head small{font-size:11px;color:var(--wish-accent-strong,#a24d7d)}\n#rpcm-ltm-parts-dialog h2{font-size:19px;font-weight:650;margin:4px 0 6px;line-height:1.4}\n#rpcm-ltm-parts-dialog p{font-size:13px;line-height:1.6;margin:0;color:var(--wish-fg-2,#827681)}\n#rpcm-ltm-parts-dialog button{font:inherit;cursor:pointer;border:1px solid var(--wish-line,#ead7e3);background:var(--wish-card,#fff);color:var(--wish-fg,#322b32);border-radius:10px;min-height:36px;padding:8px 13px;white-space:nowrap}\n#rpcm-ltm-parts-dialog [data-ltm-close]{border:0;background:transparent;min-width:30px;padding:0;font-size:24px;color:var(--wish-muted,#9b8794)}\n#rpcm-ltm-parts-dialog .rpcm-ltm-parts-content{padding:18px 24px;overflow:auto}\n#rpcm-ltm-parts-dialog .rpcm-ltm-parts-info{border-radius:11px;background:var(--wish-accent-soft,#fff1f7);padding:12px 14px;font-size:12px;line-height:1.7;color:var(--wish-fg-2,#796575);margin-bottom:12px}\n#rpcm-ltm-parts-dialog .rpcm-ltm-parts-list{display:grid;gap:8px}\n#rpcm-ltm-parts-dialog .rpcm-ltm-parts-row{display:flex;justify-content:space-between;align-items:center;gap:12px;border:1px solid var(--wish-line,#ead7e3);border-radius:11px;padding:12px 14px;background:var(--wish-card,#fff)}\n#rpcm-ltm-parts-dialog .rpcm-ltm-parts-meta{display:flex;flex-direction:column;gap:3px}\n#rpcm-ltm-parts-dialog .rpcm-ltm-parts-meta strong{font-size:14px}\n#rpcm-ltm-parts-dialog .rpcm-ltm-parts-meta small{font-size:12px;color:var(--wish-muted,#9b8794)}\n#rpcm-ltm-parts-dialog .rpcm-ltm-parts-row button{background:var(--wish-accent-soft,#fff1f7);color:var(--wish-accent-strong,#a24d7d);border-color:var(--wish-accent-line,#efbfd6);font-size:12px}\n#rpcm-ltm-parts-dialog .rpcm-ltm-parts-footer{display:flex;justify-content:flex-end;gap:8px;padding:14px 24px;border-top:1px solid var(--wish-line,#ead7e3)}\n#rpcm-ltm-parts-dialog .rpcm-ltm-parts-primary{background:var(--wish-accent,#bc6596)!important;color:white!important;border-color:transparent!important;font-weight:600}\n@media(max-width:600px){#rpcm-ltm-parts-dialog{padding:10px}#rpcm-ltm-parts-dialog .rpcm-ltm-parts-head{padding:18px 16px 14px}#rpcm-ltm-parts-dialog .rpcm-ltm-parts-content{padding:14px 16px}#rpcm-ltm-parts-dialog .rpcm-ltm-parts-footer{padding:12px 16px;flex-wrap:wrap}#rpcm-ltm-parts-dialog .rpcm-ltm-parts-primary{flex:1}}\n');
+  function longTermZipParts(parts,kind){
+    const encoder=new TextEncoder(),chunks=[],central=[];
+    const u16=n=>[n&255,(n>>>8)&255],u32=n=>[n&255,(n>>>8)&255,(n>>>16)&255,(n>>>24)&255];
+    const crc32=bytes=>{let c=0xffffffff;for(const byte of bytes){c^=byte;for(let i=0;i<8;i++)c=(c>>>1)^((c&1)?0xedb88320:0);}return(c^0xffffffff)>>>0;};
+    let offset=0;
+    parts.forEach((part,i)=>{
+      const filename=`RP_장기기억_${kind==='first'?'1차':'2차'}_${i+1}of${parts.length}.txt`;
+      const name=encoder.encode(filename),data=encoder.encode(part),crc=crc32(data),size=data.length;
+      const local=new Uint8Array([...u32(0x04034b50),...u16(20),...u16(0x0800),...u16(0),...u16(0),...u16(0),...u32(crc),...u32(size),...u32(size),...u16(name.length),...u16(0)]);
+      chunks.push(local,name,data);
+      const record=new Uint8Array([...u32(0x02014b50),...u16(20),...u16(20),...u16(0x0800),...u16(0),...u16(0),...u16(0),...u32(crc),...u32(size),...u32(size),...u16(name.length),...u16(0),...u16(0),...u16(0),...u16(0),...u32(0),...u32(offset)]);
+      central.push(record,name);offset+=local.length+name.length+data.length;
+    });
+    const centralSize=central.reduce((n,x)=>n+x.length,0);
+    const end=new Uint8Array([...u32(0x06054b50),...u16(0),...u16(0),...u16(parts.length),...u16(parts.length),...u32(centralSize),...u32(offset),...u16(0)]);
+    return new Blob([...chunks,...central,end],{type:'application/zip'});
+  }
+  function longTermDownloadAllParts(parts,kind){
+    const blob=longTermZipParts(parts,kind),url=URL.createObjectURL(blob);
+    const a=document.createElement('a');a.href=url;a.download=`RP_장기기억_${kind==='first'?'1차':'2차'}_${parts.length}개_전체.zip`;
+    document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
+  }
+  function longTermShowPacketParts(title,packet,kind,includeGuide){
+    const parts=longTermPacketParts(packet);
+    if(parts.length===1){
+      openManualUpdateTextDialog(title,`${packet.sourceCount}${kind==='second'?'개 1차 기억':'턴 완료 RP'} · 지침 ${includeGuide?'포함':'제외'}`,parts[0],'작업자료 복사');
+      return;
+    }
+    document.getElementById('rpcm-ltm-parts-dialog')?.remove();
+    const dialog=document.createElement('div');dialog.id='rpcm-ltm-parts-dialog';
+    dialog.innerHTML=`<section class="rpcm-ltm-parts-panel" role="dialog" aria-modal="true" aria-labelledby="rpcm-ltm-parts-title">
+      <header class="rpcm-ltm-parts-head"><div><small>장기기억 · 작업자료</small><h2 id="rpcm-ltm-parts-title">작업자료 자동 분할</h2><p>총 ${parts.length}개 파일 · 순서대로 모두 AI에 전달하세요.</p></div><button type="button" data-ltm-close aria-label="닫기">×</button></header>
+      <div class="rpcm-ltm-parts-content"><div class="rpcm-ltm-parts-info">마지막 파일까지 전달하기 전에는 최종 결과를 생성하지 마세요. 복사는 각 파일별로, 다운로드는 ZIP 한 번으로 가능합니다.</div><div data-ltm-parts class="rpcm-ltm-parts-list"></div></div>
+      <footer class="rpcm-ltm-parts-footer"><button type="button" data-ltm-dismiss>닫기</button><button type="button" class="rpcm-ltm-parts-primary" data-ltm-download-all>전체 TXT 다운로드 · ZIP</button></footer>
+    </section>`;
+    const host=dialog.querySelector('[data-ltm-parts]');
+    parts.forEach((part,i)=>{
+      const line=document.createElement('div');line.className='rpcm-ltm-parts-row';
+      const meta=document.createElement('div');meta.className='rpcm-ltm-parts-meta';
+      const number=document.createElement('strong');number.textContent=`${i+1}/${parts.length}`;
+      const chars=document.createElement('small');chars.textContent=`${part.length.toLocaleString()}자`;
+      meta.append(number,chars);
+      const copy=document.createElement('button');copy.type='button';copy.textContent='TXT 복사';
+      copy.onclick=async()=>{
+        try{await navigator.clipboard.writeText(part);}
+        catch(_){const t=document.createElement('textarea');t.value=part;t.style.position='fixed';t.style.opacity='0';document.body.appendChild(t);t.select();const ok=document.execCommand('copy');t.remove();if(!ok){notify('복사 실패 · 브라우저 클립보드 권한을 확인해 주세요.','error');return;}}
+        copy.textContent='복사 완료 ✓';setTimeout(()=>{if(copy.isConnected)copy.textContent='TXT 복사';},1800);
+      };
+      line.append(meta,copy);host.appendChild(line);
+    });
+    dialog.querySelector('[data-ltm-close]').onclick=dialog.querySelector('[data-ltm-dismiss]').onclick=()=>dialog.remove();
+    dialog.querySelector('[data-ltm-download-all]').onclick=()=>longTermDownloadAllParts(parts,kind);
+    dialog.addEventListener('click',e=>{if(e.target===dialog)dialog.remove();});
+    document.body.appendChild(dialog);
+  }
+  async function longTermExportPacket(room,kind,includeGuide,section){
+    const packet=await longTermBuildExternalPacket(room,kind,includeGuide,kind==='first'?{mode:section.querySelector('[data-ltm-range]').value,startIndex:Number(section.querySelector('[data-ltm-start]').value)-1,endIndex:Number(section.querySelector('[data-ltm-end]').value)-1}:{});
+    const parts=longTermPacketParts(packet);
+    if(parts.length===1)downloadText(parts[0],`RP_장기기억_${kind==='first'?'1차':'2차'}.txt`,'text/plain');
+    else longTermDownloadAllParts(parts,kind);
+    return packet;
+  }
+  function longTermCurrentContextHash(room,guideKey){
+    return simpleHash(JSON.stringify([simpleHash(userCanonMemoBlock(room)),longTermGuideHash(room,guideKey)]));
+  }
+  function longTermExternalSoftDrift(room,draft,guideKey){
+    if(!draft?.externalJobId)return [];
+    const warnings=[];
+    if(draft.memoHash!==simpleHash(userCanonMemoBlock(room)))warnings.push('사용자 메모 변경');
+    if(draft.guideHash!==longTermGuideHash(room,guideKey))warnings.push('장기기억 지침 변경');
+    return warnings;
+  }
+  function longTermAssertContextCurrent(room,draft,guideKey){
+    const memoChanged=draft.memoHash!==simpleHash(userCanonMemoBlock(room)),guideChanged=draft.guideHash!==longTermGuideHash(room,guideKey);
+    if(!memoChanged&&!guideChanged)return;
+    if(draft.externalJobId){
+      if(draft.externalContextApprovalHash&&draft.externalContextApprovalHash!==longTermCurrentContextHash(room,guideKey))throw new Error('적용 확인 후 사용자 메모 또는 지침이 다시 변경되었습니다. 현재 상태로 다시 확인해 주세요.');
+      return;
+    }
+    throw new Error(memoChanged?'USER_CANON_MEMO 변경으로 초안이 오래됐습니다.':'지침 변경으로 초안이 오래됐습니다.');
+  }
+  async function longTermImportExternal(room, text) {
+    const meta=longTermState(room),packet=meta.drafts.externalPacket;
+    if(!packet)throw new Error('먼저 이 방에서 해당 작업자료를 만들어 주세요.');
+    if(packet.stale)throw new Error('작업자료의 원문이 변경되었습니다. 작업자료를 다시 만들어 주세요.');
+    const normalizedText=String(text||'').replace(/^\uFEFF/,'');
+    const resultJobId=manualResultJobHeader(normalizedText).id;
+    if(packet.resultJobIdRequired&&!resultJobId)throw new Error('결과에 JOB_ID가 없습니다. 현재 작업자료에서 생성한 결과인지 확인해 주세요.');
+    if(packet.jobId&&resultJobId&&resultJobId!==packet.jobId)throw new Error('다른 작업자료의 결과입니다. 현재 진행 중 작업을 확인해 주세요.');
+    if(String(text||'').length>600000)throw new Error('결과가 안전 한도를 넘습니다.');
+    const cards=longTermParseCards(manualStripResultJobId(normalizedText)),inventory=await longTermFetch(room);
+    if(!packet.existingInventory&&longTermInventoryHash(inventory)!==packet.inventoryHash)throw new Error('이전 버전 작업자료의 목록이 바뀌었습니다. 새 작업자료를 만들어 주세요.');
+    const originalInventory=packet.existingInventory||inventory;
+    const common={externalJobId:String(packet.jobId||''),roomId:String(room.chatId),chatId:String(apiChatIdOf(room)),cards,createdAt:nowIso(),memoHash:packet.memoHash,guideHash:packet.guideHash,inventoryHash:packet.inventoryHash,existingIds:originalInventory.map(longTermId),existingFingerprints:Object.fromEntries(originalInventory.map(item=>[longTermId(item),longTermFingerprint(item)])),savedIds:[]};
+    if(packet.kind==='first'){
+      await longTermAssertSource(room,{...packet.stamp,externalJobId:String(packet.jobId||'')},'first');
+      meta.drafts.first={...common,...packet.stamp,mode:'manual-first',updateTargets:longTermFirstUpdateTargets(room,originalInventory,cards)};
+      longTermAssertTargetsUnchanged(meta.drafts.first,inventory);
+      longTermRuntime.draftView='first';
+    }else{
+      if(cards.length>Math.min(25,packet.source.length)||(packet.source.length>=26&&cards.length<20))throw new Error('2차 압축 카드 수가 지침의 최종 슬롯 기준을 벗어났습니다.');
+      const draft={...common,mode:'manual-compress',source:packet.source,sourceHash:longTermInventoryHash(packet.source.map(item=>({id:item.id,title:item.title,summary:item.summary})))};
+      await longTermAssertSecond(room,draft);meta.drafts.second=draft;longTermRuntime.draftView='second';
+    }
+    packet.resultText=String(text);packet.status='reviewed';packet.resultMetadata={hash:simpleHash(String(text)),cards:cards.length,importedAt:nowIso()};
+    await saveRoom(room);return cards.length;
+  }
+  async function longTermAssertSource(room, draft, guideKey) {
+    if(draft.stale)throw new Error(draft.staleReason||'원문 변경으로 재검토가 필요합니다.');
+    if (state.currentRoom !== room || draft.roomId !== String(room.chatId) || draft.chatId !== String(apiChatIdOf(room))) throw new Error('작업한 방이 바뀌었습니다.');
+    const turns = draft.historyStartKey?await loadRpcmCompletedRange(room,[draft.historyStartKey,draft.lastKey]):await longTermLoadTurns(room);
+    if (turns[draft.start]?.key !== draft.firstKey || turns[draft.end]?.key !== draft.lastKey) throw new Error('RP 범위가 리롤·분기로 바뀌었습니다.');
+    const hash = await longTermHash(JSON.stringify(turns.slice(0,draft.end+1).map(t => [String(t.key),String(t.text)])));
+    if (hash !== draft.sourceHash) throw new Error('RP 원문이 바뀌어 초안을 적용할 수 없습니다.');
+    longTermAssertContextCurrent(room,draft,guideKey);
+    return turns;
+  }
+  function longTermAiSettings() {
+    const base = loadAiSummarySettings();
+    const selected = aiFeatureSettings(base,'summary');
+    return { provider:selected.provider, settings:selected, secret:readAiSecret(selected.provider) };
+  }
+  async function longTermCall(room, guideKey, prompt, feature) {
+    const ai = longTermAiSettings();
+    const result = await callAiSummaryProvider(ai.provider,ai.settings,ai.secret,longTermGuide(room,guideKey),prompt,16384,()=>{}, { room, feature, thinkingLevel:'medium' });
+    refreshAiRoomUsageUi(room);
+    return result;
+  }
+  async function longTermGenerateFirst(room, mode='after', startIndex=0, endIndex=0, automatic=false,automaticTurns=null) {
+    if(automatic)throw new Error('RP 원문 자동 생성 기능은 삭제되었습니다. 생성하기로 직접 실행하세요.');
+    return longTermWithLock(room,automatic?'auto-first':'manual-first',async()=>{
+      const meta=longTermState(room), allTurns=automaticTurns||await longTermLoadTurns(room),turns=automatic?settledAutomaticTurns(allTurns):allTurns;
+      if (!turns.length) throw new Error('완료된 RP 턴이 없습니다.');
+      const range=longTermRange(room,turns,mode,startIndex,endIndex);
+      const guideKey=automatic?'autoFirst':'first';
+      const stamp=await longTermSourceStamp(room,turns,range,guideKey);
+      if(automaticTurns)stamp.historyStartKey=String(turns[0].key);
+      const inventory=await longTermFetch(room);
+      const existing=inventory.map(item=>`[${String(item.title||'')}]\n${String(item.summary||'')}`).join('\n\n');
+      const prompt=`[WISH_LONG_TERM_FIRST_V1]\nMODE=${automatic?'AUTO':'MANUAL'}\nROOM=${stamp.roomId}\nSOURCE_FIRST=${stamp.firstKey}\nSOURCE_LAST=${stamp.lastKey}\nTURN_COUNT=${stamp.count}\nSOURCE_SHA256=${stamp.sourceHash}\n기존 장기기억은 중복·연속 사건 판정 참고 자료다. 실제 새 RP 범위와 USER_CANON_MEMO를 우선한다. 완성된 [제목] 다음 줄에 290~300자 본문을 쓰고 기억 사이에 빈 줄 하나만 둔다. 설명은 출력하지 않는다.\n[EXISTING_MEMORIES]\n${existing || '(없음)'}\n[/EXISTING_MEMORIES]\n[NEW_RP]\n${range.chosen.map((turn,index)=>`[TURN ${range.start+index+1} | ${turn.key}]\n${turn.text}`).join('\n\n')}\n[/NEW_RP]`;
+      if (prompt.length > AI_SUMMARY_MAX_INPUT_CHARS) throw new Error('기존 장기기억을 포함한 입력이 안전 크기를 넘습니다. 범위를 줄이거나 기존 기억을 정리해 주세요.');
+      const response=await longTermCall(room,guideKey,prompt,automatic?'longTermAutoFirst':'longTermManualFirst');
+      const cards=longTermParseCards(response.text);
+      await longTermAssertSource(room,stamp,guideKey);
+      const draft={...stamp,mode:automatic?'auto-first':'manual-first',cards,createdAt:nowIso(),usage:response.usage,model:response.model,provider:response.provider,inventoryHash:longTermInventoryHash(inventory),existingIds:inventory.map(longTermId),existingFingerprints:Object.fromEntries(inventory.map(item=>[longTermId(item),longTermFingerprint(item)])),updateTargets:automatic?[]:longTermFirstUpdateTargets(room,inventory,cards),nativeStorage:automatic,savedIds:[]};
+      if (automatic) { meta.firstStage.autoDraft=draft;meta.firstStage.autoStatus='생성 완료 · 저장 확인 전'; }
+      else meta.drafts.first=draft;
+      await saveRoom(room);
+      return draft;
+    });
+  }
+  async function longTermPrepareReplacement(room,draft,inventory) {
+    if(!draft.replaceSource)return;
+    if(draft.mode!=='manual-compress')throw new Error('원본 정리는 2차 압축에서만 사용할 수 있습니다.');
+    if(draft.cards.length>=draft.source.length)throw new Error('압축 결과가 원본보다 적지 않습니다. 원본 유지 저장 또는 초안 재생성을 선택하세요.');
+    const deleted=new Set(draft.deletedSourceIds||[]);
+    const eligible=new Set(longTermSecondEligible(room,inventory).map(longTermId));
+    for(const original of draft.source){
+      const current=inventory.find(item=>longTermId(item)===original.id);
+      if(deleted.has(original.id)){if(current)throw new Error('정리한 원본 ID가 다시 나타났습니다. 수동 확인이 필요합니다.');continue;}
+      if(!current||longTermFingerprint(current)!==original.fingerprint||!eligible.has(original.id))throw new Error('원본 변경 또는 고정·자동 정리 보호·보호·작업 충돌로 원본 정리를 중단했습니다.');
+    }
+    if(!draft.replacementBackup){
+      draft.replacementBackup={version:'WISH_LONG_TERM_SOURCE_BACKUP_V1',chatId:String(apiChatIdOf(room)),createdAt:nowIso(),cards:structuredClone(draft.source)};
+      draft.deletedSourceIds=[];
+      await saveRoom(room);
+      downloadText(JSON.stringify(draft.replacementBackup,null,2),'Wish_2차압축_원본백업_'+Date.now()+'.json');
+    }
+  }
+  async function longTermFinishReplacement(room,draft) {
+    if(!draft.replaceSource)return;
+    // New cards are verified before any original is removed. Resume only the
+    // remaining originals; never retry POSTs or delete protected/unrelated IDs.
+    let inventory=await longTermFetch(room);
+    for(const [index,card] of draft.cards.entries()){
+      const saved=inventory.find(item=>longTermId(item)===String(draft.savedIds[index]||''));
+      if(!saved||longTermFingerprint(saved)!==longTermFingerprint(card))throw new Error('압축 결과 저장 검증 실패 · 원본은 정리하지 않습니다.');
+    }
+    await longTermPrepareReplacement(room,draft,inventory);
+    for(const source of draft.source){
+      if(draft.deletedSourceIds.includes(source.id))continue;
+      inventory=await longTermFetch(room);
+      await longTermPrepareReplacement(room,draft,inventory);
+      draft.pendingDeleteId=source.id;await saveRoom(room);
+      await longTermDelete(room,source.id);
+      inventory=await longTermFetch(room);
+      if(inventory.some(item=>longTermId(item)===source.id))throw new Error('원본 삭제 확인 실패 · 남은 원본 정리를 중단했습니다.');
+      draft.deletedSourceIds.push(source.id);draft.pendingDeleteId='';await saveRoom(room);
+    }
+    const meta=longTermState(room);
+    meta.compressionBackups=[{...draft.replacementBackup,resultIds:[...draft.savedIds],completedAt:nowIso()},...(meta.compressionBackups||[])].slice(0,20);
+  }
+
+  async function longTermApplyNewCards(room, draft, guideKey, automatic=false, locked=false, backgroundGuard=null) {
+    const apply=async()=>{
+      backgroundGuard?.();
+      if (draft.mode==='manual-compress') await longTermAssertSecond(room,draft);
+      else {
+        const turns=await longTermAssertSource(room,draft,guideKey);
+        if(automatic){
+          if(settledAutomaticTurns(turns).length<=draft.end)throw new Error('응답교정 확인이 끝나지 않은 원문은 자동 저장하지 않습니다.');
+          const point=longTermEffectiveAnchor(room,turns);
+          const current=point.key,currentIndex=point.index;
+          if(current&&currentIndex<0)throw new Error('현재 자동 기준점이 시간선에서 사라졌습니다.');
+          if(currentIndex>=draft.start)throw new Error('자동 기준점이 이미 이 범위를 처리했습니다. 이전 위치로 되돌릴 수 없습니다.');
+        }
+      }
+      const meta=longTermState(room), saved=new Set((draft.savedIds||[]).map(String));
+      const beforeIds=new Set((draft.existingIds||[]).map(String));
+      for (const card of draft.cards) longTermValidateCard(card);
+      const initialInventory=await longTermFetch(room);
+      if(draft.nativeStorage&&!draft.applyStarted){
+        const targets=longTermAutoTargets(room,initialInventory,draft.cards);
+        if(!targets){meta.firstStage.autoStatus='Crack 자동 기억 슬롯 대기 · 초안 유지';await saveRoom(room);return [];}
+        draft.updateTargets=targets;
+        draft.existingFingerprints=Object.fromEntries(initialInventory.map(item=>[longTermId(item),longTermFingerprint(item)]));
+      }
+      if(draft.nativeStorage)for(const id of draft.updateTargets||[]){
+        const item=initialInventory.find(row=>longTermId(row)===id);
+        if(!item||!longTermNative(item,room))throw new Error('자동 생성 대상이 추가·고정·직접 편집 기억으로 바뀌었습니다.');
+      }
+      const applyCardsHash=longTermInventoryHash(draft.cards);
+      if(draft.applyCardsHash&&draft.applyCardsHash!==applyCardsHash)throw new Error('부분 저장된 초안은 내용을 바꿀 수 없습니다. 원래 결과로 저장 확인을 이어가 주세요.');
+      await longTermPrepareReplacement(room,draft,initialInventory);
+      draft.applyCardsHash=applyCardsHash;
+      longTermAssertTargetsUnchanged(draft,initialInventory);
+      if(!draft.originalBackup){draft.originalBackup={at:nowIso(),mode:draft.mode,cards:structuredClone(initialInventory.filter(item=>(draft.updateTargets||[]).includes(longTermId(item))))};if(draft.originalBackup.cards.length)meta.firstStageBackups=[draft.originalBackup,...(meta.firstStageBackups||[])].slice(0,20);}
+      if(['auto-first','manual-first'].includes(draft.mode))for(const [index,card] of draft.cards.entries()){
+        const matching=initialInventory.filter(item=>String(item.title||'').trim()===String(card.title||'').trim());
+        if(matching.some(item=>longTermId(item)!==String(draft.updateTargets?.[index]||'')&&!saved.has(longTermId(item))&&!(draft.applyStarted&&!beforeIds.has(longTermId(item))&&longTermFingerprint(item)===longTermFingerprint(card))))throw new Error(`기존 카드와 제목이 겹칩니다: ${card.title}. 중복 저장 전 다시 확인해 주세요.`);
+      }
+      draft.applyStarted=true;
+      if (automatic && (meta.firstStage.pendingApply?.sourceHash && meta.firstStage.pendingApply.sourceHash !== draft.sourceHash)) throw new Error('다른 자동 저장이 대기 중입니다.');
+      if (automatic) { meta.firstStage.pendingApply=draft;await saveRoom(room); }
+      else await saveRoom(room);
+      for (const [cardIndex,card] of draft.cards.entries()) {
+        backgroundGuard?.();
+        const fingerprint=longTermFingerprint(card);
+        let inventory=await longTermFetch(room);
+        for(const [id,hash] of Object.entries(draft.existingFingerprints||{}).filter(([id])=>(draft.updateTargets||[]).includes(id)||(draft.source||[]).some(item=>item.id===id))){
+          if(draft.deletedSourceIds?.includes(id)){if(inventory.some(item=>longTermId(item)===id))throw new Error('이미 정리한 원본이 다시 나타났습니다.');continue;}
+          const old=inventory.find(item=>longTermId(item)===id);
+          const updatedIndex=(draft.updateTargets||[]).findIndex(target=>target===id);
+          const updatedHash=updatedIndex>=0?longTermFingerprint(draft.cards[updatedIndex]):'';
+          if(!old||![hash,updatedHash].includes(longTermFingerprint(old)))throw new Error('기존 Crack 장기기억이 적용 중 변경됐습니다. 저장을 중단합니다.');
+        }
+        const previouslySaved=String(draft.savedIds?.[cardIndex]||'');
+        if (previouslySaved) {
+          const existing=inventory.find(item=>longTermId(item)===previouslySaved);
+          if (!existing || longTermFingerprint(existing)!==fingerprint) throw new Error('부분 저장된 카드가 서버에서 변경됐습니다. 수동 확인이 필요합니다.');
+          continue;
+        }
+        const updateId=String(draft.updateTargets?.[cardIndex]||'');
+        if(draft.nativeStorage&&!updateId)throw new Error('자동 기억은 Crack 슬롯을 재사용해야 합니다. 슬롯이 생길 때까지 기다려 주세요.');
+        if(draft.nativeStorage&&!longTermNative(inventory.find(item=>longTermId(item)===updateId),room))throw new Error('자동 기억 대상의 보호 상태가 바뀌었습니다.');
+        if(updateId){
+          const existing=inventory.find(item=>longTermId(item)===updateId);
+          if(!existing)throw new Error('갱신할 기존 장기기억이 서버에서 사라졌습니다.');
+          if(longTermFingerprint(existing)!==fingerprint){
+            if(longTermFingerprint(existing)!==draft.existingFingerprints[updateId])throw new Error('갱신할 카드가 사용 중 수정됐습니다.');
+            backgroundGuard?.();await longTermPatch(room,updateId,card);
+            inventory=await longTermFetch(room);
+            if(longTermFingerprint(inventory.find(item=>longTermId(item)===updateId))!==fingerprint)throw new Error('장기기억 PATCH 결과를 확인하지 못했습니다.');
+          }
+          saved.add(updateId);draft.savedIds[cardIndex]=updateId;
+          if(automatic)meta.firstStage.pendingApply=draft;
+          await saveRoom(room);continue;
+        }
+        let matching=inventory.filter(item=>!beforeIds.has(longTermId(item)) && longTermFingerprint(item)===fingerprint && !saved.has(longTermId(item)));
+        if (matching.length>1) throw new Error('같은 카드가 여러 개 감지되어 저장 확인을 중단했습니다. 중복 여부를 직접 확인해 주세요.');
+        let found=matching[0];
+        if (!found) {
+          if(inventory.some(item=>String(item.title||'').trim()===String(card.title||'').trim()))throw new Error('같은 제목의 카드가 적용 중 추가되었습니다. 중복 저장을 중단합니다.');
+          const before=new Set(inventory.map(longTermId));
+          backgroundGuard?.();await longTermPost(room,card);
+          for (let attempt=0;attempt<3;attempt++) {
+            inventory=await longTermFetch(room);
+            matching=inventory.filter(item=>!before.has(longTermId(item)) && longTermFingerprint(item)===fingerprint);
+            if(matching.length)break;
+            if(attempt<2)await sleep(800*(attempt+1));
+          }
+          if (matching.length!==1) throw new Error('Crack 저장 후 새 카드 ID·본문을 확인하지 못했습니다. 자동 재시도를 중단했습니다.');
+          found=matching[0];
+        }
+        rpcmNewBadgeStamp(room,['longterm:'+longTermId(found)]);
+        saved.add(longTermId(found));
+        draft.savedIds[cardIndex]=longTermId(found);
+        if (automatic) meta.firstStage.pendingApply=draft;
+        await saveRoom(room);
+      }
+      if (draft.savedIds.filter(Boolean).length!==draft.cards.length) throw new Error('일부 장기기억 카드의 저장이 확인되지 않았습니다.');
+      if(['auto-first','manual-first'].includes(draft.mode))await longTermAssertSource(room,draft,guideKey);
+      await longTermFinishReplacement(room,draft);
+      if(draft.markFinal)meta.finalCompressedIds=[...new Set([...meta.finalCompressedIds,...draft.savedIds.filter(Boolean)])];
+      const appliedAt=nowIso();
+      meta.batches.unshift({ id:`LTM_${Date.now().toString(36)}`,mode:draft.mode,nativeStorage:!!draft.nativeStorage,sourceStartKey:draft.firstKey,sourceEndKey:draft.lastKey,turnCount:draft.count,sourceHash:draft.sourceHash,memoHash:draft.memoHash,promptHash:draft.guideHash,crackSummaryIds:[...saved],updatedIds:(draft.updateTargets||[]).filter(Boolean),deletedSourceIds:[...(draft.deletedSourceIds||[])],createdAt:draft.createdAt,appliedAt });
+      meta.batches=meta.batches.slice(0,100);
+      if(draft.nativeStorage){
+        for(const [index,id] of draft.savedIds.entries()){
+          meta.nativeAuto.managedHashes[id]=longTermFingerprint(draft.cards[index]);
+          meta.nativeAuto.nativeHashes[id]=longTermFingerprint(draft.cards[index]);
+        }
+        const priorTail=meta.nativeAuto.openTailId;meta.nativeAuto.managedOrder=[...meta.nativeAuto.managedOrder.filter(id=>!draft.savedIds.includes(id)),...draft.savedIds];meta.nativeAuto.midSegmentIds=[...new Set([...(meta.nativeAuto.midSegmentIds||[]),...(priorTail&&!draft.savedIds.includes(priorTail)?[priorTail]:[]),...draft.savedIds.slice(0,-1)])];meta.nativeAuto.openTailId=draft.savedIds.at(-1)||meta.nativeAuto.openTailId;meta.nativeAuto.processedSinceMerge+=draft.count;
+      }
+      longTermRecordFrontier(room,draft);
+      if (automatic) { meta.firstStage.autoCursor=draft.lastKey;meta.firstStage.autoLastAppliedAt=appliedAt;meta.firstStage.autoDraft=null;meta.firstStage.pendingApply=null;meta.firstStage.autoStatus='적용 완료';meta.firstStage.autoError='';meta.firstStage.failedEndKey='';meta.firstStage.consecutiveFailures=0;meta.firstStage.retryAfter=0; }
+      else if (draft.mode==='manual-first') {const currentIndex=draft.sourceKeys?.indexOf(String(meta.firstStage.manualBaseline||''))??-1;if(currentIndex<draft.end)meta.firstStage.manualBaseline=String(draft.lastKey);meta.drafts.first=null;}
+      else if (draft.mode==='manual-compress') meta.drafts.second=null;
+      if(draft.externalJobId&&meta.drafts.externalPacket?.jobId===draft.externalJobId){meta.externalHistory=[{jobId:draft.externalJobId,kind:meta.drafts.externalPacket.kind,status:'applied',appliedAt,resultIds:[...saved]},...(meta.externalHistory||[])].slice(0,50);meta.drafts.externalPacket=null;longTermRuntime.externalText='';}
+      await saveRoom(room);
+      longTermRuntime.inventory=await longTermFetch(room);
+      if(draft.proposal)noticeResolve(room,'longterm:limit');
+      return [...saved];
+    };
+    return locked?apply():longTermWithLock(room,'apply-cards',apply);
+  }
+
+  async function longTermGenerateSecond(room, ids, options={}) {
+    return longTermWithLock(room,'manual-compress',async()=>{
+      const inventory=await longTermFetch(room), chosen=inventory.filter(item=>ids.includes(longTermId(item)));
+      if (chosen.length<2 || chosen.length!==ids.length) throw new Error('압축할 기존 장기기억을 2개 이상 선택해 주세요.');
+      const eligible=new Set(longTermSecondEligible(room,inventory).map(longTermId));
+      const excluded=chosen.filter(item=>!eligible.has(longTermId(item)));
+      if(options.proposal&&excluded.length)throw new Error('선택한 기억 중 고정·자동 정리 보호·보호·충돌 상태가 있습니다. 후보를 다시 선택해 주세요.');
+      if(!options.proposal&&excluded.length&&!confirm(`고정·자동 정리 보호·보호된 기억 ${excluded.length}개를 이번 수동 압축에 포함할까요? 원본과 보호 상태는 유지됩니다.`))throw new Error('수동 압축을 취소했습니다.');
+      if(longTermRuntime.roomId===String(room.chatId)){
+        for(const item of chosen){
+          const prior=longTermRuntime.inventory.find(row=>longTermId(row)===longTermId(item));
+          if(!prior||longTermFingerprint(prior)!==longTermFingerprint(item))throw new Error('후보 목록을 연 뒤 서버 기억이 바뀌었습니다. 최신 목록으로 다시 선택해 주세요.');
+        }
+      }
+      const meta=longTermState(room), guideKey='second';
+      const source=chosen.map(item=>({id:longTermId(item),fingerprint:longTermFingerprint(item),title:String(item.title||''),summary:String(item.summary||'')}));
+      const prompt=`[WISH_LONG_TERM_SECOND_V1]\n선택한 원본 장기기억을 압축한다. 원본은 자동 삭제하지 않는다. ${userCanonMemoBlock(room)}\n결과는 완성된 [제목] + 한 문단 본문(290~300자) 블록만 출력한다.\n[SELECTED_MEMORIES]\n${source.map(item=>`ID=${item.id}\n[${item.title}]\n${item.summary}`).join('\n\n')}\n[/SELECTED_MEMORIES]`;
+      if (prompt.length>AI_SUMMARY_MAX_INPUT_CHARS) throw new Error('선택한 기억이 입력 안전 크기를 넘습니다. 선택을 줄여 주세요.');
+      const response=await longTermCall(room,guideKey,prompt,'longTermSecond');
+      const cards=longTermParseCards(response.text);
+      if (cards.length > Math.min(25, chosen.length) || (chosen.length >= 26 && cards.length < 20)) throw new Error('2차 압축 카드 수가 지침의 최종 슬롯 기준을 벗어났습니다.');
+      const draft={ roomId:String(room.chatId),chatId:String(apiChatIdOf(room)),mode:'manual-compress',proposal:!!options.proposal,source,sourceHash:longTermInventoryHash(chosen),memoHash:simpleHash(userCanonMemoBlock(room)),guideHash:longTermGuideHash(room,guideKey),cards,createdAt:nowIso(),usage:response.usage,model:response.model,provider:response.provider,inventoryHash:longTermInventoryHash(inventory),existingIds:inventory.map(longTermId),existingFingerprints:Object.fromEntries(inventory.map(item=>[longTermId(item),longTermFingerprint(item)])),savedIds:[] };
+      meta.drafts.second=draft;await saveRoom(room);return draft;
+    });
+  }
+  async function longTermAssertSecond(room,draft) {
+    if(state.currentRoom!==room||draft.roomId!==String(room.chatId)||draft.chatId!==String(apiChatIdOf(room)))throw new Error('방이 바뀌었습니다.');
+    longTermAssertContextCurrent(room,draft,'second');
+    const inventory=await longTermFetch(room);
+    if(draft.pendingDeleteId&&!inventory.some(item=>longTermId(item)===draft.pendingDeleteId)){draft.deletedSourceIds=[...new Set([...(draft.deletedSourceIds||[]),draft.pendingDeleteId])];draft.pendingDeleteId='';await saveRoom(room);}
+    for(const item of draft.source){const current=inventory.find(row=>longTermId(row)===item.id);if(draft.deletedSourceIds?.includes(item.id)){if(current)throw new Error('이미 정리한 원본이 다시 나타났습니다.');continue;}if(!current||longTermFingerprint(current)!==item.fingerprint)throw new Error('선택한 원본 기억이 변경·삭제되었습니다. 압축 결과를 다시 생성해 주세요.');}
+  }
+
+  function longTermNativeScopeHash(room) {
+    const n=longTermState(room).nativeAuto;
+    return simpleHash(JSON.stringify([n.scopeReady,n.scopeStartedAt,n.scopeAnchorKey,n.scopeAnchorHash,[...n.scopeBaselineIds].sort()]));
+  }
+  async function longTermStartNativeScope(room,{reset=false}={}) {
+    const n=longTermState(room).nativeAuto;
+    if(n.scopeReady&&!reset)return;
+    if(n.pendingApply?.done?.length||n.pendingApply?.pendingOperationId)throw new Error('부분 적용된 기억 정리 계획이 있습니다. 기존 계획의 서버 저장 확인을 마친 뒤 관리 시작점을 바꿔 주세요.');
+    const roomId=String(room.chatId),chatId=String(apiChatIdOf(room));
+    const turns=await loadLatestCompletedTurns(room),inventory=await longTermFetch(room);
+    if(state.currentRoom!==room||String(room.chatId)!==roomId||String(apiChatIdOf(room))!==chatId)throw new Error('관리 시작점 조회 중 방이 바뀌었습니다.');
+    // Reading a baseline never changes server memories or the RP generation cursor.
+    if(n.pendingApply){n.supersededPlans=[{...structuredClone(n.pendingApply),archivedAt:nowIso(),reason:'지금부터 관리로 시작점 재설정'},...(n.supersededPlans||[])].slice(0,3);n.pendingApply=null;}
+    n.scopeBaselineIds=inventory.map(longTermId);n.scopeStartedAt=nowIso();
+    n.scopeAnchorKey=String(turns.at(-1)?.key||'');n.scopeAnchorHash=turns.length?simpleHash(String(turns.at(-1).text)):'';n.scopeReady=true;n.modeRevision++;
+    n.sourceCursor='';n.sourceCursorHash='';n.managedOrder=[];n.openTailId='';n.midSegmentIds=[];n.processedSinceMerge=0;n.error='';n.retryAfter=0;n.consecutiveFailures=0;n.status='관리 시작점 저장 · 새 Crack 기억 대기';
+    n.lastInventoryHash=longTermInventoryHash(inventory);
+    await saveRoom(room);longTermRuntime.inventory=inventory;
+  }
+  async function longTermNativeSource(room) {
+    const n=longTermState(room).nativeAuto;
+    if(!n.scopeReady)throw new Error('먼저 지금부터 관리를 눌러 주세요.');
+    const key=n.sourceCursor||n.scopeAnchorKey,hash=n.sourceCursor?n.sourceCursorHash:n.scopeAnchorHash;
+    const all=await loadRpcmCompletedRange(room,key?[key]:[]);
+    const anchor=key?rpcmFindTurnIndex(all,key):-1;
+    if(key&&(anchor<0||simpleHash(String(all[anchor].text))!==hash))throw new Error('관리 기준 RP가 삭제·수정·리롤되었습니다. 지금부터 관리로 시작점을 다시 설정해 주세요.');
+    const settled=settledAutomaticTurns(all),end=Math.max(anchor+1,settled.length-n.excludeRecentTurns);
+    const available=settled.slice(anchor+1,end),turns=available.slice(0,n.readTurns);
+    return {turns,pendingCount:Math.max(0,settled.length-anchor-1),availableCount:available.length,stamp:turns.length?{nativeScopeSource:true,roomId:String(room.chatId),chatId:String(apiChatIdOf(room)),scopeHash:longTermNativeScopeHash(room),anchorKey:key,anchorHash:hash,firstKey:String(turns[0].key),lastKey:String(turns.at(-1).key),sourceTurns:turns.map(t=>[String(t.key),String(t.text)]),memoHash:simpleHash(userCanonMemoBlock(room)),guideHash:longTermGuideHash(room,'native')}:null};
+  }
+  function longTermManagedSequence(room,inventory){
+    const n=longTermState(room).nativeAuto,valid=inventory.filter(item=>longTermNative(item,room)&&n.managedHashes[longTermId(item)]===longTermFingerprint(item)),byId=new Map(valid.map(item=>[longTermId(item),item]));
+    const ids=[...valid.map(longTermId).reverse().filter(id=>!n.managedOrder.includes(id)),...n.managedOrder.filter(id=>byId.has(id))];
+    return ids.map(id=>byId.get(id));
+  }
+  async function longTermAssertNativeSource(room,stamp) {
+    if(!stamp.nativeScopeSource)return longTermAssertSource(room,stamp,'native');
+    if(state.currentRoom!==room||stamp.roomId!==String(room.chatId)||stamp.chatId!==String(apiChatIdOf(room))||stamp.scopeHash!==longTermNativeScopeHash(room))throw new Error('기억 관리 방 또는 시작점이 바뀌었습니다.');
+    const all=await loadRpcmCompletedRange(room,[stamp.anchorKey||stamp.firstKey,stamp.lastKey]);
+    const anchor=stamp.anchorKey?rpcmFindTurnIndex(all,stamp.anchorKey):rpcmFindTurnIndex(all,stamp.firstKey)-1,end=rpcmFindTurnIndex(all,stamp.lastKey);
+    if(end<0||anchor< -1||(stamp.anchorKey&&(anchor<0||simpleHash(String(all[anchor].text))!==stamp.anchorHash)))throw new Error('관리 기준 RP가 바뀌었습니다. 시작점을 다시 설정해 주세요.');
+    const chosen=all.slice(anchor+1,end+1);
+    if(JSON.stringify(chosen.map(t=>[String(t.key),String(t.text)]))!==JSON.stringify(stamp.sourceTurns)||settledAutomaticTurns(all).length<=end)throw new Error('새 RP 원문이 변경되었거나 응답교정 확인 중입니다. 원본 기억을 유지합니다.');
+    if(stamp.memoHash!==simpleHash(userCanonMemoBlock(room))||stamp.guideHash!==longTermGuideHash(room,'native'))throw new Error('기억 관리 지침 또는 사용자 메모가 바뀌었습니다.');
+  }
+  function longTermNativeCandidates(room,inventory) {
+    const native=longTermState(room).nativeAuto;
+    return native.scopeReady?inventory.filter(item=>longTermNative(item,room)&&native.nativeHashes[longTermId(item)]!==longTermFingerprint(item)):[];
+  }
+  function longTermValidateNativeOps(room,inventory,operations) {
+    if(!Array.isArray(operations)||operations.length<1||operations.length>100)throw new Error('native 적용 계획 형식이 올바르지 않습니다.');
+    const seen=new Set(),patched=new Set();
+    for(const operation of operations){
+      const id=String(operation?.id||''),item=inventory.find(row=>longTermId(row)===id);
+      if(!id||seen.has(id)||!item||!longTermNative(item,room))throw new Error(`보호되었거나 중복된 native ID: ${id}`);
+      if(!['patch','delete'].includes(operation.op))throw new Error('허용되지 않은 native 작업입니다.');
+      seen.add(id);
+      if(operation.op==='patch'){longTermValidateCard(operation);patched.add(id);}
+    }
+    for(const operation of operations)if(operation.op==='delete'&&!patched.has(String(operation.mergeInto||'')))throw new Error('삭제는 실제 병합 대상 PATCH가 함께 있을 때만 허용됩니다.');
+  }
+  const longTermNativeDisplay={dialog:null,observer:null,busy:false,queued:false,roomId:'',inventory:[]};
+  function longTermDecorateNativeCards(room,dialog,inventory) {
+    if(state.currentRoom!==room||!dialog?.isConnected)return;
+    const normalize=text=>String(text||'').replace(/\s+/g,' ').trim();
+    const items=inventory.filter(item=>longTermIsWishManaged(room,item));
+    const liveIds=new Set(items.map(longTermId));
+    for(const badge of dialog.querySelectorAll('[data-rpcm-native-wish]')){
+      if(liveIds.has(badge.dataset.rpcmNativeWish))continue;
+      const card=badge.closest('.rpcm-native-wish-card');
+      card?.querySelectorAll('.rpcm-native-wish-text').forEach(node=>{node.classList.remove('rpcm-native-wish-text');delete node.dataset.wishExpanded;});
+      card?.classList.remove('rpcm-native-wish-card');badge.remove();
+    }
+    // Match both title and complete summary, never title alone. Only a native
+    // memory dialog is searched; chat messages and Manager editors are excluded.
+    const leaves=Array.from(dialog.querySelectorAll('p,span,div,strong,h3')).filter(node=>!node.children.length&&!node.closest('button,textarea,[data-rpcm-native-wish]'));
+    for(const item of items){
+      const id=longTermId(item),summary=normalize(item.summary),title=normalize(item.title);
+      if(!summary||inventory.filter(row=>normalize(row.title)===title&&normalize(row.summary)===summary).length!==1)continue;
+      if(Array.from(dialog.querySelectorAll('[data-rpcm-native-wish]')).some(node=>node.dataset.rpcmNativeWish===id))continue;
+      const matches=leaves.filter(node=>normalize(node.textContent)===summary);if(matches.length!==1)continue;
+      const body=matches[0];let card=body.parentElement;
+      while(card&&card!==dialog&&!normalize(card.textContent).includes(title))card=card.parentElement;
+      if(!card||card===dialog||card.querySelector('[data-rpcm-native-wish]'))continue;
+      // Reject a list container if it includes another memory's full body.
+      if(inventory.some(row=>longTermId(row)!==id&&String(row.summary||'').trim()&&normalize(row.summary)!==summary&&normalize(card.textContent).includes(normalize(row.summary))))continue;
+      body.classList.add('rpcm-native-wish-text');card.classList.add('rpcm-native-wish-card');
+      const badge=document.createElement('button');badge.type='button';badge.dataset.rpcmNativeWish=id;
+      badge.textContent='🪽 위시';badge.title='위시가 생성·정리한 기억 · 눌러서 내용 펼치기';badge.setAttribute('aria-expanded','false');
+      badge.onclick=event=>{event.preventDefault();event.stopPropagation();const expanded=body.dataset.wishExpanded!=='true';body.dataset.wishExpanded=String(expanded);badge.setAttribute('aria-expanded',String(expanded));};
+      card.appendChild(badge);
+    }
+  }
+  function longTermNativeDisplayTick(room) {
+    const display=longTermNativeDisplay;
+    const dialog=Array.from(document.querySelectorAll('[role="dialog"]')).find(node=>!node.closest('[id^="rpcm-"],[id^="wish-rpcore-"],.crack-ext-ai-overlay')&&Array.from(node.querySelectorAll('button')).some(button=>button.textContent.trim()==='장기 기억'));
+    if(!dialog||!room){display.observer?.disconnect();display.dialog=null;display.roomId='';return;}
+    if(display.dialog===dialog&&display.roomId===String(room.chatId))return;
+    addLongTermStyles();display.observer?.disconnect();display.dialog=dialog;display.roomId=String(room.chatId);display.inventory=[];
+    const schedule=()=>{
+      if(display.queued)return;display.queued=true;
+      queueMicrotask(()=>{display.queued=false;if(display.dialog===dialog&&state.currentRoom===room)longTermDecorateNativeCards(room,dialog,display.inventory);});
+    };
+    display.observer=new MutationObserver(records=>{
+      if(records.every(record=>record.target.closest?.('[data-rpcm-native-wish]')||record.type==='childList'&&Array.from(record.addedNodes).every(node=>node.nodeType===1&&node.hasAttribute?.('data-rpcm-native-wish'))&&Array.from(record.removedNodes).every(node=>node.nodeType===1&&node.hasAttribute?.('data-rpcm-native-wish'))))return;
+      schedule();
+    });
+    display.observer.observe(dialog,{childList:true,subtree:true,characterData:true});
+    if(display.busy)return;
+    display.busy=true;
+    void longTermFetch(room).then(inventory=>{if(display.dialog===dialog&&state.currentRoom===room){display.inventory=inventory;schedule();}}).catch(error=>console.warn('[RP Manager] 장기기억 표시 조회 보류',error)).finally(()=>{display.busy=false;if(display.dialog&&(display.dialog!==dialog||state.currentRoom!==room)){const next=state.currentRoom;display.roomId='';longTermNativeDisplayTick(next);}});
+  }
+
+  function longTermIsWishManaged(room,item) {
+    const meta=longTermState(room),id=longTermId(item);
+    return meta.nativeAuto.managedHashes[id]===longTermFingerprint(item)
+      ||meta.batches.some(batch=>batch.mode!=='native-auto'&&(batch.crackSummaryIds||[]).map(String).includes(id));
+  }
+  function longTermAutoTargets(room,inventory,cards) {
+    const native=longTermState(room).nativeAuto,used=new Set(),targets=[];
+    const mutable=inventory.filter(item=>longTermNative(item,room));
+    // Never overwrite an unrelated accumulated memory just to find a container.
+    // New slots remain untouched until every output card has a storage target.
+    for(const card of cards){
+      const matches=mutable.filter(item=>!used.has(longTermId(item))&&native.managedHashes[longTermId(item)]===longTermFingerprint(item)&&String(item.title||'').trim()===card.title);
+      if(matches.length>1)throw new Error('같은 제목의 자동 기억이 여러 개입니다. 직접 확인해 주세요.');
+      const item=matches[0];targets.push(item?longTermId(item):'');if(item)used.add(longTermId(item));
+    }
+    const baseline=new Set(longTermState(room).firstStage.nativeBaselineIds);
+    const fresh=mutable.filter(item=>!baseline.has(longTermId(item))&&!used.has(longTermId(item))&&!Object.hasOwn(native.managedHashes,longTermId(item)));
+    if(fresh.length<targets.filter(id=>!id).length)return null;
+    return targets.map(id=>id||longTermId(fresh.shift()));
+  }
+  async function longTermPlanNative(room,inventory,candidates) {
+    const native=longTermState(room).nativeAuto, protectedIds=longTermProtectedIds(room);
+    if(!native.scopeReady)throw new Error('기억 관리 시작점을 먼저 설정해 주세요.');
+    const mutable=inventory.filter(item=>longTermNative(item,room));
+    const overCap=inventory.length>native.maxSlots;
+    let midMerge=native.midMergeTurns>0&&native.processedSinceMerge>=native.midMergeTurns;
+    const untouchedCount=inventory.length-mutable.length;
+    if(overCap&&untouchedCount>=native.maxSlots)throw new Error(`보호 기억 ${untouchedCount}개 때문에 최대 ${native.maxSlots}개를 맞출 수 없습니다. 최대 슬롯을 늘리거나 보호 기억을 직접 정리해 주세요. [추가] 기억은 유지했습니다.`);
+    const capacityTarget=overCap?Math.max(untouchedCount+1,native.targetSlots):0;
+    const managed=longTermManagedSequence(room,inventory),openTail=managed.find(item=>longTermId(item)===native.openTailId)||managed.at(-1);
+    const closed=managed.filter(item=>item!==openTail&&(native.midSegmentIds===null||native.midSegmentIds.includes(longTermId(item))));
+    if(midMerge&&!overCap&&closed.length<2){native.processedSinceMerge=0;midMerge=false;native.status='중간 병합 대기 · 닫힌 기억 부족';await saveRoom(room);if(!candidates.length)return null;}
+    const maintenance=overCap||midMerge;
+    // Ordinary accumulation edits only the open tail. Mid merges exclude that tail.
+    const editable=new Set((overCap?mutable:midMerge?closed:[...candidates,...(openTail?[openTail]:[])]).map(longTermId));
+    const context=inventory.filter(item=>!editable.has(longTermId(item))).slice(0,native.contextCards);
+    const manifest=mutable.filter(item=>editable.has(longTermId(item))).map(item=>({id:longTermId(item),hash:longTermFingerprint(item),title:String(item.title||''),summary:String(item.summary||'')}));
+    if(!manifest.length){if(overCap)throw new Error('보존한 기존 기억 때문에 슬롯 제한을 맞출 수 없습니다. 기존 기억은 유지했습니다. 최대 슬롯을 늘리거나 수동으로 정리해 주세요.');return null;}
+    // Already managed cards were verified against RP in the first stage. Unknown
+    // Crack summaries are storage containers, not facts; read RP before using them.
+    let rpStamp=null,rp='';
+    if(manifest.some(item=>!native.managedHashes[item.id])){
+      const source=await longTermNativeSource(room),turns=source.turns;if(!turns.length)return {decision:'WAIT_FOR_SLOT',status:'확정된 새 대화 대기 · 최근 제외 설정 확인'};
+      rpStamp=source.stamp;
+      rp=turns.map(turn=>`[TURN ${turn.key}]\n${turn.text}`).join('\n\n');
+    }
+    const prompt=`[WISH_NATIVE_MEMORY_AUTOMATION_V1]\n아래 EDITABLE만 수정 가능하다. PROTECTED와 CONTEXT는 읽기 전용. 이미 위시가 원문 검증한 기억은 누적 사실로 유지한다. 위시가 검증하지 않은 Crack 기억의 제목·요약은 사실 근거가 아닌 저장 슬롯이다. RP_SOURCE와 USER_CANON_MEMO로 교체한다. 정보격차·관계 방향·날짜·미해결 사건을 보존한다.\nMODE=${overCap?'CAP_COMPRESSION':midMerge?'MID_MERGE':'REPLACE_AND_ACCUMULATE'}\nOPEN_TAIL_ID=${openTail?longTermId(openTail):'(없음)'}\nSEALED_READ_ONLY_IDS=${JSON.stringify(managed.filter(item=>item!==openTail&&!editable.has(longTermId(item))).map(longTermId))}\n일반 누적에서는 같은 사건일 때만 OPEN_TAIL을 갱신한다. 별개 사건은 새 슬롯에 담는다. 중간 병합에서는 OPEN_TAIL은 읽기 전용이며 닫힌 기억만 병합한다. 슬롯 부족·전체 사실을 보존할 수 없으면 WAIT_FOR_SLOT. OPEN_TAIL이 없으면 UPDATE를 요청하지 말고 새 슬롯을 사용한다.\nCURRENT_TOTAL_COUNT=${inventory.length}\nPROTECTED_COUNT=${untouchedCount}\nMAX_SLOTS=${native.maxSlots}\nTARGET_TOTAL_COUNT=${capacityTarget||inventory.length}\n${overCap?'모든 사실을 보존하며 목표 전체 슬롯 수 이하로 압축해야 한다. 불가능하면 WAIT를 반환한다.':'독립 사건은 유지하고 같은 사건의 중복·연속 내용만 병합한다. 변경 필요가 없으면 WAIT를 반환한다.'}\nJSON만 출력: {"decision":"WAIT"} 또는 {"decision":"APPLY","operations":[{"op":"patch","id":"EDITABLE_ID","title":"MM.DD|키워드","summary":"290~300자"},{"op":"delete","id":"EDITABLE_ID","mergeInto":"PATCH_ID"}]}. 삭제는 사실이 PATCH 결과에 보존될 때만 제안한다.\n[USER_CANON_MEMO]\n${userCanonMemoBlock(room)}\n[VERIFIED_MANAGED_IDS]\n${JSON.stringify(manifest.filter(item=>native.managedHashes[item.id]===item.hash).map(item=>item.id))}\n[RP_SOURCE]\n${rp||'(원문 검증된 누적 기억만 정리)'}\n[/RP_SOURCE]\n[EDITABLE]\n${JSON.stringify(manifest)}\n[CONTEXT_READ_ONLY]\n${JSON.stringify(context.map(item=>({title:item.title,summary:item.summary})))}\n[PROTECTED_IDS]\n${JSON.stringify([...protectedIds])}\n[/PROTECTED_IDS]`;
+    if(prompt.length>AI_SUMMARY_MAX_INPUT_CHARS)throw new Error('Crack 기억 검증 원문이 안전 크기를 넘습니다. 자동 1차를 지정한 시작점부터 사용하거나 수동 분할 정리해 주세요. 원본은 유지합니다.');
+    const stageGuide=longTermGuide(room,maintenance?'second':'first');
+    const nativePrompt=`[사실 보존·병합 기준]\n${stageGuide}\n[/사실 보존·병합 기준]\n[자동 관리 전용 작업 계약]\n위 지침의 사실 보존·사건 구분·정보격차·글자수 규칙을 따른다. 출력 형식, 수정 범위, 목표 슬롯 개수는 아래 전용 계약이 우선한다. 코드블록 전체본 대신 지정된 JSON을 반환한다. 보호 기억·읽기 전용 기억 수정 금지.\n${prompt}\n[/자동 관리 전용 작업 계약]`;
+    if(nativePrompt.length>AI_SUMMARY_MAX_INPUT_CHARS)throw new Error('장기기억 지침과 원문이 입력 안전 크기를 넘습니다. 읽을 대화 수를 줄여 주세요.');
+    const response=await longTermCall(room,'native',nativePrompt,'longTermNative');
+    if(rpStamp)await longTermAssertNativeSource(room,rpStamp);
+    let result;try{result=JSON.parse(String(response.text).replace(/^```json\s*/i,'').replace(/```$/,'').trim());}catch(_){throw new Error('native 정리 JSON을 읽지 못했습니다.');}
+    if(result.decision==='WAIT_FOR_SLOT'||(result.decision==='WAIT'&&rpStamp))return {decision:'WAIT_FOR_SLOT',status:'요약할 슬롯 대기 중 · 원본과 새 대화 유지',usage:response.usage};
+    if(result.decision==='WAIT'){
+      if(overCap)throw new Error('AI가 핵심 사실을 보존하며 슬롯 제한까지 압축하지 못했습니다. 원본을 유지합니다. 최대 슬롯을 늘리거나 수동 정리해 주세요.');
+      return {decision:'WAIT',maintenance,usage:response.usage};
+    }
+    if(result.decision!=='APPLY')throw new Error('native 정리 결정값이 올바르지 않습니다.');
+    longTermValidateNativeOps(room,inventory,result.operations);
+    for(const op of result.operations)if(!editable.has(String(op.id)))throw new Error('AI가 허용 범위 밖의 native 카드를 지정했습니다.');
+    if(rpStamp&&!result.operations.some(op=>op.op==='patch'))throw new Error('새 RP를 저장할 새 슬롯이 계획에 없습니다. 원본과 처리 기준을 유지합니다.');
+    if(overCap&&inventory.length-result.operations.filter(op=>op.op==='delete').length>capacityTarget)throw new Error('AI 압축 결과가 목표 슬롯 수를 초과합니다. 원본은 유지합니다.');
+    return {roomId:String(room.chatId),chatId:String(apiChatIdOf(room)),scopeHash:longTermNativeScopeHash(room),priorTailId:openTail?longTermId(openTail):'',inventoryHash:longTermInventoryHash(inventory),source:manifest,inventoryManifest:inventory.map(item=>({id:longTermId(item),hash:longTermFingerprint(item),createdBy:String(item.createdBy||''),badge:String(item.badge||'')})),rpStamp,maintenance,capacityTarget,memoHash:simpleHash(userCanonMemoBlock(room)),guideHash:longTermGuideHash(room,'native'),protectedHash:simpleHash([...protectedIds].sort().join('|')),operations:result.operations.map(op=>({...op,beforeHash:longTermFingerprint(inventory.find(item=>longTermId(item)===String(op.id)))})),done:[],createdAt:nowIso(),usage:response.usage};
+  }
+  async function longTermApplyNative(room,plan,backgroundGuard=null) {
+    backgroundGuard?.();
+    const native=longTermState(room).nativeAuto;
+    if(plan.roomId!==String(room.chatId)||plan.chatId!==String(apiChatIdOf(room)))throw new Error('방이 바뀌었습니다.');
+    if(!native.scopeReady||plan.scopeHash!==longTermNativeScopeHash(room))throw new Error('관리 시작점 이전의 정리 계획입니다. 지금부터 관리로 다시 설정해 주세요. 부분 적용된 계획은 먼저 서버 저장 상태를 확인해 주세요.');
+    if(plan.memoHash!==simpleHash(userCanonMemoBlock(room))||plan.guideHash!==longTermGuideHash(room,'native')||plan.protectedHash!==simpleHash([...longTermProtectedIds(room)].sort().join('|')))throw new Error('보호·메모·지침 상태가 바뀌어 native 계획을 적용할 수 없습니다.');
+    if(plan.rpStamp)await longTermAssertNativeSource(room,plan.rpStamp);
+    let inventory=await longTermFetch(room);
+    // Revalidate protection separately: a resumed delete can reference an already
+    // verified PATCH, so validation of only the unfinished subset is insufficient.
+    for(const op of plan.operations)if(!plan.done.includes(String(op.id))){
+      const item=inventory.find(row=>longTermId(row)===String(op.id));
+      if(item&&!longTermNative(item,room))throw new Error('정리 대상이 보호 기억으로 바뀌었습니다.');
+    }
+    if(!plan.done.length&&longTermInventoryHash(inventory)!==plan.inventoryHash){
+      const pending=plan.operations.find(op=>String(op.id)===String(plan.pendingOperationId||''));
+      const current=inventory.find(item=>longTermId(item)===String(pending?.id||''));
+      const acknowledged=pending&&(pending.op==='patch'?current&&longTermFingerprint(current)===longTermFingerprint(pending):!current);
+      const original=plan.inventoryManifest;
+      const expected=Array.isArray(original)?original.filter(item=>!(pending?.op==='delete'&&item.id===String(pending.id))).map(item=>item.id===String(pending?.id||'')?{...item,hash:longTermFingerprint(pending)}:item):[];
+      const same=acknowledged&&expected.length===inventory.length&&expected.every(item=>inventory.some(row=>longTermId(row)===item.id&&longTermFingerprint(row)===item.hash&&String(row.createdBy||'')===item.createdBy&&String(row.badge||'')===item.badge));
+      if(!same)throw new Error('Crack 장기기억 목록이 계획 이후 바뀌었습니다.');
+    }
+    for(const id of plan.done){
+      const operation=plan.operations.find(op=>String(op.id)===String(id));
+      const current=inventory.find(item=>longTermId(item)===String(id));
+      if(!operation||(operation.op==='patch'&&(!current||longTermFingerprint(current)!==longTermFingerprint(operation)))||(operation.op==='delete'&&current))throw new Error('이미 적용한 native 카드의 서버 상태가 달라졌습니다. 자동 복구를 중단했습니다.');
+    }
+    const patches=plan.operations.filter(op=>op.op==='patch'),deletes=plan.operations.filter(op=>op.op==='delete');
+    for(const op of [...patches,...deletes]){
+      backgroundGuard?.();const id=String(op.id);if(plan.done.includes(id))continue;
+      let current=inventory.find(item=>longTermId(item)===id);
+      // A previous tab may have received the server mutation but failed before
+      // persisting the acknowledgment. Confirm that result instead of repeating it.
+      if(op.op==='patch'&&current&&longTermFingerprint(current)===longTermFingerprint(op)){
+        plan.done.push(id);native.pendingApply=plan;await saveRoom(room);continue;
+      }
+      if(op.op==='delete'&&!current){plan.done.push(id);native.pendingApply=plan;await saveRoom(room);continue;}
+      if(!current||!longTermNative(current,room)||longTermFingerprint(current)!==op.beforeHash)throw new Error(`native 카드 ${id}가 외부에서 변경되었습니다.`);
+      if(!plan.originalBackup){
+        plan.originalBackup={at:nowIso(),cards:structuredClone(plan.source)};
+        const meta=longTermState(room);meta.nativeBackups=[plan.originalBackup,...(meta.nativeBackups||[])].slice(0,20);await saveRoom(room);
+      }
+      plan.pendingOperationId=id;native.pendingApply=plan;await saveRoom(room);
+      if(op.op==='delete'){
+        const merged=inventory.find(item=>longTermId(item)===String(op.mergeInto));
+        if(!plan.done.includes(String(op.mergeInto))||!merged)throw new Error('병합 대상 PATCH 확인 전에는 native 카드를 삭제하지 않습니다.');
+        backgroundGuard?.();await longTermDelete(room,id);
+      }else {backgroundGuard?.();await longTermPatch(room,id,op);}
+      inventory=await longTermFetch(room);
+      current=inventory.find(item=>longTermId(item)===id);
+      if(op.op==='patch'&&(!current||longTermFingerprint(current)!==longTermFingerprint(op)))throw new Error(`native PATCH 결과 ${id}를 확인하지 못했습니다.`);
+      if(op.op==='delete'&&current)throw new Error(`native DELETE 결과 ${id}를 확인하지 못했습니다.`);
+      plan.done.push(id);plan.pendingOperationId='';native.pendingApply=plan;await saveRoom(room);
+    }
+    if(plan.rpStamp)await longTermAssertNativeSource(room,plan.rpStamp);
+    if(plan.capacityTarget&&inventory.length>plan.capacityTarget)throw new Error('압축 목표 슬롯 수에 도달하지 못했습니다. 남은 계획을 확인해 주세요.');
+    for(const source of plan.source||[]){const item=inventory.find(row=>longTermId(row)===String(source.id));if(item&&native.managedHashes[source.id])native.nativeHashes[longTermId(item)]=longTermFingerprint(item);}
+    for(const op of patches)native.managedHashes[String(op.id)]=longTermFingerprint(op);
+    for(const op of deletes){delete native.nativeHashes[String(op.id)];delete native.managedHashes[String(op.id)];}
+    const existingOrder=longTermManagedSequence(room,inventory).map(longTermId),newIds=patches.map(op=>String(op.id)).filter(id=>!existingOrder.includes(id));
+    native.managedOrder=[...existingOrder,...newIds].filter(id=>inventory.some(item=>longTermId(item)===id));
+    native.openTailId=native.managedOrder.at(-1)||'';
+    const closedTail=plan.priorTailId&&plan.priorTailId!==native.openTailId&&native.managedOrder.includes(plan.priorTailId)?[plan.priorTailId]:[];
+    native.midSegmentIds=[...new Set([...(native.midSegmentIds||[]),...closedTail])].filter(id=>id!==native.openTailId&&native.managedOrder.includes(id));
+    if(plan.rpStamp){native.sourceCursor=plan.rpStamp.lastKey;native.sourceCursorHash=simpleHash(plan.rpStamp.sourceTurns.at(-1)[1]);native.processedSinceMerge+=plan.rpStamp.sourceTurns.length;}
+    if(plan.maintenance){native.processedSinceMerge=0;native.midSegmentIds=[];}
+    native.lastInventoryHash=longTermInventoryHash(inventory);native.pendingApply=null;native.lastSuccessAt=nowIso();native.status='적용 완료';native.error='';native.consecutiveFailures=0;native.lastUsage=plan.usage;
+    const meta=longTermState(room);meta.batches.unshift({id:`LTM_${Date.now().toString(36)}`,mode:'native-auto',crackSummaryIds:[],createdAt:plan.createdAt,appliedAt:native.lastSuccessAt,updatedIds:patches.map(op=>String(op.id)),deletedIds:deletes.map(op=>String(op.id))});meta.batches=meta.batches.slice(0,100);
+    await saveRoom(room);longTermRuntime.inventory=inventory;
+  }
+  async function longTermOpenNativeReview(room) {
+    const plan=longTermState(room).nativeAuto.pendingApply;
+    if(!plan)throw new Error('검토할 Crack 기억 정리 계획이 없습니다.');
+    const signature=JSON.stringify([plan.operations,plan.source]);
+    const existing=document.getElementById('rpcm-native-review'),review=existing?._rpcmNativeReview;
+    if(review&&(review.busy||review.room===room&&review.plan===plan&&review.signature===signature))return;
+    existing?.remove();
+    const backdrop=document.createElement('div');backdrop.id='rpcm-native-review';backdrop.className='rpcm-ltm-backdrop';
+    backdrop.innerHTML=`<section class="rpcm-pref-card" role="dialog" aria-modal="true" aria-label="Crack 기억 정리 검토"><h3>Crack 기억 정리 · 검토 후 적용</h3><p>수정 ${plan.operations.filter(op=>op.op==='patch').length}개 · 병합 원본 정리 ${plan.operations.filter(op=>op.op==='delete').length}개 · 직접 편집·고정 기억은 보호합니다.</p>${plan.operations.map(op=>{const before=plan.source.find(row=>row.id===String(op.id));return `<article><h4>${esc(before?.title||op.id)} · ${op.op==='patch'?'수정':'병합 원본 정리'}</h4><details><summary>현재 내용</summary><p>${esc(before?.summary||'')}</p></details><p>${op.op==='patch'?esc(op.summary):'병합 대상: '+esc(plan.operations.find(row=>String(row.id)===String(op.mergeInto))?.title||op.mergeInto)}</p></article>`;}).join('')}<p role="status" data-native-status>계획 이후 서버 기억이 변경되면 적용을 보류합니다.</p><div class="rpcm-ltm-row"><button type="button" class="rpcm-btn secondary" data-native-close>닫기</button><button type="button" class="rpcm-btn secondary" data-native-discard>계획 폐기</button><button type="button" class="rpcm-btn primary" data-native-apply>확인하고 적용</button></div></section>`;
+    let busy=false;const close=()=>{if(!busy)backdrop.remove();};
+    backdrop._rpcmNativeReview={room,plan,signature,get busy(){return busy;}};
+    const current=()=>state.currentRoom===room&&longTermState(room).nativeAuto.pendingApply===plan&&JSON.stringify([plan.operations,plan.source])===signature;
+    backdrop.querySelector('[data-native-close]').onclick=close;
+    backdrop.onkeydown=event=>{if(event.key==='Escape')close();};
+    backdrop.querySelector('[data-native-discard]').onclick=async()=>{
+      if(busy)return;
+      if(!current()){backdrop.querySelector('[data-native-status]').textContent='방 또는 정리 계획이 바뀌었습니다. 검토창을 다시 열어 주세요.';return;}
+      if(plan.done?.length){notify('일부 서버 변경이 완료된 계획입니다. 저장 확인을 먼저 마쳐 주세요.','warn');return;}
+      const native=longTermState(room).nativeAuto,discardBefore={pendingApply:native.pendingApply,status:native.status,enabled:native.enabled,modeRevision:native.modeRevision};
+      native.pendingApply=null;native.status='계획 폐기';native.enabled=false;native.modeRevision++;
+      try{await saveRoom(room);}catch(error){native.pendingApply=discardBefore.pendingApply;native.status=discardBefore.status;native.enabled=discardBefore.enabled;native.modeRevision=discardBefore.modeRevision;backdrop.querySelector('[data-native-status]').textContent=`계획 폐기 저장 실패: ${error.message}`;return;}
+      close();longTermRefreshUi(room);
+    };
+    backdrop.querySelector('[data-native-apply]').onclick=async()=>{
+      if(busy||!confirm('수정 결과를 검증한 뒤 병합 원본을 정리할까요? 원본 백업은 이 방에 보관합니다.'))return;
+      busy=true;backdrop.querySelectorAll('button').forEach(node=>node.disabled=true);
+      try{
+        await longTermWithLock(room,'native-reviewed',async()=>{
+          if(!current())throw new Error('방 또는 정리 계획이 바뀌었습니다. 검토창을 다시 열어 주세요.');
+          await longTermApplyNative(room,plan);
+        });busy=false;close();longTermRefreshUi(room);notify('Crack 기억 정리 결과 저장을 확인했습니다.','success');
+      }catch(error){backdrop.querySelector('[data-native-status]').textContent=error.message;}
+      finally{busy=false;backdrop.querySelectorAll('button').forEach(node=>node.disabled=false);}
+    };
+    document.body.appendChild(backdrop);
+  }
+  async function longTermNativePoll(room,force=false) {
+    const native=longTermState(room).nativeAuto;
+    if((!native.enabled&&!force)||Date.now()<native.retryAfter||native.consecutiveFailures>=3)return;
+    if(!native.scopeReady){
+      if(native.pendingApply){native.status='기존 정리 계획 확인 필요 · 지금부터 관리';await saveRoom(room);return;}
+      await longTermWithLock(room,'native-scope',()=>longTermStartNativeScope(room));
+      return;
+    }
+    const revision=native.modeRevision,connection=JSON.stringify(longTermAiSettings().settings);
+    const guard=()=>{if(force&&!native.enabled){if(state.currentRoom!==room||native.modeRevision!==revision||JSON.stringify(longTermAiSettings().settings)!==connection||longTermManualWaiting(room))throw new Error('수동 실행 중 방·설정·작업 상태가 바뀌었습니다.');}else longTermAutoGuard(room,'nativeAuto',revision,connection);};
+    await longTermWithLock(room,'native-auto',async()=>{
+      if(native.pendingApply){if(native.autoApply&&native.pendingApply.autoApplyEligible!==false&&native.pendingApply.modeRevision===revision&&native.pendingApply.connectionStamp===connection){guard();await longTermApplyNative(room,native.pendingApply,guard);}else native.status='계획 검토 대기';return;}
+      const inventory=await longTermFetch(room),allNative=inventory.filter(item=>longTermNative(item,room));
+      let metadataChanged=false;
+      const presentIds=new Set(inventory.map(longTermId));
+      for(const id of Object.keys(native.nativeHashes))if(!presentIds.has(id)){delete native.nativeHashes[id];metadataChanged=true;}
+      for(const id of Object.keys(native.managedHashes))if(!presentIds.has(id)){delete native.managedHashes[id];metadataChanged=true;}
+      for(const item of allNative){const id=longTermId(item),managed=native.managedHashes[id];if(managed&&managed!==longTermFingerprint(item)){native.userModifiedIds.push(id);delete native.managedHashes[id];metadataChanged=true;}}
+      native.userModifiedIds=[...new Set(native.userModifiedIds)];
+      if(!native.lastInventoryHash){native.lastInventoryHash=longTermInventoryHash(inventory);native.status='Crack 기억 확인';await saveRoom(room);}
+      const candidates=longTermNativeCandidates(room,inventory);
+      const overCap=inventory.length>native.maxSlots;
+      const midMerge=native.midMergeTurns>0&&native.processedSinceMerge>=native.midMergeTurns;
+      if(!candidates.length&&!overCap&&!midMerge){native.status='실행 확인 완료 · 정리할 새 기억 없음';native.error='';if(metadataChanged||force)await saveRoom(room);return;}
+      if(!overCap&&!midMerge){const source=await longTermNativeSource(room);native.pendingTurns=source.pendingCount;
+        if(!source.turns.length||(!force&&source.pendingCount<native.intervalTurns)){native.status=force?`실행 보류 · 확정된 새 대화가 없습니다 (최근 ${native.excludeRecentTurns}턴 제외 설정 확인)`:`다음 실행까지 ${Math.max(0,native.intervalTurns-source.pendingCount)}대화턴 · 확정 대화 ${source.availableCount}턴`;native.error='';await saveRoom(room);return;}}
+
+      native.status=`새·변경 native ${candidates.length}개 분석 중`;await saveRoom(room);
+      // A first-stage draft owns fresh containers until its RP result is saved.
+      if(longTermManualWaiting(room)||longTermState(room).firstStage.autoDraft||longTermState(room).firstStage.pendingApply){native.status='1차 결과 저장 대기 · 원본 슬롯 유지';return;}
+      const plan=await longTermPlanNative(room,inventory,candidates);
+      if(plan?.decision==='WAIT_FOR_SLOT'){native.status=plan.status;native.error='';await saveRoom(room);return;}
+      if(plan?.decision==='WAIT'){
+        if(plan.maintenance)native.processedSinceMerge=0;
+        const fresh=await longTermFetch(room);
+        if(longTermInventoryHash(fresh)!==longTermInventoryHash(inventory))throw new Error('AI 판단 중 Crack 장기기억 목록이 변경됐습니다.');
+        for(const item of candidates)native.nativeHashes[longTermId(item)]=longTermFingerprint(item);
+        native.lastInventoryHash=longTermInventoryHash(fresh);native.status='유지 · 변경 없음';native.lastSuccessAt=nowIso();native.lastUsage=plan.usage;await saveRoom(room);return;
+      }
+      if(!plan) return;
+      native.pendingApply=plan;plan.autoApplyEligible=native.autoApply;plan.modeRevision=revision;plan.connectionStamp=connection;await saveRoom(room);
+      if(native.autoApply){guard();await longTermApplyNative(room,plan,guard);}else native.status='계획 검토 대기';
+    });
+  }
+  async function longTermPoll(room,force=false) {
+    if(areaResetPaused(room))return;
+    if(!room||state.currentRoom!==room||document.hidden||longTermRuntime.busy)return;
+    const meta=longTermState(room),now=Date.now();
+    if(!meta.nativeAuto.enabled)return;
+    if(!force&&now-longTermRuntime.lastPoll<15000)return;
+    longTermRuntime.lastPoll=now;longTermRuntime.busy=true;
+    try{
+      if(!aiMemoryEditingNow())await longTermNativePoll(room,force);
+    }catch(error){
+      const native=meta.nativeAuto;
+      native.error=String(error?.message||error);native.status='보류 · 계획 확인';
+      native.consecutiveFailures=Math.min(3,native.consecutiveFailures+1);
+      native.retryAfter=Date.now()+60000*native.consecutiveFailures;
+      await saveRoom(room).catch(()=>{});console.warn('[RP Manager] 장기기억 자동 정리 보류',error);
+    }finally{longTermRuntime.busy=false;longTermRefreshUi(room);}
+  }
+
+  function longTermOriginIndex(room) {
+    const meta=longTermState(room),wishIds=new Set(),managedIds=new Set(Object.keys(meta.nativeAuto.managedHashes)),managedAt=new Map();
+    for(const batch of meta.batches){
+      if(batch.mode==='native-auto'){
+        for(const value of [...(batch.updatedIds||[]),...(batch.crackSummaryIds||[])]){
+          const id=String(value);managedIds.add(id);if(!managedAt.has(id))managedAt.set(id,String(batch.appliedAt||''));
+        }
+      }else for(const id of batch.crackSummaryIds||[])wishIds.add(String(id));
+    }
+    return {wishIds,managedIds,managedAt};
+  }
+  function longTermCardOrigin(room,item,index=longTermOriginIndex(room)) {
+    const id=longTermId(item);
+    if(index.wishIds.has(id))return 'wish';
+    if(longTermProtectedIds(room).has(id))return 'user';
+    if(String(item.createdBy||'').toLowerCase()==='user'||String(item.badge||'').trim()==='추가')return 'user';
+    if(index.managedIds.has(id)&&!longTermProtectedIds(room).has(id))return 'crack';
+    return longTermNative(item,room)?'crack':'other';
+  }
+  function longTermMatchesOrigin(room,item,filter,index=longTermOriginIndex(room)) {
+    if(filter==='managed')return index.managedIds.has(longTermId(item));
+    return !filter||filter==='all'||longTermCardOrigin(room,item,index)===filter;
+  }
+  function longTermFilterList(section,room) {
+    const index=longTermOriginIndex(room),query=longTermRuntime.search.toLocaleLowerCase('ko-KR'),pinned=new Set(longTermState(room).protectedIds.map(String));
+    let visible=0;
+    for(const card of section.querySelectorAll('.rpcm-ltm-memory')){
+      const item=longTermRuntime.inventory.find(row=>longTermId(row)===card.dataset.ltmCardId);
+      const show=!!item&&longTermMatchesOrigin(room,item,longTermRuntime.originFilter,index)&&(!longTermRuntime.pinOnly||pinned.has(longTermId(item)))&&(!query||`${item.title||''} ${item.summary||''}`.toLocaleLowerCase('ko-KR').includes(query));
+      card.hidden=!show;if(show)visible++;
+    }
+    section.querySelectorAll('[data-ltm-origin-filter]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.ltmOriginFilter===(longTermRuntime.originFilter||'all'))));
+    const count=section.querySelector('[data-ltm-visible-count]');if(count)count.textContent=`${visible}개 표시 · 전체 ${longTermRuntime.inventory.length}개`;
+    const empty=section.querySelector('[data-ltm-list-empty]');if(empty)empty.hidden=visible>0;
+  }
+  function longTermCardBadge(room,item) {
+    const id=longTermId(item),meta=longTermState(room),index=longTermOriginIndex(room);
+    const batch=meta.batches.find(row=>row.mode!=='native-auto'&&(row.crackSummaryIds||[]).map(String).includes(id));
+    if(batch)return '🪽 '+(batch.mode==='auto-first'?'자동 1차':batch.mode==='manual-first'?'수동 1차':'2차 압축');
+    if(index.managedIds.has(id))return '🪽 위시 자동 정리';
+    const origin=longTermCardOrigin(room,item,index);
+    return origin==='crack'?'Crack 생성':origin==='user'?'사용자 추가':'기타';
+  }
+  // v0.14.75: shared update surfaces and UI-only controls. Existing storage and guards are retained.
+  function rpcmItemFilterEye(closed=false){return `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true">${closed?'<path d="M3 3l18 18M10.7 10.7a2 2 0 002.6 2.6M9.5 5.2C14.5 4 19 7.2 22 12c-1 1.5-2 2.8-3.2 3.8M6 6C4.3 7.5 3 9.5 2 12c2.5 4 5.8 7 10 7 1.3 0 2.5-.2 3.5-.6"/>':'<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>'}</svg>`;}
+  function openItemFilterVisibility(room,actors,apply){
+    document.querySelector('#rpcm-item-filter-backdrop')?.remove();
+    const box=document.createElement('div');box.id='rpcm-item-filter-backdrop';
+    const hidden=new Set(room.hiddenItemFilterPeople||[]);
+    box.innerHTML=`<section class="rpcm-update-dialog rpcm-item-filter-dialog" role="dialog" aria-modal="true" aria-label="인물 필터 표시 관리"><header><div><h2>인물 필터 표시</h2><p>숨겨도 인물과 물품 데이터·주입 설정은 유지됩니다.</p></div><button type="button" data-close aria-label="닫기" data-rpcm-close="icon">${rpcmUiIcon('close')}</button></header><div class="rpcm-item-filter-options">${actors.map(actor=>`<button type="button" data-item-person-visible="${esc(actor.name)}" aria-pressed="${!hidden.has(actor.name)}"><strong>${esc(actor.name)}</strong><span>${rpcmItemFilterEye(hidden.has(actor.name))} ${hidden.has(actor.name)?'숨김 · 다시 표시':'표시 중 · 숨기기'}</span></button>`).join('')}</div><footer><button type="button" data-close>완료</button></footer></section>`;
+    box.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>box.remove());box.onclick=event=>{if(event.target===box)box.remove();};box.addEventListener('keydown',event=>{if(event.key==='Escape')box.remove();});
+    box.querySelectorAll('[data-item-person-visible]').forEach(button=>button.onclick=async()=>{const name=button.dataset.itemPersonVisible;button.disabled=true;try{await apply(name);const now=(room.hiddenItemFilterPeople||[]).includes(name);button.setAttribute('aria-pressed',String(!now));button.querySelector('span').innerHTML=`${rpcmItemFilterEye(now)} ${now?'숨김 · 다시 표시':'표시 중 · 숨기기'}`;}finally{button.disabled=false;}});
+    document.body.appendChild(box);box.querySelector('[data-close]')?.focus();
+  }
+  function addRpcm74Styles(){
+    GM_addStyle("\n#rpcm-person-hidden-dialog .m3-dialog-body{display:grid;gap:0;padding:12px 28px;max-height:62vh;overflow-y:auto}\n#rpcm-person-hidden-dialog .m3-row{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:16px 0;border-bottom:1px solid var(--m3-line,rgba(150,115,139,.18));min-width:0}\n#rpcm-person-hidden-dialog .m3-row:last-child{border-bottom:0}\n#rpcm-person-hidden-dialog .m3-grow{flex:1;min-width:0;overflow-wrap:anywhere;font-size:17px;font-weight:500;line-height:1.5}\n#rpcm-person-hidden-dialog .m3-row .m3-btn{flex:none;margin:0;min-width:112px}\n#rpcm-person-hidden-dialog footer{display:flex;justify-content:flex-end;gap:12px}\n.rpcm-person-graph-editor{grid-column:1/-1;background:var(--wish-card-2);border-radius:12px;padding:12px}.rpcm-person-graph-editor>p{font-size:12px;color:var(--wish-fg-2)}.rpcm-person-graph-editor label{display:grid;gap:6px;margin-top:10px}\n#rpcm-overlay .rpcm-btn.rpcm-result-ready{position:relative;background:linear-gradient(125deg,#b74e85,#cf70a0);color:#fff;border-color:transparent;box-shadow:0 5px 16px rgba(181,76,132,.24);animation:rpcm-result-arrive 1.6s ease-out 3}\n#rpcm-overlay .rpcm-btn.rpcm-result-ready:hover{box-shadow:0 7px 21px rgba(181,76,132,.35);filter:brightness(1.04)}\n@keyframes rpcm-result-arrive{0%,100%{box-shadow:0 5px 16px rgba(181,76,132,.24)}45%{box-shadow:0 0 0 5px rgba(207,112,160,.17),0 7px 21px rgba(181,76,132,.30)}}\n@media(prefers-reduced-motion:reduce){#rpcm-overlay .rpcm-btn.rpcm-result-ready{animation:none}}\n");
+    if(document.getElementById('rpcm-74-styles'))return;
+    const style=document.createElement('style');style.id='rpcm-74-styles';
+    const scope=':is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-raw-viewer,#rpcm-ai-memory-baseline-dialog)';
+    style.textContent=`
+      ${scope}{color:var(--wish-fg)!important;font-family:'Pretendard',-apple-system,BlinkMacSystemFont,'Apple SD Gothic Neo',sans-serif}
+      html body ${scope} :is(p,label,summary,div,span,small,a,em,li,code,pre){color:var(--wish-fg-2)!important}
+      html body ${scope} :is(h1,h2,h3,h4,strong,b,input,textarea,select){color:var(--wish-fg)!important}
+      html body ${scope} :is(input:not([type=checkbox]):not([type=radio]),select,textarea){background:var(--wish-card)!important;border-color:var(--wish-line)!important;caret-color:var(--wish-fg)!important;outline:none}
+      html body ${scope} :is(button,[role=button]){color:var(--wish-fg-2)!important;border-color:var(--wish-line)!important;font-family:inherit}
+      html body ${scope} :is(button,.rpcm-btn):not(:disabled):hover{color:var(--wish-accent-strong)!important;border-color:var(--wish-accent-line)!important}
+      html body ${scope} button:disabled{opacity:.5;cursor:default}
+      html body ${scope} :is(.rpcm-btn.primary,button[aria-selected=true],button[aria-pressed=true],.is-selected){background:var(--wish-accent-soft)!important;color:var(--wish-accent-strong)!important;border-color:var(--wish-accent-line)!important}
+      html body ${scope} :is(.rpcm-btn.primary,button[aria-selected=true],button[aria-pressed=true]) :is(span,strong,small){color:inherit!important}
+      html body ${scope} :is(.rpcm-btn.secondary,.rpcm-lib-small,.rpcm-editor-action,.rpcm-mini,.rpcm-story-secondary,.rpcm-log-btn){background:var(--wish-accent-soft)!important;border:1px solid var(--wish-accent-line)!important;border-radius:9px!important}
+      html body ${scope} :is(div,section,article,aside,label,details,summary,fieldset,header,footer,pre){border-color:var(--wish-line)!important}
+      html body ${scope} :is(article,details,summary,fieldset,header,footer,.rpcm-log-row,.rpcm-log-picked,.rpcm-log-day,.rpcm-log-date-group,.rpcm-lib-dialog-head,.rpcm-slot-readview,.rpcm-read-card,.rpcm-story-card-main,.rpcm-story-read-main,.rpcm-story-month,.rpcm-item-child,.rpcm-item-folder,.rpcm-item-duplicate-group,.rpcm-dup-group){border-color:var(--wish-line)!important}
+      html body ${scope} :is(.rpcm-log-dialog,.rpcm-detached-editor,.rpcm-raw-card,.rpcm-update-dialog,.rpcm-item-filter-dialog){background:var(--wish-sheet)!important;color:var(--wish-fg)!important}
+      html body ${scope} :is(.rpcm-log-help,.rpcm-fixed-note,.rpcm-auto-panel,.rpcm-read-toolbar,.rpcm-log-timeline-toolbar,.rpcm-log-picked,.rpcm-log-row,.rpcm-log-day,.rpcm-log-date-group,.rpcm-item-view-actions){background:transparent!important;border-color:var(--wish-line)!important}
+      html body ${scope} :is(.rpcm-summary-label,.rpcm-summary-count,.rpcm-overview-label,.rpcm-summary-main strong,.rpcm-overview-card>span,.rpcm-section-desc,.rpcm-read-meta,.rpcm-item-description,.rpcm-item-child-description,.rpcm-item-child-head span,.rpcm-item-read-preview,.rpcm-item-read-preview div,.rpcm-item-read-preview p){color:var(--wish-fg-2)!important;opacity:1!important}
+      #rpcm-modal #rpcm-section-item .rpcm-item-read-preview :is(div,p,span,small){color:var(--wish-fg-2)!important}
+      #rpcm-modal #rpcm-section-item .rpcm-item-read-preview :is(strong,b,h3,h4){color:var(--wish-fg)!important}
+      #rpcm-modal .rpcm-summary .rpcm-summary-label{color:var(--wish-fg)!important;font-weight:650}
+      #rpcm-modal .rpcm-overview-card>strong{color:var(--wish-fg)!important}
+      #rpcm-modal .rpcm-item-view-actions{display:flex;justify-content:flex-end;gap:6px}
+      #rpcm-modal .rpcm-item-view-actions :is(button,summary){background:transparent!important;border:1px solid var(--wish-line)!important}
+      html body ${scope} :is(.rpcm-edit textarea,.rpcm-detached-main textarea,.rpcm-detached-editor textarea,.rpcm-title-input):focus{border:1px solid var(--wish-accent-line)!important;box-shadow:0 0 0 2px var(--wish-hi)!important;outline:none!important}
+      #rpcm-modal .rpcm-editor-actions .rpcm-focus-toggle{margin-left:auto!important}
+      #rpcm-modal .rpcm-editor-actions .rpcm-slot-save-done{margin-left:0!important}html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-editor-actions .rpcm-slot-save-done{margin-left:0!important}
+      #rpcm-modal .rpcm-editor-actions{column-gap:6px!important}
+      #rpcm-modal .rpcm-inline-story-toolbar{background:transparent!important;border:0!important;padding-left:0!important}
+      #rpcm-modal .rpcm-story-vertical .rpcm-inline-story-month>summary{background:transparent!important;border:0!important;display:table;border-radius:7px;transition:background .18s,transform .18s;max-width:100%}
+      #rpcm-modal .rpcm-story-vertical .rpcm-inline-story-month>summary:hover{background:var(--wish-hi)!important;transform:translateY(-1px)}
+      #rpcm-modal .rpcm-story-vertical .rpcm-story-month-spine{border-left:1px solid var(--wish-accent-line)!important;box-shadow:-2px 0 6px -4px var(--wish-glow);padding-left:12px;margin-left:8px}
+      #rpcm-modal .rpcm-story-vertical .rpcm-inline-story-card{border:0!important;background:transparent!important;transition:transform .2s,box-shadow .2s;border-radius:10px!important}
+      #rpcm-modal .rpcm-story-vertical .rpcm-inline-story-card:hover{transform:translateY(-2px);background:var(--wish-card)!important;box-shadow:var(--wish-shadow)}
+      #rpcm-modal .rpcm-inline-story-settings,#rpcm-modal .rpcm-inline-story-date-nav,#rpcm-modal .rpcm-inline-story-diff{background:transparent!important;border-color:var(--wish-line)!important}
+      #rpcm-modal .rpcm-inline-story-top{padding-right:14px!important;gap:9px}
+      #rpcm-modal :is(.rpcm-inline-story-top em,.rpcm-inline-story-top span,.rpcm-inline-story-inject,.rpcm-story-diff-badge,.rpcm-inline-story-badge){background:transparent!important;color:var(--wish-accent-strong)!important;border-color:var(--wish-accent-line)!important}
+      #rpcm-modal .rpcm-inline-story-top em{margin-right:8px}
+      html body ${scope} :is(.rpcm-slot-remain){color:var(--wish-warning)!important;border-color:var(--wish-warning)!important;background:transparent!important;flex-shrink:0;order:0!important}
+      #rpcm-modal .rpcm-slot summary>.rpcm-slot-remain{margin-right:3px}
+      html body ${scope} :is(.rpcm-pref-row,.rpcm-auto-panel,.rpcm-story-injection-toggle,.rpcm-ai-card-result,.rpcm-inline-story-settings,.rpcm-inline-story-inject,.rpcm-auto-pin,.rpcm-auto-exclude,.rpcm-knowledge-head>label,.rpcm-ltm-row,.rpcm-ai-memory-row,.rpcm-notice-settings) input[type=checkbox]{appearance:none!important;-webkit-appearance:none!important;width:30px!important;height:18px!important;min-width:30px!important;min-height:18px!important;flex:0 0 30px!important;border:1px solid var(--wish-line)!important;border-radius:20px!important;background:var(--wish-fg-2)!important;position:relative;cursor:pointer;margin:0;vertical-align:middle}
+      html body ${scope} :is(.rpcm-pref-row,.rpcm-auto-panel,.rpcm-story-injection-toggle,.rpcm-ai-card-result,.rpcm-inline-story-settings,.rpcm-inline-story-inject,.rpcm-auto-pin,.rpcm-auto-exclude,.rpcm-knowledge-head>label,.rpcm-ltm-row,.rpcm-ai-memory-row,.rpcm-notice-settings) input[type=checkbox]:before{content:''!important;position:absolute;left:2px;top:2px;width:12px;height:12px;border-radius:50%;background:#fff!important;transition:transform .18s}
+      html body ${scope} :is(.rpcm-pref-row,.rpcm-auto-panel,.rpcm-story-injection-toggle,.rpcm-ai-card-result,.rpcm-inline-story-settings,.rpcm-inline-story-inject,.rpcm-auto-pin,.rpcm-auto-exclude,.rpcm-knowledge-head>label,.rpcm-ltm-row,.rpcm-ai-memory-row,.rpcm-notice-settings) input[type=checkbox]:checked{background:var(--wish-accent)!important;border-color:var(--wish-accent)!important}
+      html body ${scope} :is(.rpcm-pref-row,.rpcm-auto-panel,.rpcm-story-injection-toggle,.rpcm-ai-card-result,.rpcm-inline-story-settings,.rpcm-inline-story-inject,.rpcm-auto-pin,.rpcm-auto-exclude,.rpcm-knowledge-head>label,.rpcm-ltm-row,.rpcm-ai-memory-row,.rpcm-notice-settings) input[type=checkbox]:checked:before{transform:translateX(12px)!important}
+      html body ${scope} input[type=checkbox]{accent-color:var(--wish-accent)!important}
+      html body ${scope} :is(input,button,summary):focus-visible{outline:2px solid var(--wish-accent-line)!important;outline-offset:2px}
+      #rpcm-modal .rpcm-ai-overview-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}
+      #rpcm-modal .rpcm-ai-area-toggle{display:grid;gap:6px;text-align:left;border:1px solid var(--wish-line);border-radius:10px;padding:12px;background:var(--wish-card)!important;font:inherit;cursor:pointer;min-width:0;transition:border-color .16s,box-shadow .16s,transform .16s}
+      #rpcm-modal .rpcm-ai-area-toggle.is-longpress-arming{border-color:var(--wish-accent-line)!important;box-shadow:0 0 0 2px color-mix(in srgb,var(--wish-accent) 14%,transparent);transform:translateY(-1px)}
+      #rpcm-modal .rpcm-ai-memory-row.rpcm-ai-memory-focus{border-radius:10px;background:color-mix(in srgb,var(--wish-accent-soft) 42%,transparent);box-shadow:0 0 0 2px color-mix(in srgb,var(--wish-accent) 18%,transparent);padding-left:10px;padding-right:10px}
+      #rpcm-modal .rpcm-ai-area-toggle strong{display:flex;justify-content:space-between;gap:8px;font-size:13px}
+      #rpcm-modal .rpcm-ai-area-toggle em{font-size:11px;font-style:normal;color:var(--wish-fg-2)!important}
+      #rpcm-modal .rpcm-ai-area-toggle[aria-pressed=true] em{color:var(--wish-accent-strong)!important}
+      #rpcm-modal .rpcm-ai-area-toggle small{font-size:11px;line-height:1.6}
+      #rpcm-modal .rpcm-ai-area-toggle .rpcm-ai-collect-status{font-weight:600;color:var(--wish-fg)!important}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop,#rpcm-item-filter-backdrop{position:fixed;inset:0;z-index:2147483606;background:var(--wish-scrim);display:grid;place-items:center;padding:18px}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-update-dialog{width:min(840px,96vw);height:auto!important;max-height:90dvh;display:flex;flex-direction:column;overflow:hidden;background:var(--wish-sheet)!important;color:var(--wish-fg)!important;border:1px solid var(--wish-line)!important;border-radius:16px!important;box-shadow:var(--wish-shadow)!important}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-update-dialog>header{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:18px 20px;border-bottom:1px solid var(--wish-line);background:var(--wish-card)}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-update-dialog>header h2{font-size:17px;font-weight:650;margin:0 0 5px;line-height:1.4}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-update-dialog>header p{font-size:12px;margin:0;color:var(--wish-fg-2);line-height:1.6}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-update-dialog>footer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 20px;border-top:1px solid var(--wish-line);background:var(--wish-card)}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-update-dialog>footer span{font-size:11px;color:var(--wish-fg-2)}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-ltm-update-body{overflow:auto;padding:16px;min-height:80px;display:grid;gap:12px}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-ltm-update-body article{border:1px solid var(--wish-line);border-radius:12px;background:var(--wish-card);padding:14px;min-width:0}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-ltm-update-body :is(input,select,textarea){font:inherit}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-ltm-update-body textarea{width:100%;min-height:240px;box-sizing:border-box;padding:12px;line-height:1.6;border-radius:10px}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-ltm-row{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:10px 0}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-ltm-row label{display:flex;align-items:center;gap:6px}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop input[type=number]{width:90px;padding:8px;border:1px solid var(--wish-line);border-radius:8px}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-ltm-picker{max-height:300px;overflow:auto;margin:10px 0}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-ltm-pick{display:flex;gap:8px;align-items:flex-start;padding:9px 0;border-bottom:1px solid var(--wish-line)}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-ltm-pick span{display:grid;gap:5px}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-ltm-checkpoint{display:flex;justify-content:space-between;align-items:center;gap:12px;border:1px solid var(--wish-line);border-radius:10px;padding:12px;margin:12px 0}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-ltm-checkpoint div{display:grid;gap:4px}
+      #rpcm-modal .rpcm-item-person-tabs .rpcm-item-person-filter{display:inline-flex;align-items:center;flex:0 0 auto;gap:0;border:1px solid var(--wish-line);border-radius:10px;overflow:hidden}
+      #rpcm-modal .rpcm-item-person-filter>button[data-item-filter]{border:0!important}
+      #rpcm-modal .rpcm-item-person-filter .rpcm-item-filter-eye{width:26px;min-height:32px;padding:4px;border:0!important;background:transparent!important;opacity:0;transition:opacity .15s}
+      #rpcm-modal .rpcm-item-person-filter:hover .rpcm-item-filter-eye,#rpcm-modal .rpcm-item-person-filter:focus-within .rpcm-item-filter-eye{opacity:1}
+      #rpcm-modal .rpcm-item-filter-manager{display:inline-flex;align-items:center;gap:5px;flex:0 0 auto}
+      #rpcm-item-filter-backdrop .rpcm-update-dialog{width:min(500px,95vw);max-height:85vh}
+      #rpcm-item-filter-backdrop .rpcm-item-filter-options{padding:14px;overflow:auto;display:grid;gap:7px}
+      #rpcm-item-filter-backdrop .rpcm-item-filter-options button{display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--wish-card);border:1px solid var(--wish-line);border-radius:9px;padding:11px}
+      #rpcm-item-filter-backdrop .rpcm-item-filter-options span{display:flex;align-items:center;gap:7px;font-size:12px}
+      #rpcm-notice-dialog{font:13px/1.6 'Pretendard',-apple-system,BlinkMacSystemFont,'Apple SD Gothic Neo',sans-serif!important;padding:18px!important}
+      #rpcm-notice-dialog h2{font-size:17px!important;font-weight:650!important;line-height:1.4}
+      #rpcm-notice-dialog .rpcm-notice-row>strong{font-size:14px!important;font-weight:650!important}
+      #rpcm-notice-dialog .rpcm-notice-row p{font-size:13px!important;overflow-wrap:anywhere}
+      #rpcm-notice-dialog .rpcm-notice-row small{font-size:11px!important;color:var(--wish-fg-2)!important}
+      #rpcm-notice-dialog button{font-size:12px!important;line-height:1.4!important;padding:7px 10px!important;background:var(--wish-accent-soft)!important;color:var(--wish-accent-strong)!important;border:1px solid var(--wish-accent-line)!important;border-radius:9px!important}
+      #rpcm-notice-dialog .rpcm-notice-actions{justify-content:flex-end;gap:6px;margin-top:7px}
+      #rpcm-notice-dialog .rpcm-notice-tabs{display:flex;gap:6px;padding-bottom:9px;border-bottom:1px solid var(--wish-line)}
+      #rpcm-notice-dialog .rpcm-notice-settings label{display:grid!important;grid-template-columns:minmax(0,1fr) auto;gap:10px!important;align-items:center;padding:10px 0;border-bottom:1px solid var(--wish-line)}
+      #rpcm-notice-dialog .rpcm-notice-settings fieldset{display:grid!important;gap:0!important;padding:10px 14px}
+      #rpcm-notice-dialog .rpcm-notice-settings .rpcm-pref-controls{display:flex;align-items:center;gap:8px}
+      #rpcm-modal #rpcm-notification-preferences .rpcm-notice-pref-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 18px}
+      #rpcm-modal #rpcm-notification-preferences .rpcm-pref-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center}
+      #rpcm-modal #rpcm-notification-preferences .rpcm-pref-controls{display:flex;align-items:center;gap:8px;white-space:nowrap}
+      #rpcm-modal #rpcm-notification-preferences input[type=number]{width:76px}
+      #rpcm-raw-viewer .rpcm-raw-card,#rpcm-raw-viewer .rpcm-raw-text{background:var(--wish-card)!important;color:var(--wish-fg)!important;border-color:var(--wish-line)!important}
+      #rpcm-raw-viewer :is(strong,p,span,div,button){color:var(--wish-fg)!important;border-color:var(--wish-line)!important}
+      #rpcm-raw-viewer .rpcm-raw-note{color:var(--wish-fg-2)!important;background:transparent!important}
+      #rpcm-detached-backdrop .rpcm-detached-editor textarea{border:1px solid var(--wish-line)!important;box-shadow:none!important}
+      #rpcm-modal :is(#rpcm-section-update,#rpcm-section-tools,#rpcm-section-ai,#rpcm-section-basic,#rpcm-section-item,#rpcm-section-char,#rpcm-section-extra) :is(.rpcm-btn.primary,.rpcm-btn.secondary,.rpcm-editor-action,.rpcm-lib-small){background:var(--wish-accent-soft)!important;color:var(--wish-fg)!important;border:1px solid var(--wish-accent-line)!important}
+      #rpcm-modal :is(#rpcm-section-update,#rpcm-section-tools,#rpcm-section-ai,#rpcm-section-basic,#rpcm-section-item,#rpcm-section-char,#rpcm-section-extra) button:disabled{opacity:.65!important;color:var(--wish-fg-2)!important}
+      #rpcm-modal .rpcm-ai-area-toggle[aria-pressed=true] :is(strong,span,small){color:var(--wish-fg)!important}
+      #rpcm-modal .rpcm-item-person-filter[hidden]{display:none!important}
+      #rpcm-modal :is(#rpcm-section-basic,#rpcm-section-char,#rpcm-section-item,#rpcm-section-tools,#rpcm-section-ai) :is(.rpcm-auto-panel,.rpcm-pref-row,.rpcm-ai-memory-row) input[type=checkbox]{background:var(--wish-fg-2)!important;border-color:var(--wish-line)!important}
+      #rpcm-modal :is(#rpcm-section-basic,#rpcm-section-char,#rpcm-section-item,#rpcm-section-tools,#rpcm-section-ai) :is(.rpcm-auto-panel,.rpcm-pref-row,.rpcm-ai-memory-row) input[type=checkbox]:checked{background:var(--wish-accent)!important;border-color:var(--wish-accent)!important}
+      html body [id^="rpcm-"][id$="-backdrop"] button{background:var(--wish-accent-soft)!important;color:var(--wish-fg)!important;border-color:var(--wish-accent-line)!important}
+      #rpcm-detached-backdrop .rpcm-detached-nav{border-color:var(--wish-line)!important}
+      #rpcm-detached-backdrop .rpcm-detached-log-selection-summary{background:var(--wish-accent-soft)!important;color:var(--wish-fg)!important;border-color:var(--wish-accent-line)!important}
+      #rpcm-item-filter-backdrop .rpcm-update-dialog>header{padding:16px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;border-bottom:1px solid var(--wish-line)}
+      #rpcm-item-filter-backdrop .rpcm-update-dialog>header h2{font-size:17px;margin:0 0 5px}
+      #rpcm-item-filter-backdrop .rpcm-update-dialog>header p{font-size:12px;line-height:1.6;margin:0}
+      #rpcm-item-filter-backdrop .rpcm-update-dialog>footer{padding:12px 16px;display:flex;justify-content:flex-end;border-top:1px solid var(--wish-line)}
+      #rpcm-item-filter-backdrop .rpcm-update-dialog{display:flex;flex-direction:column;overflow:hidden}
+      #rpcm-item-filter-backdrop button{border:1px solid var(--wish-accent-line);border-radius:8px;background:var(--wish-accent-soft);padding:8px 12px}
+      #rpcm-modal #rpcm-section-item .rpcm-item-view-actions :is(button,summary){background:transparent!important;border-color:var(--wish-line)!important;color:var(--wish-fg-2)!important}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-ltm-update-body article>header{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:0;border:0;margin-bottom:10px;background:transparent}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-ltm-update-body h3{font-size:14px;line-height:1.4;margin:0}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-ltm-update-body :is(p,label){font-size:13px;line-height:1.65}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-ltm-update-body small{font-size:11px;line-height:1.6;display:block}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-ltm-update-body select{padding:8px;border:1px solid var(--wish-line);border-radius:8px}
+      @media(max-width:700px){#rpcm-modal .rpcm-ai-overview-grid{grid-template-columns:repeat(2,minmax(0,1fr))}#rpcm-modal #rpcm-notification-preferences .rpcm-notice-pref-grid{grid-template-columns:1fr}#rpcm-modal .rpcm-item-person-filter .rpcm-item-filter-eye{opacity:1}#rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop{padding:8px}#rpcm-modal .rpcm-editor-actions .rpcm-focus-toggle{margin-left:0!important}}
+      @media(prefers-reduced-motion:reduce){#rpcm-modal .rpcm-story-vertical .rpcm-inline-story-card,#rpcm-modal .rpcm-inline-story-month>summary{transition:none;transform:none!important}}
+      /* Stable shells and scoped controls avoid replaying entry animations on updates. */
+      #rpcm-modal .rpcm-workspace,#rpcm-modal .rpcm-work-content{animation:none!important}
+      #rpcm-modal[data-rpcm-refreshed] :is(.rpcm-section-details,.rpcm-knowledge-card,.rpcm-item-folder,.rpcm-extra-folder,.rpcm-profile)[open],
+      #rpcm-modal[data-rpcm-refreshed] .rpcm-result-ready{animation:none!important}
+      #rpcm-modal[data-rpcm-refreshed] :is(.rpcm-nav-indicator,.rpcm-tab-indicator){transition:none!important}
+      #rpcm-modal .rpcm-story-view-toggle{display:flex!important;width:100%;box-sizing:border-box;gap:5px;padding:5px;border:1px solid var(--wish-line)!important;border-radius:12px!important;background:var(--wish-card)!important;box-shadow:var(--wish-shadow)}
+      #rpcm-modal .rpcm-story-view-toggle>button{flex:1;min-height:38px;border:0!important;border-radius:9px!important;background:transparent!important;color:var(--wish-fg-2)!important;padding:9px 14px;font-size:13px;font-weight:650}
+      #rpcm-modal .rpcm-story-view-toggle>button[aria-pressed=true]{background:var(--wish-accent-soft)!important;color:var(--wish-accent-strong)!important}
+      #rpcm-modal .rpcm-inline-story-toolbar{gap:9px!important}
+      #rpcm-modal .rpcm-update-intro-actions{margin-left:auto!important;display:flex!important;flex-wrap:wrap;justify-content:flex-end!important;align-content:center;gap:8px!important}
+      #rpcm-modal .rpcm-update-actions{justify-content:flex-end!important;text-align:right;gap:7px!important}
+      #rpcm-modal .rpcm-update-intro{display:grid!important;grid-template-columns:minmax(0,1fr) auto;gap:24px!important}
+      #rpcm-modal .rpcm-update-intro-actions{max-width:420px}
+      #rpcm-notice-open{position:relative!important;overflow:visible!important}
+      #rpcm-modal #rpcm-notice-badge{position:absolute!important;top:-3px!important;right:-3px!important;display:grid;place-items:center;box-sizing:border-box;min-width:17px;height:17px;border-radius:20px;padding:0 4px;background:var(--wish-accent)!important;color:#fff!important;font:650 10px/1 system-ui!important;box-shadow:0 0 0 2px var(--wish-sheet);pointer-events:none}
+      #rpcm-modal #rpcm-notice-badge[hidden]{display:none!important}
+      html body #rpcm-modal .rpcm-header-menu>summary,
+      html body #rpcm-modal .rpcm-footer :is(#rpcm-arm,.rpcm-footer-preview){background:var(--wish-card-2)!important;color:var(--wish-fg)!important;opacity:1!important;border-color:var(--wish-line)!important}
+      html[data-rpcm-theme=dark] #rpcm-fab,body[data-theme=dark] #rpcm-fab{--rpcm-hold-stroke:#F5B5D6;--rpcm-hold-glow:rgba(245,181,214,.45)}
+      :is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog){position:fixed!important;inset:0!important;width:100vw!important;height:100dvh!important;box-sizing:border-box!important;display:grid!important;place-items:center!important;padding:18px!important;background:var(--wish-scrim)!important;transform:none!important}
+      :is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .rpcm-person-dialog-card{position:relative!important;inset:auto!important;width:min(540px,100%)!important;max-height:calc(100dvh - 36px)!important;height:auto!important;margin:0!important;transform:none!important;display:block!important;overflow:auto!important;font:13px/1.6 'Pretendard',-apple-system,sans-serif;color:var(--wish-fg)!important}
+      :is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-sheet{width:100%!important;box-sizing:border-box!important;position:relative!important;inset:auto!important;transform:none!important;background:var(--wish-sheet)!important;border-radius:16px!important}
+      :is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-toggle{display:flex!important;align-items:center!important;justify-content:space-between;background:transparent!important;border:0!important;border-top:1px solid var(--wish-line)!important;padding:12px 0!important}
+      :is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-toggle input[type=checkbox]{appearance:auto!important;display:block!important;position:static!important;opacity:1!important;visibility:visible!important;width:18px!important;height:18px!important;min-height:18px!important;accent-color:var(--wish-accent)!important}
+      :is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-toggle input:before{content:none!important}
+      :is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-fld input{min-height:38px!important;height:auto!important;font:inherit!important;background:var(--wish-card)!important;border:1px solid var(--wish-line)!important;color:var(--wish-fg)!important}
+      :is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) :is(input,button):focus-visible{outline:2px solid var(--wish-accent-line)!important;outline-offset:2px!important;box-shadow:none!important}
+      :is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-btn{font-family:inherit;font-size:12px;font-weight:600;line-height:1.4;background:var(--wish-accent-soft)!important;border-color:var(--wish-accent-line)!important;color:var(--wish-accent-strong)!important;min-height:34px}
+      #rpcm-modal .rpcm-ltm-auto-card{padding:20px!important}
+      #rpcm-modal .rpcm-ltm-auto-card header{display:flex;align-items:center;justify-content:space-between;gap:14px;border:0!important;background:transparent!important;margin-bottom:8px}
+      #rpcm-modal .rpcm-ltm-auto-card h3{font-size:17px!important;font-weight:650;margin:3px 0}
+      #rpcm-modal .rpcm-ltm-auto-card>p{margin:0 0 16px;font-size:12px!important;color:var(--wish-fg-2)!important}
+      #rpcm-modal .rpcm-ltm-auto-enable{display:flex;align-items:center;gap:9px;font-size:12px;font-weight:600}
+      #rpcm-modal .rpcm-ltm-auto-fields{display:grid;grid-template-columns:1fr 1.5fr;gap:14px;margin:14px 0}
+      #rpcm-modal .rpcm-ltm-auto-fields>label{display:grid;gap:7px;padding:12px 14px;border:1px solid var(--wish-line);border-radius:11px;background:var(--wish-card)}
+      #rpcm-modal .rpcm-ltm-auto-fields>label>span{font-size:11px;font-weight:600}
+      #rpcm-modal .rpcm-ltm-auto-fields>label>div{display:flex;align-items:center;gap:8px}
+      #rpcm-modal .rpcm-ltm-auto-fields input{box-sizing:border-box;width:74px!important;min-height:36px;padding:7px 9px;border:1px solid var(--wish-line)!important;border-radius:8px;font:inherit}
+      #rpcm-modal .rpcm-ltm-auto-fields small{font-size:11px}
+      #rpcm-modal .rpcm-ltm-auto-fields button{margin-left:auto!important}
+      #rpcm-modal .rpcm-ltm-auto-progress{padding:12px 0 16px}
+      #rpcm-modal .rpcm-ltm-auto-progress>div:first-child{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
+      #rpcm-modal .rpcm-ltm-auto-progress strong{font-size:15px;font-weight:650}
+      #rpcm-modal .rpcm-ltm-auto-progress strong small{font-weight:400;font-size:12px}
+      #rpcm-modal .rpcm-ltm-auto-progress span{font-size:12px}
+      #rpcm-modal .rpcm-ltm-auto-progress>small{display:block;margin-top:7px;font-size:11px}
+      #rpcm-modal .rpcm-ltm-progress-track{height:5px;border-radius:6px;background:var(--wish-line-2);overflow:hidden}
+      #rpcm-modal .rpcm-ltm-progress-track i{height:100%;display:block;background:var(--wish-accent);border-radius:6px;transition:width .2s}
+      #rpcm-modal .rpcm-ltm-auto-card footer{display:flex;justify-content:space-between;align-items:center;gap:12px;border-top:1px solid var(--wish-line);background:transparent!important;padding-top:14px;flex-wrap:wrap}
+      #rpcm-modal .rpcm-ltm-auto-guide,#rpcm-modal .rpcm-ltm-auto-actions{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+      #rpcm-modal .rpcm-ltm-auto-actions{margin-left:auto}
+      #rpcm-modal .rpcm-ltm-auto-guide select{font:inherit;font-size:12px;min-height:34px;padding:6px 8px;border:1px solid var(--wish-line);border-radius:8px}
+      #rpcm-modal .rpcm-ltm-auto-card input[type=checkbox]{appearance:none!important;width:30px!important;height:18px!important;min-height:18px!important;border-radius:20px!important;border:1px solid var(--wish-line)!important;background:var(--wish-fg-2)!important;position:relative;cursor:pointer}
+      #rpcm-modal .rpcm-ltm-auto-card input[type=checkbox]:before{content:'';position:absolute;width:12px;height:12px;left:2px;top:2px;background:#fff;border-radius:50%;transition:transform .18s}
+      #rpcm-modal .rpcm-ltm-auto-card input[type=checkbox]:checked{background:var(--wish-accent)!important;border-color:var(--wish-accent)!important}
+      #rpcm-modal .rpcm-ltm-auto-card input[type=checkbox]:checked:before{transform:translateX(12px)}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-update-dialog{font-size:13px;line-height:1.6}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-ltm-update-body>article{border:0!important;padding:3px 0!important;background:transparent!important}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop input[data-ltm-second-search]{width:100%;box-sizing:border-box;min-height:38px;padding:9px 12px;border:1px solid var(--wish-line);border-radius:9px;font-size:13px}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-ltm-picker{display:grid;gap:7px;max-height:340px;scrollbar-width:thin;padding-right:3px}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-ltm-pick{border:1px solid var(--wish-line)!important;border-radius:10px;padding:11px 12px;gap:10px;align-items:center;background:var(--wish-card)}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-ltm-pick:hover,#rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-ltm-pick:has(input:checked){border-color:var(--wish-accent-line)!important;background:var(--wish-accent-soft)!important}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-ltm-pick input{flex:none;width:16px;height:16px}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-ltm-pick strong{font-size:13px;font-weight:600}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-ltm-pick small{font-size:11px!important;line-height:1.4!important}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-ltm-picker~.rpcm-ltm-row{justify-content:flex-end;padding-top:10px;border-top:1px solid var(--wish-line)}
+      #rpcm-update-dialog-backdrop.rpcm-ltm-update-backdrop .rpcm-update-dialog>header button{border:0!important;box-shadow:none!important;background:transparent!important;width:32px;height:32px;min-width:32px;border-radius:8px!important;padding:6px!important}
+      @media(max-width:700px){#rpcm-modal .rpcm-update-intro{grid-template-columns:1fr!important}#rpcm-modal .rpcm-update-intro-actions{max-width:none;width:100%}#rpcm-modal .rpcm-ltm-auto-fields{grid-template-columns:1fr}#rpcm-modal .rpcm-ltm-auto-card{padding:15px!important}}
+      /* Shared close controls: identical sizing even when dialog styles load later. */
+      html body :is(#rpcm-overlay,#rpcm-notice-dialog,#wish-rpcore-refiner-modal,[id^="rpcm-"],[id^="wish-rpcore-"]) :is(#rpcm-close,button[data-rpcm-close="icon"]){box-sizing:border-box!important;display:inline-grid!important;place-items:center!important;position:relative!important;inset:auto!important;flex:0 0 32px!important;width:32px!important;min-width:32px!important;max-width:32px!important;height:32px!important;min-height:32px!important;max-height:32px!important;padding:0!important;margin:0!important;border:0!important;border-radius:9px!important;background:transparent!important;color:var(--wish-fg-2,#6E5A67)!important;box-shadow:none!important;font-size:0!important;line-height:1!important;letter-spacing:0!important;transform:none!important;cursor:pointer!important;opacity:1!important;touch-action:manipulation}
+      html body :is(#rpcm-overlay,#rpcm-notice-dialog,#wish-rpcore-refiner-modal,[id^="rpcm-"],[id^="wish-rpcore-"]) :is(#rpcm-close,button[data-rpcm-close="icon"])::before{content:'×'!important;display:block!important;position:static!important;width:auto!important;height:auto!important;font:400 24px/1 -apple-system,BlinkMacSystemFont,'Pretendard',sans-serif!important;color:inherit!important;transform:none!important}
+      html body :is(#rpcm-overlay,#rpcm-notice-dialog,#wish-rpcore-refiner-modal,[id^="rpcm-"],[id^="wish-rpcore-"]) :is(#rpcm-close,button[data-rpcm-close="icon"])::after{content:none!important}
+      html body :is(#rpcm-overlay,#rpcm-notice-dialog,#wish-rpcore-refiner-modal,[id^="rpcm-"],[id^="wish-rpcore-"]) :is(#rpcm-close,button[data-rpcm-close="icon"])>svg{display:none!important}
+      html body :is(#rpcm-overlay,#rpcm-notice-dialog,#wish-rpcore-refiner-modal,[id^="rpcm-"],[id^="wish-rpcore-"]) :is(#rpcm-close,button[data-rpcm-close="icon"]):hover{background:var(--wish-accent-soft,#F9E8F0)!important;color:var(--wish-accent-strong,#A84379)!important}
+      html body :is(#rpcm-overlay,#rpcm-notice-dialog,#wish-rpcore-refiner-modal,[id^="rpcm-"],[id^="wish-rpcore-"]) :is(#rpcm-close,button)[data-rpcm-close="text"]{box-sizing:border-box!important;min-height:34px!important;height:auto!important;width:auto!important;min-width:0!important;max-width:none!important;flex:0 0 auto!important;padding:7px 12px!important;border:1px solid var(--wish-accent-line,#E7B8CE)!important;border-radius:9px!important;background:var(--wish-accent-soft,#F9E8F0)!important;color:var(--wish-fg-2,#6E5A67)!important;box-shadow:none!important;font:600 12px/1.4 'Pretendard',-apple-system,sans-serif!important;transform:none!important;cursor:pointer!important}
+      html body :is(#rpcm-overlay,#rpcm-notice-dialog,#wish-rpcore-refiner-modal,[id^="rpcm-"],[id^="wish-rpcore-"]) button[data-rpcm-close="text"]::before{content:none!important}
+      html body :is(#rpcm-overlay,#rpcm-notice-dialog,#wish-rpcore-refiner-modal,[id^="rpcm-"],[id^="wish-rpcore-"]) :is(#rpcm-close,button[data-rpcm-close]):focus-visible{outline:2px solid var(--wish-accent-line,#E7B8CE)!important;outline-offset:2px!important}
+      #rpcm-modal #rpcm-notification-preferences>.rpcm-notice-pref-grid{border-top:1px solid var(--wish-line)!important;gap:0 24px!important}
+      #rpcm-modal #rpcm-notification-preferences>.rpcm-notice-pref-grid>.rpcm-pref-row{border-top:0!important}
+    `;
+    document.head.appendChild(style);
+  }
+
+  function longTermAssertTargetsUnchanged(draft,inventory){
+    for(const [index,id] of (draft.updateTargets||[]).entries()){
+      if(!id)continue;
+      const current=inventory.find(item=>longTermId(item)===String(id));
+      const allowed=[draft.existingFingerprints?.[id]];
+      if(draft.applyStarted)allowed.push(longTermFingerprint(draft.cards[index]));
+      if(!current||!allowed.includes(longTermFingerprint(current)))throw new Error('갱신할 장기기억이 변경·삭제되었습니다. 해당 초안을 다시 확인해 주세요.');
+    }
+  }
+  function longTermDisplayAnchor(room,turns,mode='auto') {
+    try{return {...longTermEffectiveAnchor(room,turns,mode),invalid:false};}
+    catch(_){return {key:'',index:-1,invalid:true};}
+  }
+  function longTermSyncRangeUi(room,section){

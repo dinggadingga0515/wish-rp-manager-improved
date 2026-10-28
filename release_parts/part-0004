@@ -1,0 +1,1000 @@
+        item.result = cleaned;
+        item.editedAt = nowIso();
+        await saveRoom(room);
+        renderModalIfOpen();
+      }
+      editorDrafts.delete(item.jobId);
+      setEditorStatus('편집 내용 저장됨', 'saved');
+      if (announce) notify('편집한 결과를 검토함에 저장했습니다.', 'success', 3000);
+      return true;
+    };
+    const flushSelectedEditor = async (announce = false) => {
+      const item = selectedItem();
+      if (!item) return true;
+      return saveEditorValue(item.jobId, editorValueFor(item), announce);
+    };
+    const render = () => {
+      const items = normalizeAiReviewInbox(room);
+      const current = selectedItem();
+      const pendingCount = items.filter(item => item.status === 'pending').length;
+      backdrop.innerHTML = `
+        <div class="rpcm-ai-review-dialog" role="dialog" aria-modal="true" aria-label="AI 검토함">
+          <header><div><h2>📥 AI 검토함</h2><p>Wish AI Manager에서 전송한 이 방의 결과입니다. 같은 작업의 재전송은 한 건으로 합쳐집니다.</p></div><button type="button" data-review-action="close" aria-label="닫기" data-rpcm-close="icon">×</button></header>
+          <div class="rpcm-ai-review-summary"><strong>검토 대기 ${pendingCount}건</strong><span>전체 ${items.length}건 · 방별 로컬 보관</span><button type="button" data-review-action="replay">누락 결과 다시 받기</button></div>
+          <div class="rpcm-ai-review-layout">
+            <aside>${items.length ? items.map(item => `<button type="button" class="rpcm-ai-review-row${item.jobId === current?.jobId ? ' active' : ''}" data-review-job="${esc(item.jobId)}"><span class="status-${esc(item.status)}">${esc(statusLabel(item.status))}</span><strong>${esc(item.taskLabel)}</strong><small>${esc(dateLabel(item.createdAt))} · ${formatCount(item.result.length)}자</small></button>`).join('') : '<div class="rpcm-ai-review-empty">아직 받은 결과가 없습니다.<br>‘누락 결과 다시 받기’를 눌러 재전송을 요청할 수 있습니다.</div>'}</aside>
+            <main>${current ? `
+              <div class="rpcm-ai-review-meta"><div><b>${esc(current.taskLabel)}</b><span>${esc(current.taskType)} · ${esc(dateLabel(current.receivedAt))}${current.autoApply ? ' · 자동 적용 요청됨' : ''}${current.editedAt ? ` · 직접 수정 ${esc(dateLabel(current.editedAt))}` : ''}</span></div><span class="status-${esc(current.status)}">${esc(statusLabel(current.status))}</span></div>
+              <textarea data-review-editor data-review-editor-job="${esc(current.jobId)}" spellcheck="false">${esc(editorDrafts.has(current.jobId) ? editorDrafts.get(current.jobId) : current.result)}</textarea>
+              <div class="rpcm-ai-review-edit-note"><span data-review-edit-status>직접 편집 가능 · 변경 내용 자동 저장</span><small>‘목록 빈 줄 정리’는 목록 항목 사이의 빈 줄만 제거합니다.</small></div>
+              <div class="rpcm-ai-review-actions">
+                <button type="button" data-review-action="compact-list">목록 빈 줄 정리</button>
+                <button type="button" data-review-action="save-edit">편집 저장</button>
+                <button type="button" data-review-action="copy">내용 복사</button>
+                ${aiReviewTarget(current) === 'timeline' ? '<button type="button" data-review-action="timeline">타임라인으로 가져오기</button>' : ''}
+                ${aiReviewTaskCanApply(current) ? `<button type="button" class="primary" data-review-action="apply">${current.status === 'applied' ? '수정본 다시 적용' : '이 방에 적용'}</button>` : ''}
+                ${current.status === 'pending' ? '<button type="button" data-review-action="dismiss">검토 완료</button>' : current.status === 'dismissed' ? '<button type="button" data-review-action="restore">대기로 되돌리기</button>' : ''}
+                <button type="button" class="danger" data-review-action="delete">삭제</button>
+              </div>` : '<div class="rpcm-ai-review-detail-empty">왼쪽에서 결과를 선택해 주세요.</div>'}</main>
+          </div>
+        </div>`;
+      const editor = backdrop.querySelector('[data-review-editor]');
+      if (editor && current) editor.addEventListener('input', () => {
+        const jobId = String(editor.dataset.reviewEditorJob || current.jobId || '');
+        editorDrafts.set(jobId, editor.value);
+        setEditorStatus('편집 내용 저장 대기…');
+        clearTimeout(editorSaveTimer);
+        editorSaveTimer = setTimeout(() => {
+          void saveEditorValue(jobId, editor.value).catch(error => {
+            setEditorStatus(`저장 실패 · ${error.message}`, 'error');
+          });
+        }, 650);
+      });
+    };
+
+    const close = async () => {
+      if (!await flushSelectedEditor()) return false;
+      clearTimeout(editorSaveTimer);
+      editorSaveTimer = null;
+      backdrop.remove();
+      return true;
+    };
+    backdrop.addEventListener('click', async event => {
+      const row = event.target.closest('[data-review-job]');
+      if (row) {
+        if (!await flushSelectedEditor()) return;
+        selectedId = String(row.dataset.reviewJob || '');
+        render();
+        return;
+      }
+      const action = event.target.closest('[data-review-action]')?.dataset.reviewAction;
+      if (!action) { if (event.target === backdrop) await close(); return; }
+      if (action === 'close') { await close(); return; }
+      if (action === 'replay') { requestWishBridgeReplay(); notify('AI Manager에 보관된 결과 재전송을 요청했습니다.', 'info'); return; }
+      const item = selectedItem();
+      if (!item) return;
+      if (action === 'compact-list') {
+        const editor = backdrop.querySelector('[data-review-editor]');
+        if (!editor) return;
+        const before = editor.value;
+        const after = compactAiReviewListSpacing(before);
+        if (after === before) {
+          notify('정리할 목록 사이 빈 줄이 없습니다.', 'info', 3000);
+          return;
+        }
+        editor.value = after;
+        editorDrafts.set(item.jobId, after);
+        await saveEditorValue(item.jobId, after);
+        notify(`목록 사이 빈 줄 ${Math.max(1, before.split('\n').length - after.split('\n').length)}개를 정리했습니다.`, 'success', 3200);
+        return;
+      }
+      if (action === 'save-edit') {
+        await flushSelectedEditor(true);
+        return;
+      }
+      if (action === 'copy') {
+        const copied = await copyPlainText(editorValueFor(item));
+        notify(copied ? '결과 내용을 복사했습니다.' : '복사하지 못했습니다.', copied ? 'success' : 'error');
+        return;
+      }
+      if (action === 'timeline') {
+        if (!await flushSelectedEditor()) return;
+        const liveItem = selectedItem() || item;
+        if (!await close()) return;
+        await openStoryTimelineManagerDialogV35(room, { initialMode:'api-update', resultText:liveItem.result });
+        openAiReviewInboxDialog(room, liveItem.jobId);
+        return;
+      }
+      if (action === 'apply') {
+        try {
+          event.target.disabled = true;
+          if (!await flushSelectedEditor()) { event.target.disabled = false; return; }
+          const liveItem = selectedItem() || item;
+          await applyAiReviewInboxItem(room, liveItem);
+          notify(`“${liveItem.taskLabel}” 결과를 적용했습니다.`, 'success');
+          render();
+        } catch (error) {
+          notify(`결과 적용 실패: ${error.message}`, 'error', 7000);
+          event.target.disabled = false;
+        }
+        return;
+      }
+      if (action === 'dismiss' || action === 'restore') {
+        if (!await flushSelectedEditor()) return;
+        const liveItem = selectedItem() || item, beforeStatus=liveItem.status, beforeDismissedAt=liveItem.dismissedAt;
+        liveItem.status = action === 'dismiss' ? 'dismissed' : 'pending';
+        liveItem.dismissedAt = action === 'dismiss' ? nowIso() : '';
+        try{await saveRoom(room);}
+        catch(error){liveItem.status=beforeStatus;liveItem.dismissedAt=beforeDismissedAt;notify(`검토 상태 저장 실패: ${error.message}`,'error',5000);render();return;}
+        renderModalIfOpen(); render(); return;
+      }
+      if (action === 'delete') {
+        if (!confirm('이 결과를 검토함에서 삭제할까요?')) return;
+        const beforeInbox=room.aiReviewInbox,beforeSelectedId=selectedId;
+        room.aiReviewInbox = normalizeAiReviewInbox(room).filter(rowItem => rowItem.jobId !== item.jobId);
+        selectedId = room.aiReviewInbox[0]?.jobId || '';
+        try{await saveRoom(room);}
+        catch(error){room.aiReviewInbox=beforeInbox;selectedId=beforeSelectedId;notify(`검토 결과 삭제 저장 실패: ${error.message}`,'error',5000);render();return;}
+        editorDrafts.delete(item.jobId);
+        renderModalIfOpen(); render();
+      }
+    });
+    backdrop.addEventListener('keydown', event => {
+      if (event.key === 'Escape') void close().catch(error => notify(`편집 내용 저장 실패: ${error.message}`, 'error', 5000));
+    });
+    document.body.appendChild(backdrop);
+    render();
+  }
+
+  async function copyPlainText(value) {
+    const text = String(value || '');
+    if (!text) return false;
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch (_) {}
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      ta.style.pointerEvents = 'none';
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove();
+      return !!ok;
+    } catch (_) { return false; }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Optional external-AI summary beta
+  // ---------------------------------------------------------------------------
+
+  function aiSecretKey(provider) {
+    return `${AI_SECRET_PREFIX}${String(provider || '')}`;
+  }
+
+  function readAiSecret(provider) {
+    try {
+      const stored=GM_getValue(aiSecretKey(provider),'');
+      if(provider!=='openai')return String(stored||'');
+      if(stored?.version!==2||typeof stored.value!=='string')return '';
+      return stored.endpoint===rpcmAiCredentialEndpoint(loadAiSummarySettings())?stored.value:'';
+    }catch(_){return '';}
+  }
+
+  function writeAiSecret(provider,value) {
+    const secret=String(value||'');
+    try{
+      const stored=provider==='openai'&&secret?{version:2,value:secret,endpoint:rpcmAiCredentialEndpoint(loadAiSummarySettings())}:secret;
+      if(secret)GM_setValue(aiSecretKey(provider),stored);else GM_deleteValue(aiSecretKey(provider));
+      return true;
+    }catch(_){return false;}
+  }
+  function writeAiSecretChecked(provider,value) {
+    const secret=String(value||'');
+    if(!writeAiSecret(provider,secret)||readAiSecret(provider)!==secret)throw new Error(`${provider} API 인증정보를 저장하지 못했습니다. 브라우저 확장 저장공간을 확인해 주세요.`);
+    return true;
+  }
+  function rpcmAiCredentialEndpoint(settings){return normalizeOpenAiEndpoint(settings?.openaiBaseUrl);}
+  function rpcmBindLegacyOpenAiCredential(){
+    const stored=GM_getValue(aiSecretKey('openai'),'');
+    if(typeof stored!=='string'||!stored)return;
+    try{const endpoint=rpcmAiCredentialEndpoint(loadAiSummarySettings());GM_setValue(aiSecretKey('openai'),{version:2,value:stored,endpoint});}
+    catch(_){/* Preserve the unbound value; explicit entry is required before use. */}
+  }
+
+  function loadAiSummarySettings() {
+    const defaults = {
+      provider:'gemini',
+      models:Object.fromEntries(AI_SUMMARY_PROVIDERS.map(id => [id, AI_SUMMARY_PROVIDER_DEFAULTS[id].model])),
+      openaiBaseUrl:'',
+      vertexLocation:'global',
+      vertexProjectId:'',
+      turnCount:30,
+      preferUnprocessed:true,
+      targets:{ logSummary:true, currentState:true },
+      featureModels:{
+        summary:{ provider:'gemini', model:AI_SUMMARY_PROVIDER_DEFAULTS.gemini.model },
+        timeline:{ provider:'gemini', model:AI_SUMMARY_PROVIDER_DEFAULTS.gemini.model },
+        context:{ provider:'gemini', model:AI_SUMMARY_PROVIDER_DEFAULTS.gemini.model },
+        itemFolder:{ provider:'gemini', model:AI_SUMMARY_PROVIDER_DEFAULTS.gemini.model },
+        utility:{ provider:'gemini', model:AI_SUMMARY_PROVIDER_DEFAULTS.gemini.model },
+      },
+      featureStatus:{},
+    };
+    try {
+      let raw='';
+      try { raw=localStorage.getItem(AI_SUMMARY_SETTINGS_KEY)||''; } catch (_) {}
+      if(!raw){try{raw=String(GM_getValue(AI_SUMMARY_SETTINGS_KEY,'')||'');}catch(_){}}
+      const saved = JSON.parse(raw || 'null');
+      if (!saved || typeof saved !== 'object') return defaults;
+      const provider = AI_SUMMARY_PROVIDERS.includes(saved.provider) ? saved.provider : defaults.provider;
+      const models = { ...defaults.models, ...(saved.models && typeof saved.models === 'object' ? saved.models : {}) };
+      const legacyModel = String(models[provider] || AI_SUMMARY_PROVIDER_DEFAULTS[provider]?.model || '');
+      const normalizeFeature = feature => {
+        const raw = saved.featureModels?.[feature];
+        const featureProvider = AI_SUMMARY_PROVIDERS.includes(raw?.provider) ? raw.provider : provider;
+        return { provider:featureProvider, model:String(raw?.model || models[featureProvider] || legacyModel) };
+      };
+      return {
+        provider,
+        models,
+        openaiBaseUrl:String(saved.openaiBaseUrl || ''),
+        vertexLocation:String(saved.vertexLocation || 'global'),
+        vertexProjectId:String(saved.vertexProjectId || ''),
+        turnCount:Number(saved.turnCount) === 0 ? 0 : Math.max(1, Math.min(100, Number(saved.turnCount) || 30)),
+        preferUnprocessed:saved.preferUnprocessed !== false,
+        targets:{
+          logSummary:saved.targets?.logSummary !== false,
+          currentState:saved.targets?.currentState !== false,
+        },
+        featureModels:{ summary:normalizeFeature('summary'), timeline:normalizeFeature('timeline'), context:normalizeFeature('context'), itemFolder:normalizeFeature('itemFolder'), utility:normalizeFeature('utility') },
+        featureStatus:saved.featureStatus && typeof saved.featureStatus === 'object' ? saved.featureStatus : {},
+      };
+    } catch (_) { return defaults; }
+  }
+
+  function saveAiSummarySettings(settings) {
+    const next = loadAiSummarySettings();
+    Object.assign(next, settings || {});
+    if (settings?.models) next.models = { ...next.models, ...settings.models };
+    if (settings?.targets) next.targets = { ...next.targets, ...settings.targets };
+    if (settings?.featureModels) next.featureModels = { ...next.featureModels, ...settings.featureModels };
+    if (settings?.featureStatus) next.featureStatus = { ...next.featureStatus, ...settings.featureStatus };
+    next.provider = AI_SUMMARY_PROVIDERS.includes(next.provider) ? next.provider : 'gemini';
+    next.turnCount = Number(next.turnCount) === 0 ? 0 : Math.max(1, Math.min(100, Number(next.turnCount) || 30));
+    const serialized=JSON.stringify(next);
+    let localError=null;
+    try { localStorage.setItem(AI_SUMMARY_SETTINGS_KEY, serialized); }
+    catch (error) { localError=error; }
+    try { GM_setValue(AI_SUMMARY_SETTINGS_KEY, serialized); }
+    catch (gmError) { if(localError) throw new Error(`AI 설정 저장 실패: 브라우저 저장공간과 확장 저장공간을 모두 사용할 수 없습니다. ${localError?.message||localError}; ${gmError?.message||gmError}`); }
+    return next;
+  }
+
+  function aiFeatureSettings(settings, feature) {
+    const base = settings || loadAiSummarySettings();
+    const selected = base.featureModels?.[feature] || { provider:base.provider, model:base.models?.[base.provider] };
+    const provider = AI_SUMMARY_PROVIDERS.includes(selected.provider) ? selected.provider : base.provider;
+    return { ...base, provider, models:{ ...base.models, [provider]:String(selected.model || base.models?.[provider] || AI_SUMMARY_PROVIDER_DEFAULTS[provider]?.model || '') } };
+  }
+
+  // 저장된 성공/오류 상태는 그때 실제로 사용한 provider+model과 현재 선택이 같을 때만 유효합니다.
+  // 모델을 바꿨는데 과거 오류가 계속 빨갛게 남는 stale status를 방지합니다.
+  function aiFeatureCurrentStatus(settings, feature, providerOverride = '', modelOverride = '') {
+    const base = settings || loadAiSummarySettings();
+    const cfg = aiFeatureSettings(base, feature);
+    const provider = String(providerOverride || cfg.provider || '');
+    const model = String(modelOverride || cfg.models?.[provider] || '');
+    const status = base.featureStatus?.[feature];
+    if (!status || typeof status !== 'object') return null;
+    return String(status.provider || '') === provider && String(status.model || '') === model ? status : null;
+  }
+
+  function aiFeatureStatusLabel(feature) {
+    return feature === 'semanticIndex' ? '의미 검색 준비' : feature === 'semanticQuery' ? '의미 검색 query' : feature === 'longTermManualFirst' ? '장기기억 1차 수동' : feature === 'longTermAutoFirst' ? '장기기억 1차 자동' : feature === 'longTermSecond' ? '장기기억 2차' : feature === 'longTermNative' ? 'native 장기기억 정리' : feature === 'timeline' ? '연속성 타임라인' : feature === 'context' ? 'AI 맥락 검토' : feature === 'itemFolder' ? '중요 물품 폴더 정리' : feature === 'utility' ? 'AI 어시스턴트' : feature === 'responseRefiner' ? '응답교정' : 'AI 요약';
+  }
+
+  function rpcmAiNonFailureState(error){
+    const code=String(error?.code||'');
+    return code==='RPCM_USER_ABORT'?'cancelled':code==='RPCM_HISTORY_STALE'?'stale':'';
+  }
+  function classifyAiFailure(error) {
+    const neutral=rpcmAiNonFailureState(error);
+    if(neutral)return {category:neutral==='cancelled'?'사용자가 취소함':'방·분기 변경으로 중단',detail:String(error?.message||'')};
+    const detail = String(error?.message || error || '알 수 없는 오류');
+    const lower = detail.toLowerCase();
+    const status=rpcmNetStatus(error),service=error?.diagnostic?.service||'',code=String(error?.code||'');
+    if(service==='crack-read')return {category:'대화 조회 실패'+(status?' · '+status:''),detail};
+    if(service==='crack-write')return {category:'대화 저장 실패'+(status?' · '+status:''),detail};
+    if(service==='embedding')return {category:'의미검색 실패'+(status?' · '+status:''),detail};
+    const firebase=error?.diagnostic?.transport==='firebase-sdk'||error?.provider==='firebase';
+    if(firebase&&(!status||status===403)&&(/api-not-enabled/i.test(code+' '+String(error?.providerCode||''))||/requires the Firebase AI API/i.test(detail)))return {category:'Firebase AI Logic 미활성화',detail:detail+'\nFirebase Config의 프로젝트를 확인하고 Firebase 콘솔 → AI Services → AI Logic에서 필요한 API의 시작 설정을 확인해 주세요.'};
+    if(status===401||status===403)return {category:'API 인증 실패',detail};
+    if(status===429)return {category:error?.permanentQuota?'API 할당량·결제 한도':'API 요청량 제한',detail};
+    if(status>=500||/\b503\b/.test(detail))return {category:'AI 서비스 일시 장애',detail};
+    if(['AI_OUTPUT_LIMIT','AI_MAX_TOKENS'].includes(code))return {category:'출력 한도 초과',detail};
+    if(code==='AI_RESPONSE_INCOMPLETE')return {category:'AI 응답 미완료',detail};
+    if(code==='AI_RESPONSE_BLOCKED')return {category:'AI 제공자 응답 거절',detail};
+    if(code==='AI_EMPTY_RESPONSE')return {category:'AI 빈 응답',detail};
+    if(['AI_REQUEST_TIMEOUT','AI_DEADLINE'].includes(code))return {category:'AI 응답 대기 시간 초과',detail};
+    if(['RPCM_USER_ABORT','RPCM_HISTORY_STALE'].includes(code))return {category:'AI 작업 중단',detail};
+    let category = '기타 오류';
+    if (/quotaexceedederror|storage quota|dom exception.*quota|the quota has been exceeded/.test(lower)) category = '브라우저 저장공간 오류';
+    else if (/app.?check|firebaseappcheck|attestation|recaptcha enterprise/.test(lower)) category = 'Firebase App Check 인증';
+    else if (/429|resource exhausted|rate.?limit|api quota|requests per|tokens per/.test(lower)) category = 'API 사용량 제한';
+    else if (/firebase|api.?key|설정 코드|configuration/.test(lower)) category = 'Firebase 설정 오류';
+    else if (/network|fetch|연결|timeout|timed out|cors/.test(lower)) category = '네트워크 오류';
+    else if (/model|not found|unsupported|지원하지/.test(lower)) category = '모델 사용 불가';
+    else if (/max_tokens|finish.?reason.*length|출력 한도|출력이? .*끊|응답이? .*끊|incomplete/.test(lower)) category = '출력 한도 초과';
+    else if (/token|too large|maximum|입력 한도|context length/.test(lower)) category = '입력 한도 초과';
+    else if (/json|response format|응답 형식/.test(lower)) category = '응답 형식 오류';
+    else if (/parse|파싱/.test(lower)) category = '응답 파싱 실패';
+    else if (/401|403|unauthorized|forbidden|인증/.test(lower)) category = 'API 연결 실패';
+    else if (/api|호출|generation|generate/.test(lower)) category = '모델 호출 실패';
+    return { category, detail };
+  }
+
+  function setAiFeatureStatus(feature, stateName, provider, model, message = '', detail = '', extra = {}) {
+    const settings = aiFeatureSettings(loadAiSummarySettings(), 'summary');
+    settings.featureStatus = {
+      ...(settings.featureStatus || {}),
+      [feature]:{ ...(settings.featureStatus?.[feature]?.lastRun ? { lastRun:settings.featureStatus[feature].lastRun } : {}), state:stateName, provider:String(provider || ''), model:String(model || ''), message:wrpmFullBackupV2.redactDiagnostic(message), detail:wrpmFullBackupV2.redactDiagnostic(detail), checkedAt:nowIso(), ...(extra && typeof extra === 'object' ? extra : {}) },
+    };
+    saveAiSummarySettings(settings);
+    if (feature === 'summary') syncAiSummaryStatusInOpenManager();
+    return settings.featureStatus[feature];
+  }
+
+  function syncAiSummaryStatusInOpenManager() {
+    const settings=loadAiSummarySettings();
+    const selected=aiFeatureSettings(settings,'summary');
+    const status=aiFeatureCurrentStatus(settings,'summary');
+    const isOk=status?.state==='ok', isError=status?.state==='error';
+    const label=isOk?'정상':isError?'오류':'확인 전';
+    const nodes=[document.querySelector('#rpcm-ai-api-summary .rpcm-ai-chip'),document.querySelector('#rpcm-ai-summary-status')?.closest('article')?.querySelector('.rpcm-ai-chip-row .rpcm-ai-chip')].filter(Boolean);
+    for (const node of nodes) {
+      node.classList.remove('is-ok','is-error','is-idle');
+      node.classList.add(isOk?'is-ok':isError?'is-error':'is-idle');
+      node.textContent=`● ${label}`;
+      rpcmClearErrorHelp(node);
+      if (isError) rpcmSetErrorHelp(node,status.detail||status.message||'AI 요약 오류',status.message||'기타 오류');
+    }
+    const card=document.querySelector('#rpcm-ai-summary-status');
+    if (card && state.currentRoom) {
+      const strong=card.querySelector('strong');
+      if (strong) strong.textContent=state.currentRoom.aiSummaryDraft?.createdAt?new Date(state.currentRoom.aiSummaryDraft.createdAt).toLocaleString('ko-KR'):'없음';
+    }
+  }
+
+  function loadAiSummaryUsage() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(AI_SUMMARY_USAGE_KEY) || 'null');
+      if (saved && typeof saved === 'object') return {
+        ...saved,
+        calls:Math.max(0, Number(saved.calls) || 0),
+        inputTokens:Math.max(0, Number(saved.inputTokens) || 0),
+        outputTokens:Math.max(0, Number(saved.outputTokens) || 0),
+        estimatedCostUsd:Math.max(0, Number(saved.estimatedCostUsd) || 0),
+        pricedCalls:Math.max(0, Number(saved.pricedCalls) || 0),
+      };
+    } catch (_) {}
+    return { calls:0, inputTokens:0, outputTokens:0, estimatedCostUsd:0, pricedCalls:0, last:null };
+  }
+
+  function defaultAiPricing(provider, model) {
+    const providerId = String(provider || '').toLowerCase();
+    const google = ['gemini','firebase','vertex'].includes(providerId);
+    const name = String(model || '').trim().toLowerCase();
+    if (providerId === 'openai') {
+      if (/^gpt-6-astra(?:$|-)/.test(name)) {
+        return { inputPerMillion:10.00, outputPerMillion:50.00, source:'OpenAI 공식 기본 단가' };
+      }
+      if (/^gpt-5\.6-terra(?:$|-)/.test(name)) {
+        return { inputPerMillion:2.00, outputPerMillion:12.00, source:'OpenAI 공식 기본 단가' };
+      }
+      if (/^gpt-5\.6-luna(?:$|-)/.test(name)) {
+        return { inputPerMillion:0.20, outputPerMillion:1.20, source:'OpenAI 공식 기본 단가' };
+      }
+      if (/^(?:gpt-5\.6|gpt-5\.6-sol)(?:$|-)/.test(name)) {
+        return { inputPerMillion:4.00, outputPerMillion:20.00, source:'OpenAI 공식 기본 단가' };
+      }
+    }
+    if (google && /^gemini-3\.8-flash(?:$|-)/.test(name)) {
+      return { inputPerMillion:0.75, outputPerMillion:3.75, source:'Google 공식 Standard 단가 · 2026-12-31까지' };
+    }
+    if (google && /^gemini-3\.7-flash(?:$|-)/.test(name)) {
+      return { inputPerMillion:0.75, outputPerMillion:3.75, source:'Google 공식 global 단가 · 2026-12-31까지' };
+    }
+    if (google && /^gemini-3\.5-flash-lite(?:$|-)/.test(name)) {
+      return { inputPerMillion:0.30, outputPerMillion:2.50, source:'Google 공식 global 단가' };
+    }
+    if (google && /^gemini-3\.5-flash(?:$|-)/.test(name)) {
+      return { inputPerMillion:1.50, outputPerMillion:9.00, source:'Google 공식 global 단가' };
+    }
+    if (google && /^gemini-3\.1-flash-lite(?:$|-)/.test(name)) {
+      return { inputPerMillion:0.25, outputPerMillion:1.50, source:'Google 공식 global 단가' };
+    }
+    if (google && /^gemini-3\.1-pro-preview(?:$|-)/.test(name)) {
+      return { inputPerMillion:2.00, outputPerMillion:12.00, source:'Google 공식 global 단가 · 입력 20만 토큰 이하' };
+    }
+    if (google && /^gemini-2\.5-flash-lite(?:$|-)/.test(name)) {
+      return { inputPerMillion:0.10, outputPerMillion:0.40, source:'Google 공식 기본 단가' };
+    }
+    if (google && /^gemini-2\.5-flash(?:$|-)/.test(name) && !/(?:image|tts|native-audio)/.test(name)) {
+      return { inputPerMillion:0.30, outputPerMillion:2.50, source:'Google 공식 기본 단가' };
+    }
+    if (google && /^gemini-2\.5-pro(?:$|-)/.test(name)) {
+      return { inputPerMillion:1.25, outputPerMillion:10.00, source:'Google 공식 기본 단가 · 입력 20만 토큰 이하' };
+    }
+    return { inputPerMillion:null, outputPerMillion:null, source:'자동 단가 정보 없음' };
+  }
+
+  function isOfficialOpenAiBaseUrl(value) {
+    try {
+      const url = new URL(String(value || '').trim());
+      return url.hostname.toLowerCase() === 'api.openai.com';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function getAiPricing(settings, provider, model) {
+    const providerId=String(provider||'').toLowerCase(),modelId=String(model||'').trim().toLowerCase();
+    if(['gemini','firebase','vertex'].includes(providerId)&&modelId==='gemini-4-argon'){
+      const standard=Date.now()>=Date.UTC(2026,11,1),nonGlobal=providerId==='vertex'&&String(settings?.vertexLocation||'global').trim().toLowerCase()!=='global',factor=nonGlobal?1.1:1;
+      return {inputPerMillion:(standard?4:2)*factor,outputPerMillion:(standard?20:10)*factor,source:`Google 공식 ${nonGlobal?'non-global':'global'} Argon 단가 · ${standard?'2026-12-01 이후':'2026-11-30까지'}`};
+    }
+    if (providerId === 'openai' && !isOfficialOpenAiBaseUrl(settings?.openaiBaseUrl)) {
+      return { inputPerMillion:null, outputPerMillion:null, source:'OpenAI 호환 API · 단가 직접 확인 필요' };
+    }
+    return defaultAiPricing(provider, model);
+  }
+
+  function estimateAiCostUsd(usage = {}, pricing = {}) {
+    if (pricing.inputPerMillion == null || pricing.inputPerMillion === '' || pricing.outputPerMillion == null || pricing.outputPerMillion === '') return null;
+    const inputRate = Number(pricing.inputPerMillion);
+    const outputRate = Number(pricing.outputPerMillion);
+    if (!Number.isFinite(inputRate) || inputRate < 0 || !Number.isFinite(outputRate) || outputRate < 0) return null;
+    const inputTokens = Math.max(0, Number(usage.inputTokens) || 0);
+    const outputTokens = Math.max(0, Number(usage.outputTokens) || 0);
+    return (inputTokens * inputRate + outputTokens * outputRate) / 1000000;
+  }
+
+  function formatAiCostUsd(value) {
+    const amount = Number(value);
+    if (!Number.isFinite(amount) || amount < 0) return '단가 미설정';
+    if (amount > 0 && amount < 0.0001) return '$0.0001 미만';
+    if (amount < 0.01) return `$${amount.toFixed(4)}`;
+    if (amount < 1) return `$${amount.toFixed(3)}`;
+    return `$${amount.toFixed(2)}`;
+  }
+
+  function emptyRoomAiFeatureUsage() {
+    return { calls:0, inputTokens:0, outputTokens:0, costUsd:0, estimatedCalls:0, unpricedCalls:0 };
+  }
+
+  function normalizeRoomAiUsage(room) {
+    if (!room || typeof room !== 'object') return { version:1, features:{ summary:emptyRoomAiFeatureUsage(), timeline:emptyRoomAiFeatureUsage(), context:emptyRoomAiFeatureUsage(), itemFolder:emptyRoomAiFeatureUsage(), utility:emptyRoomAiFeatureUsage(), responseRefiner:emptyRoomAiFeatureUsage(), longTermManualFirst:emptyRoomAiFeatureUsage(), longTermAutoFirst:emptyRoomAiFeatureUsage(), longTermSecond:emptyRoomAiFeatureUsage(), longTermNative:emptyRoomAiFeatureUsage() }, history:[] };
+    const hasStoredUsage = !!(room.aiApiUsage && typeof room.aiApiUsage === 'object');
+    const source = hasStoredUsage ? room.aiApiUsage : {};
+    const sourceFeatures = source.features && typeof source.features === 'object' ? source.features : {};
+    const features = {};
+    for (const feature of ['summary','timeline','context','itemFolder','utility','responseRefiner','longTermManualFirst','longTermAutoFirst','longTermSecond','longTermNative','semanticIndex','semanticQuery']) {
+      const saved = sourceFeatures[feature] && typeof sourceFeatures[feature] === 'object' ? sourceFeatures[feature] : {};
+      features[feature] = {
+        calls:Math.max(0, Number(saved.calls) || 0),
+        inputTokens:Math.max(0, Number(saved.inputTokens) || 0),
+        outputTokens:Math.max(0, Number(saved.outputTokens) || 0),
+        costUsd:Math.max(0, Number(saved.costUsd) || 0),
+        estimatedCalls:Math.max(0, Number(saved.estimatedCalls) || 0),
+        unpricedCalls:Math.max(0, Number(saved.unpricedCalls) || 0),
+      };
+    }
+    let history = (Array.isArray(source.history) ? source.history : []).filter(item => item && typeof item === 'object').slice(0, AI_ROOM_USAGE_HISTORY_LIMIT).map(item => ({
+      id:String(item.id || ''), at:String(item.at || ''), feature:['summary','timeline','context','itemFolder','utility','responseRefiner','longTermManualFirst','longTermAutoFirst','longTermSecond','longTermNative','semanticIndex','semanticQuery'].includes(item.feature) ? item.feature : 'summary',
+      provider:String(item.provider || ''), model:String(item.model || ''), inputTokens:Math.max(0, Number(item.inputTokens) || 0), outputTokens:Math.max(0, Number(item.outputTokens) || 0),
+      costUsd:item.costUsd == null || !Number.isFinite(Number(item.costUsd)) ? null : Math.max(0, Number(item.costUsd)), estimated:!!item.estimated, callCount:Math.max(1, Number(item.callCount) || 1),
+    }));
+    // v0.12.42 이전에 방 안의 생성 이력에 남은 실제 usage 토큰·당시 비용을 1회만 복원합니다.
+    // 방을 구분할 수 없는 기존 브라우저 전체 누적값은 섞지 않습니다.
+    if (!hasStoredUsage) {
+      const legacyRuns = [
+        ...(Array.isArray(room.aiSummaryHistory) ? room.aiSummaryHistory : []).map(item => ({ feature:'summary', item })),
+        ...(Array.isArray(room.storyTimelineApiHistory) ? room.storyTimelineApiHistory : []).map(item => ({ feature:'timeline', item })),
+      ];
+      for (const [legacyIndex, legacy] of legacyRuns.entries()) {
+        const saved = legacy.item?.usage && typeof legacy.item.usage === 'object' ? legacy.item.usage : {};
+        const calls = Math.max(0, Number(saved.calls) || 0);
+        if (!calls) continue;
+        const inputTokens = Math.max(0, Number(saved.inputTokens) || 0);
+        const outputTokens = Math.max(0, Number(saved.outputTokens) || 0);
+        const unpricedCalls = Math.max(0, Math.min(calls, Number(saved.unpricedCalls) || 0));
+        const storedCost = Number(saved.estimatedCostUsd);
+        const costUsd = Number.isFinite(storedCost) && unpricedCalls < calls ? Math.max(0, storedCost) : null;
+        const estimated = inputTokens <= 0 || outputTokens <= 0;
+        const aggregate = features[legacy.feature];
+        aggregate.calls += calls;
+        aggregate.inputTokens += inputTokens;
+        aggregate.outputTokens += outputTokens;
+        if (costUsd != null) aggregate.costUsd += costUsd;
+        aggregate.unpricedCalls += unpricedCalls;
+        if (estimated) aggregate.estimatedCalls += calls;
+        history.push({
+          id:`LEGACY_${legacy.feature}_${legacy.item?.id || legacyIndex}`,
+          at:String(legacy.item?.createdAt || legacy.item?.appliedAt || ''), feature:legacy.feature,
+          provider:String(legacy.item?.provider || ''), model:String(legacy.item?.model || ''),
+          inputTokens, outputTokens, costUsd, estimated, callCount:calls,
+        });
+      }
+      history.sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+      history = history.slice(0, AI_ROOM_USAGE_HISTORY_LIMIT);
+    }
+    room.aiApiUsage = { version:1, features, history, legacyImported:true };
+    return room.aiApiUsage;
+  }
+
+  function roomAiUsageTotals(room) {
+    const usage = normalizeRoomAiUsage(room);
+    return Object.values(usage.features).reduce((total, item) => {
+      total.calls += item.calls;
+      total.inputTokens += item.inputTokens;
+      total.outputTokens += item.outputTokens;
+      total.costUsd += item.costUsd;
+      total.estimatedCalls += item.estimatedCalls;
+      total.unpricedCalls += item.unpricedCalls;
+      return total;
+    }, emptyRoomAiFeatureUsage());
+  }
+
+  function recordRoomAiUsage(room, feature, provider, model, usage = {}, pricing = {}, source = {}) {
+    if (!room || typeof room !== 'object') return null;
+    const normalizedFeature = ['summary','timeline','context','itemFolder','utility','responseRefiner','longTermManualFirst','longTermAutoFirst','longTermSecond','longTermNative','semanticIndex','semanticQuery'].includes(feature) ? feature : 'summary';
+    const reportedInput = Math.max(0, Number(usage.inputTokens) || 0);
+    const reportedOutput = Math.max(0, Number(usage.outputTokens) || 0);
+    const inputEstimated = reportedInput <= 0;
+    const embedding=['semanticIndex','semanticQuery'].includes(normalizedFeature);
+    const outputEstimated = !embedding && reportedOutput <= 0;
+    const inputTokens = inputEstimated ? Math.max(1, Math.ceil((String(source.systemInstruction || '').length + String(source.prompt || '').length) / 3)) : reportedInput;
+    const outputTokens = embedding ? 0 : outputEstimated ? Math.max(1, Math.ceil(String(source.text || '').length / 3)) : reportedOutput;
+    const estimated = inputEstimated || outputEstimated;
+    const costUsd = estimateAiCostUsd({ inputTokens, outputTokens }, pricing);
+    const state = normalizeRoomAiUsage(room);
+    const aggregate = state.features[normalizedFeature];
+    aggregate.calls += 1;
+    aggregate.inputTokens += inputTokens;
+    aggregate.outputTokens += outputTokens;
+    if (costUsd == null) aggregate.unpricedCalls += 1;
+    else aggregate.costUsd += costUsd;
+    if (estimated) aggregate.estimatedCalls += 1;
+    const entry = {
+      id:`API_${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`,
+      at:nowIso(), feature:normalizedFeature, provider:String(provider || ''), model:String(model || ''),
+      inputTokens, outputTokens, costUsd, estimated, callCount:1,
+    };
+    state.history.unshift(entry);
+    state.history = state.history.slice(0, AI_ROOM_USAGE_HISTORY_LIMIT);
+    return entry;
+  }
+
+  function renderRoomAiUsageHtml(room) {
+    const usage = normalizeRoomAiUsage(room);
+    const total = roomAiUsageTotals(room);
+    const featureHtml = ['summary','timeline','context','itemFolder','utility','responseRefiner','longTermManualFirst','longTermAutoFirst','longTermSecond','longTermNative','semanticIndex','semanticQuery'].map(feature => {
+      const item = usage.features[feature];
+      const estimated = item.estimatedCalls ? ' · 예상 토큰 포함' : '';
+      const unpriced = item.unpricedCalls ? ` · 비용 미산정 ${formatCount(item.unpricedCalls)}회` : '';
+      const cost = item.calls && item.unpricedCalls >= item.calls ? '가격 정보 없음' : formatAiCostUsd(item.costUsd);
+      return `<div class="rpcm-api-usage-row"><strong>${esc(aiFeatureStatusLabel(feature))}</strong><span>호출 ${formatCount(item.calls)}회 · 입력 ${formatCount(item.inputTokens)} tokens · 출력 ${formatCount(item.outputTokens)} tokens</span><b>누적${item.estimatedCalls ? ' 예상' : ''} ${cost}${estimated}${unpriced}</b></div>`;
+    }).join('');
+    const historyHtml = usage.history.length ? usage.history.map(entry => {
+      let when = entry.at || '';
+      try { when = entry.at ? new Date(entry.at).toLocaleString('ko-KR') : ''; } catch (_) {}
+      const cost = entry.costUsd == null ? '가격 정보 없음' : formatAiCostUsd(entry.costUsd);
+      return `<div class="rpcm-api-usage-call"><span>${esc(when)}</span><strong>${esc(aiFeatureStatusLabel(entry.feature))}</strong><span>${esc(entry.model || entry.provider || '모델 미상')}</span><span>호출 ${formatCount(entry.callCount || 1)}회 · 입력 ${formatCount(entry.inputTokens)} · 출력 ${formatCount(entry.outputTokens)} tokens</span><b>${entry.estimated ? '예상 ' : ''}${cost}</b></div>`;
+    }).join('') : '<div class="rpcm-api-usage-empty">이 방에서 기록된 API 호출이 아직 없습니다.</div>';
+    const totalNote = `${total.estimatedCalls ? ` · 예상 토큰 포함 ${formatCount(total.estimatedCalls)}회` : ''}${total.unpricedCalls ? ` · 비용 미산정 ${formatCount(total.unpricedCalls)}회` : ''}`;
+    const totalCost = total.calls && total.unpricedCalls >= total.calls ? '가격 정보 없음' : formatAiCostUsd(total.costUsd);
+    return `<section class="rpcm-ai-card rpcm-api-room-usage"><h3>[이 방의 API 사용량]</h3><div class="rpcm-api-usage-list">${featureHtml}</div><div class="rpcm-api-usage-total"><span>총 호출 ${formatCount(total.calls)}회<br>입력 ${formatCount(total.inputTokens)} / 출력 ${formatCount(total.outputTokens)} tokens</span><strong>총 누적${total.estimatedCalls ? ' 예상' : ''} 비용 ${totalCost}</strong><small>${totalNote.replace(/^ · /, '')}</small></div><details class="rpcm-api-usage-details"><summary>비용 상세 보기 <span>${formatCount(usage.history.length)}건</span></summary><div>${historyHtml}</div></details></section>`;
+  }
+
+  function renderAiRoomUsageCompact(room) {
+    const total = roomAiUsageTotals(room);
+    const cost = total.unpricedCalls
+      ? (total.unpricedCalls >= total.calls ? '가격 정보 없음' : `${formatAiCostUsd(total.costUsd)} · 일부 가격 정보 없음`)
+      : formatAiCostUsd(total.costUsd);
+    return `<div class="rpcm-ai-usage-compact"><span>이번 방 <b>${formatCount(total.calls)}회</b></span><span>입력 <b>${formatCount(total.inputTokens)}</b></span><span>출력 <b>${formatCount(total.outputTokens)}</b></span><span>총 <b>${formatCount(total.inputTokens + total.outputTokens)} tokens</b></span><span>예상 비용 <b>${esc(cost)}</b></span><details id="rpcm-ai-usage-details"><summary>사용량 자세히</summary>${renderRoomAiUsageHtml(room)}</details></div>`;
+  }
+
+  function refreshAiRoomUsageUi(room) {
+    if (!room || state.currentRoom !== room) return;
+    const usage = state.modal?.querySelector('#rpcm-section-ai .rpcm-ai-usage-compact');
+    if (!usage) return;
+    const expanded = !!usage.querySelector('#rpcm-ai-usage-details[open]');
+    usage.outerHTML = renderAiRoomUsageCompact(room);
+    const details = state.modal?.querySelector('#rpcm-ai-usage-details');
+    if (details) details.open = expanded;
+  }
+
+  function saveAiSummaryUsage(provider, model, usage = {}, pricing = {}) {
+    const state = loadAiSummaryUsage();
+    const inputTokens = Math.max(0, Number(usage.inputTokens) || 0);
+    const outputTokens = Math.max(0, Number(usage.outputTokens) || 0);
+    const estimatedCostUsd = estimateAiCostUsd({ inputTokens, outputTokens }, pricing);
+    state.calls = Math.max(0, Number(state.calls) || 0) + 1;
+    state.inputTokens = Math.max(0, Number(state.inputTokens) || 0) + inputTokens;
+    state.outputTokens = Math.max(0, Number(state.outputTokens) || 0) + outputTokens;
+    if (estimatedCostUsd != null) {
+      state.estimatedCostUsd = Math.max(0, Number(state.estimatedCostUsd) || 0) + estimatedCostUsd;
+      state.pricedCalls = Math.max(0, Number(state.pricedCalls) || 0) + 1;
+    }
+    state.last = { provider, model, inputTokens, outputTokens, estimatedCostUsd, pricing, at:nowIso() };
+    try { localStorage.setItem(AI_SUMMARY_USAGE_KEY, JSON.stringify(state)); } catch (_) {}
+    return { state, estimatedCostUsd };
+  }
+
+  function aiHttpRequest(url,options={}){
+  return new Promise((resolve,reject)=>{
+    let parsed;try{parsed=new URL(url);}catch(_){reject(new Error('API 주소가 올바르지 않습니다.'));return;}
+    if(parsed.protocol!=='https:'&&!['localhost','127.0.0.1'].includes(parsed.hostname)){reject(new Error('외부 API 주소는 HTTPS만 사용할 수 있습니다.'));return;}
+    const operation=options.operation,method=String(options.method||'POST').toUpperCase();
+    const service=options.service||(/oauth2|appcheck|installations/.test(parsed.hostname)?'ai-auth':'ai-generation');
+    try{operation?.check?.();if(operation){const auth=service==='ai-auth',key=auth?'authAttempts':'httpAttempts',limit=auth?3:operation.maxHttpAttempts;if((operation[key]||0)>=limit)throw rpcmNetError('한 작업의 API 재시도 한도에 도달했습니다.',{service,url,code:'AI_ATTEMPTS_EXHAUSTED'});operation[key]=(operation[key]||0)+1;}}catch(error){reject(error);return;}
+    const timeout=Math.max(1,Math.min(Number(options.timeout)||120000,operation?operation.deadline-Date.now():900000));
+    let settled=false,handle=null,poll=null,off=()=>{};
+    const finish=(fn,value)=>{if(settled)return;settled=true;clearInterval(poll);off();fn(value);};
+    const error=(message,code,status=0)=>{const e=rpcmNetError(message,{service,url,code,status});if(method==='POST'&&['AI_NETWORK','AI_REQUEST_TIMEOUT'].includes(code)){e.noAutoRetry=true;e.deliveryUnknown=true;}return e;};
+    const cancel=e=>{finish(reject,e);try{handle?.abort?.();}catch(_){}};
+    const check=()=>{try{operation?.check?.();}catch(e){cancel(e);}};
+    if(operation){poll=setInterval(check,200);const control=operation.control;if(control?.onAbort)off=control.onAbort(()=>cancel(error('API 요청을 중단했습니다.','RPCM_USER_ABORT')));else if(control?.addEventListener){const stop=()=>cancel(error('API 요청을 중단했습니다.','RPCM_USER_ABORT'));control.addEventListener('abort',stop,{once:true});off=()=>control.removeEventListener('abort',stop);}}
+    const result=res=>{if(settled)return;try{operation?.check?.();finish(resolve,{ok:res.status>=200&&res.status<300,status:Number(res.status)||0,text:String(res.responseText||''),responseHeaders:String(res.responseHeaders||''),finalUrl:String(res.finalUrl||parsed.href),service});}catch(e){finish(reject,e);}};
+    handle=GM_xmlhttpRequest({method,url:parsed.href,headers:options.headers||{},data:options.body==null?undefined:String(options.body),responseType:'text',timeout,nocache:true,
+      onload:result,ontimeout:()=>finish(reject,error('외부 API 요청 시간이 초과되었습니다. 서버 처리 여부를 확인하지 못했습니다.','AI_REQUEST_TIMEOUT',408)),
+      onerror:()=>{
+        const primary=error('외부 API 네트워크 오류가 발생했습니다.','AI_NETWORK');
+        // A generation POST may already have reached the server. Do not resend it through another transport.
+        if(operation||!options.nativeFetchFallback||typeof fetch!=='function'){finish(reject,primary);return;}
+        const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeout);
+        fetch(parsed.href,{method,headers:options.headers||{},body:options.body==null?undefined:String(options.body),cache:'no-store',credentials:'omit',referrerPolicy:'no-referrer',signal:controller.signal}).then(async res=>result({status:res.status,responseText:await res.text(),responseHeaders:[...res.headers].map(([k,v])=>k+': '+v).join('\r\n'),finalUrl:res.url})).catch(()=>finish(reject,primary)).finally(()=>clearTimeout(timer));
+      },onabort:()=>finish(reject,error('외부 API 요청이 취소되었습니다.','RPCM_USER_ABORT'))});
+    check();
+  });
+}
+
+  function parseAiJsonResponse(response,label){
+  let data;try{data=JSON.parse(String(response?.text||''));}catch(_){
+    if(response?.ok)throw rpcmNetError(label+' 응답을 JSON으로 해석하지 못했습니다.',{service:response.service||'ai-generation',status:response.status,code:'AI_RESPONSE_PARSE'});
+  }
+  if(!response?.ok){
+    const status=Number(response?.status)||0,detail=data?.error?.message||data?.message||data?.error_description||'';
+    const e=rpcmNetError(label+' 오류 '+status+(detail?': '+String(detail).slice(0,400):''),{service:response?.service||'ai-generation',url:response?.finalUrl||'',status,code:'AI_HTTP',retryAfterMs:Math.max(rpcmNetRetryAfter(response?.responseHeaders),rpcmAiRetryInfo(data))});
+    e.providerCode=String(data?.error?.status||data?.error?.type||'');
+    if(status===429){const raw=JSON.stringify(data?.error?.details||[])+' '+String(detail)+' '+String(data?.error?.type||'')+' '+String(data?.error?.code||'');e.permanentQuota=/enforced_spend_limit_reached|insufficient_quota|billing_hard_limit|per.?day|daily|quotaValue"\s*:\s*"?0/i.test(raw);}
+    throw e;
+  }
+  return data;
+}
+
+  function extractGeminiText(data) {
+    for (const candidate of (Array.isArray(data?.candidates) ? data.candidates : [])) {
+      const parts = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : [];
+      const text = parts.filter(part => !part?.thought).map(part => typeof part?.text === 'string' ? part.text : '').join('');
+      if (text.trim()) return text;
+    }
+    return '';
+  }
+
+  function stripAiOutputWrapper(value) {
+    let text = normalizeLineBreaks(String(value || '')).trim();
+    const fenced = text.match(/^```(?:text|txt|markdown|md)?\s*\n([\s\S]*?)\n```\s*$/i);
+    if (fenced) text = fenced[1].trim();
+    return text;
+  }
+
+  function isIncompleteAiSourceMessage(message) {
+    const status = String(message?.status || message?.generationStatus || message?.state || '').toLowerCase();
+    return ['pending','queued','streaming','generating','processing','in_progress','in-progress'].includes(status);
+  }
+
+  // Source selection only: never delete server messages or discard sequential continuations.
+  function rpcmSourcePathMeta(messages){return (messages||[]).map(m=>({_id:String(messageIdOf(m)||''),role:messageRoleOf(m),turnId:String(m?.turnId||''),parentTurnId:String(m?.parentTurnId||'')}));}
+  function rpcmSelectSourcePath(messages,newer=[],split=false){
+    const input=Array.isArray(messages)?messages:[],role=m=>{const r=String(messageRoleOf(m)||'').toLowerCase();return ['assistant','bot','character'].includes(r)?'assistant':r;};
+    const firstUser=()=>input.findIndex(m=>role(m)==='user'&&stripAutomationNoise(messageTextOf(m),true).trim());
+    const fallback=()=>split?firstUser():input;
+    const own=new Set(input.map(m=>String(messageIdOf(m)||''))),all=input.concat((newer||[]).filter(m=>!own.has(String(messageIdOf(m)||''))));
+    const ms=all.filter(m=>['user','assistant'].includes(role(m))),ids=ms.map(m=>String(messageIdOf(m)||''));
+    if(ids.some(id=>!id)||new Set(ids).size!==ids.length)return fallback();
+    const tid=m=>String(m?.turnId||''),pid=m=>String(m?.parentTurnId||''),counts=new Map();
+    for(const m of ms)if(tid(m))counts.set(tid(m),(counts.get(tid(m))||0)+1);
+    const unique=m=>!!tid(m)&&counts.get(tid(m))===1,byTurn=new Map(ms.filter(unique).map(m=>[tid(m),m])),line=new Set(),excluded=new Set();
+    let m=ms.at(-1),root=null;
+    while(m&&unique(m)){if(line.has(m))return fallback();line.add(m);root=m;if(!pid(m))break;m=byTurn.get(pid(m));}
+    if(!root)return fallback();
+    // Exclude only chains proven to diverge from a selected ancestor. Missing or ambiguous ancestry is retained.
+    const verdict=new Map();for(const x of line)verdict.set(x,false);
+    for(const x of ms){
+      if(!unique(x)||line.has(x))continue;
+      const trail=[],seen=new Set();let node=x,discard=false;
+      while(node&&unique(node)){
+        if(verdict.has(node)){discard=verdict.get(node);break;}
+        if(seen.has(node))break;seen.add(node);trail.push(node);
+        if(!pid(node))break;
+        const parent=byTurn.get(pid(node));
+        if(!parent)break;
+        if(line.has(parent)){discard=true;break;}
+        node=parent;
+      }
+      for(const item of trail)verdict.set(item,discard);
+      if(discard)excluded.add(String(messageIdOf(x)));
+    }
+    if(split){
+      let unresolved=-1;
+      for(let i=0;i<input.length;i++){const x=input[i];if(unique(x)&&!line.has(x)&&pid(x)&&!verdict.get(x))unresolved=i;}
+      if(unresolved>=0||pid(root)&&!byTurn.has(pid(root)))return input.findIndex((x,i)=>i>unresolved&&line.has(x)&&role(x)==='user'&&stripAutomationNoise(messageTextOf(x),true).trim());
+      return firstUser();
+    }
+    return input.filter(m=>!excluded.has(String(messageIdOf(m)||'')));
+  }
+
+
+  const rpcmAiProgressLeases=new Map();
+  function rpcmAiProgressStart(room,feature,provider,model,operation,quiet=false){
+    const key=String(feature||'summary'),token={},start=Date.now(),epoch=state.routeEpoch;
+    const live=()=>rpcmAiProgressLeases.get(key)===token&&state.routeEpoch===epoch&&(!room||state.currentRoom===room);
+    if(quiet)return {finish(){}};
+    rpcmAiProgressLeases.set(key,token);
+    const publish=(status,message,detail='')=>{if(live())try{setAiFeatureStatus(key,status,provider,model,message,detail,{elapsedMs:Date.now()-start,timeoutMs:Math.max(0,operation.deadline-start)});if(typeof document!=='undefined')for(const node of document.querySelectorAll('[data-rpcm-ai-wait]'))if(node.dataset.rpcmAiWait===key)node.textContent=message;}catch(_){}};
+    const tick=()=>publish('running',`응답 대기 · ${Math.floor((Date.now()-start)/1000)}초 / 작업 한도 ${Math.ceil((operation.deadline-start)/1000)}초`);
+    tick();const timer=setInterval(tick,15000);
+    return {finish(error){clearInterval(timer);if(error){const failure=classifyAiFailure(error);publish(rpcmAiNonFailureState(error)||'error',failure.category,failure.detail);}else publish('ok','응답 수신 완료 · 결과 검증 전');if(live())rpcmAiProgressLeases.delete(key);}};
+  }
+
+  // Per-room, ephemeral results only. No RP, credential or cache is persisted to the room/backup.
+  const rpcmRecallPrefetchRooms=new WeakMap();
+  const rpcmRecallPrefetchRequests=new WeakMap();
+  function rpcmRecallPrefetchSource(room,context,candidates,count){
+    return rpcmRecallPrefetchSignature({...room,autoScanLastMessageId:'',pending:null},context,candidates,count);
+  }
+  function rpcmCommitRecallPrefetch(room,staged=room){
+    const request=rpcmRecallPrefetchRequests.get(staged);rpcmRecallPrefetchRequests.delete(staged);
+    if(!request||request.owner!==room||request.epoch!==state.routeEpoch||state.currentRoom!==room||room.rpcmRecallPrefetchEnabled!==true||!room.pending?.verified)return;
+    if(request.sourceKey!==rpcmRecallPrefetchSource(room,request.context,request.candidates,request.count))return;
+    // Recalculate the key against committed checkpoint/carrier fields. Background work never mutates pending items.
+    void rpcmCachedRecall(room,request.context,request.candidates,request.count).catch(()=>{});
+  }
+
+  function rpcmRecallPrefetchSignature(room,context,candidates,count){
+    const settings=aiFeatureSettings(loadAiSummarySettings(),'context'),provider=settings.provider;
+    const requestSettings={...settings};for(const field of ['featureStatus','updatedAt','checkedAt','lastRun'])delete requestSettings[field];
+    return semanticSourceHash(JSON.stringify([APP.version,state.routeEpoch,String(apiChatIdOf(room)),room.autoScanLastMessageId||'',room.pending?.baselineAssistantId||'',room.pending?.messageId||'',context,count,room.activeLogTimeline||'',room.aiContextLogRerankEnabled===true,requestSettings,semanticSourceHash(readAiSecret(provider)),candidates.slice(0,12).map(r=>[r.block.key,r.block.heading,r.block.body,r.block.titleText,r.score,r.keywordScore,r.semanticScore,r.matchedPhrases,r.matchedCoreTokens,r.matchedRareTokens,r.matchedCharacterTerms]),room.autoLogExcludedKeys,room.autoLogPinnedKeys,room.manualLogSelectedKeys,(room.slots||[]).find(slot=>slot.id==='logSummary')?.content||'']));
+  }
+  function rpcmInvalidateRecallPrefetch(room){const r=rpcmRecallPrefetchRooms.get(room);if(r){clearTimeout(r.timer);if(r.control)r.control.cancelled=true;rpcmRecallPrefetchRooms.delete(room);}}
+  async function rpcmCachedRecall(room,context,candidates,count,options={}){
+    if(!room?.aiContextLogRerankEnabled||!candidates.length)return candidates;
+    const owner=options.recallOwner||room,key=rpcmRecallPrefetchSignature(room,context,candidates,count),epoch=state.routeEpoch,head=String(room.pending?.baselineAssistantId||room.autoScanLastMessageId||'')+'|'+epoch;
+    let row=rpcmRecallPrefetchRooms.get(owner);
+    const cached=row?.entries.get(key),now=Date.now();
+    if(cached&&cached.until>now&&cached.keys){
+      rpcmRecallPrefetchRequests.delete(room);
+      room.aiContextReviewReport={...structuredClone(cached.report),execution:'미리 검토 캐시',cacheHit:true};
+      const byKey=new Map(candidates.map(r=>[String(r.block.key),r]));return cached.keys.map(k=>byKey.get(k)).filter(Boolean);
+    }
+    room.aiContextReviewReport={state:'skipped',checkedAt:nowIso(),provider:'',model:'',note:cached?.error?'미리 검토 실패 · 로컬 검색 결과 사용':row?.calls>=2?'이번 응답의 미리 검토 예산 소진 · 로컬 검색 결과 사용':'미리 검토 대기 · 로컬 검색 결과 사용',candidateCount:candidates.length,cacheHit:false};
+    if(options.recallReadOnly){rpcmRecallPrefetchRequests.set(room,{owner,epoch,context,candidates,count,sourceKey:rpcmRecallPrefetchSource(room,context,candidates,count)});return candidates;}
+    if(owner!==room||state.currentRoom!==room)return candidates;
+    if(!row){row={head,calls:0,entries:new Map(),latest:key,timer:0,control:null};rpcmRecallPrefetchRooms.set(room,row);}
+    if(row.head!==head){clearTimeout(row.timer);if(row.control)row.control.cancelled=true;row.head=head;row.calls=0;row.entries.clear();row.control=null;}
+    if(row.latest!==key){clearTimeout(row.timer);if(row.control)row.control.cancelled=true;row.latest=key;row.control=null;}
+    if(cached&&cached.until>now||row.control||row.calls>=2)return candidates;
+    const control={cancelled:false};row.control=control;
+    const live=()=>!control.cancelled&&rpcmRecallPrefetchRooms.get(room)===row&&row.latest===key&&row.head===head&&state.routeEpoch===epoch&&state.currentRoom===room&&room.rpcmRecallPrefetchEnabled===true&&room.aiContextLogRerankEnabled===true;
+    const scheduledAt=Date.now();
+    const run=async()=>{
+      if(!live()){if(row.control===control)row.control=null;return;}
+      if(state.pendingCarrierSyncQueues?.size||state.aiSummaryBusy||room.pending?.reroll||room.pending?.verified===false){if(Date.now()-scheduledAt<60000){row.timer=setTimeout(run,1000);return;}row.control=null;return;}
+      if(rpcmRecallPrefetchSignature(room,context,candidates,count)!==key){row.control=null;return;}
+      row.calls++;
+      try{
+        const value=await rpcmAiRerankRelatedLogCandidatesNow(room,context,candidates,count,{...options,prefetchWork:true,deferUsageSave:true,control,check(){if(!live()||rpcmRecallPrefetchSignature(room,context,candidates,count)!==key)throw Object.assign(new Error('미리 검토 원문·설정이 바뀌었습니다.'),{code:'RPCM_HISTORY_STALE'});}});
+        if(live()&&rpcmRecallPrefetchSignature(room,context,candidates,count)===key)row.entries.set(key,{keys:value.selected.map(r=>String(r.block.key)),report:value.report,until:Date.now()+300000});
+      }catch(error){if(live())row.entries.set(key,{error:true,until:Date.now()+60000});}
+      finally{if(row.control===control)row.control=null;while(row.entries.size>4)row.entries.delete(row.entries.keys().next().value);}
+    };
+    row.timer=setTimeout(run,500);return candidates;
+  }
+
+  async function aiRerankRelatedLogCandidates(room,context,candidates,count,options={}){
+    if(room?.rpcmRecallPrefetchEnabled===true&&!options.manual)return rpcmCachedRecall(room,context,candidates,count,options);
+    return rpcmAiRerankRelatedLogCandidatesNow(room,context,candidates,count,options);
+  }
+
+
+  function buildCompletedAiDialogueTurns(messages, sourceOptions={}) {
+    const turns = [];
+    let current = null;
+    const push = () => {
+      if (!current || current.incomplete || !current.userText || !current.assistantParts.length) return;
+      const assistantText = current.assistantParts.join('\n\n').trim();
+      if (!assistantText) return;
+      // 기존 turn.key 계약은 유지합니다. USER 메시지 ID는 안정 alias로 추가해
+      // AI 답변 리롤/삭제·재생성으로 assistantId가 바뀌어도 같은 USER 턴을 다시 찾을 수 있게 합니다.
+      const key = current.turnId || current.assistantId || simpleHash(`${current.userText}\n${assistantText}`);
+      const aliases=[current.turnId,current.assistantId,current.userId].filter(Boolean).map(String);
+      turns.push({
+        key:String(key), aliases:[...new Set(aliases)],
+        userId:String(current.userId||''), turnId:String(current.turnId||''), assistantId:String(current.assistantId||''),
+        userText:current.userText,
+        assistantText,reviewSources:current.reviewSources,
+        text:`[USER]\n${current.userText}\n\n[AI]\n${assistantText}`,
+      });
+    };
+    for (const message of (sourceOptions.alreadySelected ? (messages||[]) : rpcmSelectSourcePath(messages,sourceOptions.newer||[]))) {
+      const role = String(messageRoleOf(message) || '').toLowerCase();
+      const clean = stripAutomationNoise(messageTextOf(message), true);
+      if (!clean) continue;
+      if (role === 'user') {
+        push();
+        current = { userId:String(messageIdOf(message)||''), userText:clean, assistantParts:[], assistantId:'',reviewSources:[], turnId:String(message?.turnId || ''), incomplete:false };
+      } else if (current && ['assistant','character','bot'].includes(role)) {
+        if (isIncompleteAiSourceMessage(message)) { current.incomplete = true; continue; }
+        current.assistantParts.push(clean);
+        current.reviewSources.push({id:String(messageIdOf(message)||''),content:String(messageTextOf(message)||'')});
+        current.assistantId = String(messageIdOf(message) || current.assistantId || '');
+        current.turnId = String(message?.turnId || current.turnId || '');
+      }
+    }
+    push();
+    return turns;
+  }
+
+  function rpcmFindTurnIndex(turns,key){
+    const target=String(key||'');if(!target)return -1;
+    return (turns||[]).findIndex(turn=>String(turn.key)===target||(turn.aliases||[]).some(alias=>String(alias)===target));
+  }
+  function rpcmStableTurnKey(turn){return String(turn?.userId||turn?.key||turn?.turnId||turn?.assistantId||'');}
+  function rpcmMessageMatchesTurnKey(message,key){
+    const target=String(key||'');if(!target)return false;
+    return [messageIdOf(message),message?.turnId,message?.turn_id,message?.generationId].some(value=>String(value||'')===target);
+  }
+  function aiSummaryAnchorKeys(room,settings){
+    if(!settings?.preferUnprocessed)return[];
+    const selected=settings?.targets||{},keys={...(room?.aiSummaryLastAppliedTurnKeys||{})};
+    if(keys.logSummary==null&&room?.aiSummaryLastAppliedTurnKey)keys.logSummary=room.aiSummaryLastAppliedTurnKey;
+    if(keys.currentState==null&&room?.aiSummaryLastAppliedTurnKey)keys.currentState=room.aiSummaryLastAppliedTurnKey;
+    return [...new Set([
+      selected.logSummary?String(keys.logSummary||''):'',
+      selected.currentState?String(keys.currentState||''):'',
+    ].filter(Boolean))];
+  }
+
+  async function fetchAiMessageHistory(chatId, stopTurnKey = '', maxMessages = 500, options = {}) {
+    const stopKeys=Array.isArray(stopTurnKey)?stopTurnKey:[stopTurnKey];
+    const room=options?.room||(state.currentRoom&&String(apiChatIdOf(state.currentRoom)||'')===String(chatId||'')?state.currentRoom:null);
+    const result=await rpcmFetchBoundedMessageHistory(String(chatId||''),{
+      onProgress:typeof options?.onProgress==='function'?options.onProgress:null,
+      stopKeys:stopKeys.map(String).filter(Boolean),
+      maxMessages:Math.max(1,Number(maxMessages)||500),
+      olderAfterAnchor:Math.max(0,Number(options?.olderAfterAnchor)||80),
+      room,
+      control:options?.control||null,
+    });
+    rpcmNewBadgeObserveMessages(chatId,result,true);
+    return result;
+  }
+
+  function selectAiDialogueTurns(turns, room, settings, targetId = '') {
+    const count = Math.max(0, Math.min(100, Number(settings.turnCount) || 0));
+    const lastKey = String(room.aiSummaryLastAppliedTurnKeys?.[targetId] ?? room.aiSummaryLastAppliedTurnKey ?? '');
+    if (settings.preferUnprocessed && lastKey) {
+      const index = rpcmFindTurnIndex(turns,lastKey);
+      if (index < 0) throw new Error('저장된 이어 요약 기준이 전체 RP 원문에서도 확인되지 않습니다. 해당 턴이 삭제·리롤·수정되었는지 확인해 주세요. 기준을 자동 초기화하지 않았습니다.');
+      const fresh = turns.slice(index + 1);
+      if (!fresh.length) throw new Error('저장된 이어 요약 기준 이후 새로 완료된 대화가 없습니다.');
+      return count ? fresh.slice(0, count) : [];
+    }
+    return count ? turns.slice(-count) : [];
+  }
+
+  function formatAiDialogueTurns(turns) {
+    return (turns || []).map((turn, index) => `[대화턴 ${index + 1}]\n${turn.text}`).join('\n\n');
+  }
+
+  function sanitizeFirebaseConfigObject(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const allowed = ['apiKey','authDomain','databaseURL','projectId','storageBucket','messagingSenderId','appId','measurementId'];
+    const out = {};
+    for (const key of allowed) if (typeof value[key] === 'string') out[key] = value[key];
+    return out.apiKey && out.projectId ? out : null;
+  }
+
+  function extractFirebaseObjectLiteral(source, startAt = 0) {
+    const open = source.indexOf('{', Math.max(0, startAt));
+    if (open < 0) return '';
+    let depth = 0, quote = '', escaped = false;
+    for (let i = open; i < source.length; i++) {
+      const ch = source[i];
+      if (quote) {
+        if (escaped) escaped = false;
+        else if (ch === '\\') escaped = true;
+        else if (ch === quote) quote = '';
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === '`') { quote = ch; continue; }
+      if (ch === '{') depth++;
+      else if (ch === '}' && --depth === 0) return source.slice(open, i + 1);
+    }
+    return '';
+  }
+
+  function decodeFirebaseStaticString(raw, quote) {
+    if (quote === '"') {
+      try { return JSON.parse(`"${raw}"`); } catch (_) { return null; }
+    }
+    if (quote === '`' && raw.includes('${')) return null;
+    const controls = { b:'\b', f:'\f', n:'\n', r:'\r', t:'\t', v:'\v', '0':'\0' };
+    return raw
+      .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+      .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+      .replace(/\\(.)/g, (_, escaped) => Object.prototype.hasOwnProperty.call(controls, escaped) ? controls[escaped] : escaped);
+  }
+
+  function parseFirebaseTopLevelStaticStrings(objectLiteral) {
+    const parsed = {};
+    const source = String(objectLiteral || '');
+    let i = source[0] === '{' ? 1 : 0;
+    const skipSpace = () => {
+      while (i < source.length) {
+        if (/\s|,/.test(source[i])) { i++; continue; }
+        if (source[i] === '/' && source[i + 1] === '/') { i += 2; while (i < source.length && source[i] !== '\n') i++; continue; }
+        if (source[i] === '/' && source[i + 1] === '*') { i += 2; while (i < source.length && !(source[i] === '*' && source[i + 1] === '/')) i++; i = Math.min(source.length, i + 2); continue; }
+        break;
+      }
+    };
+    const readQuoted = () => {
+      const quote = source[i++];
+      let raw = '', escaped = false;
+      while (i < source.length) {
+        const ch = source[i++];
+        if (escaped) { raw += `\\${ch}`; escaped = false; }
+        else if (ch === '\\') escaped = true;
+        else if (ch === quote) return { raw, quote };
+        else raw += ch;
+      }
+      return null;
+    };
+    const skipValue = () => {
+      let depth = 0, quote = '', escaped = false;
+      while (i < source.length) {
+        const ch = source[i];
+        if (quote) {
+          i++;
+          if (escaped) escaped = false;
+          else if (ch === '\\') escaped = true;
+          else if (ch === quote) quote = '';
+          continue;
+        }
+        if (ch === '"' || ch === "'" || ch === '`') { quote = ch; i++; continue; }
+        if (ch === '{' || ch === '[' || ch === '(') { depth++; i++; continue; }
+        if (ch === '}' || ch === ']' || ch === ')') { if (depth === 0) return; depth--; i++; continue; }
+        if (ch === ',' && depth === 0) return;
+        i++;
+      }
+    };
+    while (i < source.length) {
+      skipSpace();
+      if (source[i] === '}' || i >= source.length) break;
+      let key = '';
+      if (source[i] === '"' || source[i] === "'") {
+        const value = readQuoted();
+        if (!value) break;
+        key = decodeFirebaseStaticString(value.raw, value.quote) || '';
+      } else {
+        const match = source.slice(i).match(/^[A-Za-z_$][\w$]*/);
+        if (!match) { skipValue(); if (source[i] === ',') i++; continue; }
+        key = match[0]; i += key.length;
+      }
