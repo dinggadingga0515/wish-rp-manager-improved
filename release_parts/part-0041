@@ -1,0 +1,1000 @@
+        let firstAt = -1;
+        let localCount = 0;
+        while (from <= haystack.length) {
+          const at = haystack.indexOf(query, from);
+          if (at < 0) break;
+          if (firstAt < 0) firstAt = at;
+          searchMatches.push({
+            slotId:String(slot.id),
+            start:Number(baseOffset || 0) + at,
+            end:Number(baseOffset || 0) + at + queryRaw.length,
+          });
+          localCount++;
+          from = at + Math.max(1, query.length);
+          if (searchMatches.length >= maxSlotSearchMatches) break;
+        }
+        if (localCount) {
+          searchItems.push({
+            slotId:String(slot.id),
+            title:String(title || slot.title || slot.id || '검색 결과'),
+            kind:String(kind || (slot.group === 'character' ? '캐릭터' : slot.group === 'item' ? '중요 물품' : slot.group === 'extra' ? '기타' : slot.id === 'currentState' ? '현재상태' : '메모')),
+            store:slot.id === 'currentState' ? '기억 관리 › 현재상태' : slot.id === 'logSummary' ? '기억 관리 › 날짜로그' : slot.group === 'character' ? '캐릭터 설정' : slot.group === 'item' ? '중요 물품' : '기타',
+            count:localCount,
+            matchIndex:firstMatchIndex,
+            snippet:searchSnippet(raw, firstAt, firstAt + queryRaw.length),
+          });
+        }
+      };
+
+      for (const slot of room.slots || []) {
+        const content = String(slot.content || '');
+        if (slot.id === 'logSummary') {
+          const blocks = parseDatedLogBlocks(content);
+          if (blocks.length) {
+            for (const block of blocks) {
+              addSearchSource(slot, block.raw, block.sourceStart, block.titleText || slot.title, block.isUnknown ? '날짜 미상' : '날짜로그');
+              if (searchMatches.length >= maxSlotSearchMatches) break;
+            }
+          } else {
+            addSearchSource(slot, content, 0, slot.title || '로그요약', '로그요약');
+          }
+        } else {
+          addSearchSource(slot, content, 0, slot.title || slot.id, slot.group === 'character' ? '캐릭터' : slot.group === 'item' ? '중요 물품' : slot.group === 'extra' ? '기타' : slot.id === 'currentState' ? '현재상태' : '메모');
+          // 제목/별칭만 검색어가 잡히고 본문에는 없을 때도 결과 카드 하나는 보여줍니다.
+          const meta = [slot.title, ...(Array.isArray(slot.aliases) ? slot.aliases : [])].filter(Boolean).join(' ').toLocaleLowerCase('ko-KR');
+          if (meta.includes(query) && !content.toLocaleLowerCase('ko-KR').includes(query) && searchMatches.length < maxSlotSearchMatches) {
+            const matchIndex = searchMatches.length;
+            searchMatches.push({ slotId:String(slot.id), start:0, end:0 });
+            searchItems.push({ slotId:String(slot.id), title:String(slot.title || slot.id), kind:slot.group === 'character' ? '캐릭터' : slot.group === 'item' ? '중요 물품' : slot.group === 'extra' ? '기타' : '메모', store:slot.group === 'character' ? '캐릭터 설정' : slot.group === 'item' ? '중요 물품' : '기타', count:1, matchIndex, snippet:String(content || '').replace(/\s+/g, ' ').trim().slice(0, 110) || '제목/별칭에서 일치' });
+          }
+        }
+        if (searchMatches.length >= maxSlotSearchMatches) break;
+      }
+      const addStructuredSearchSource = (type, id, title, kind, store, value, person = '', pane = '') => {
+        const raw = String(value || '');
+        const at = raw.toLocaleLowerCase('ko-KR').indexOf(query);
+        if (at < 0 || searchMatches.length >= 2000) return;
+        const matchIndex = searchMatches.length;
+        searchMatches.push({ type, id:String(id), person, pane });
+        searchItems.push({ title:String(title || '제목 없음'), kind, store, count:1, matchIndex, snippet:searchSnippet(raw, at, at + queryRaw.length) });
+      };
+      for (const card of normalizeKnowledgeCards(room).filter(item => !item.archived)) {
+        addStructuredSearchSource('knowledge', card.id, `${card.person || '인물'} · ${card.fact || '인지 카드'}`, '인지', '인물정보 › 인지', [card.person,card.fact,card.actualFact,card.evidence].join('\n'), String(card.person || '').trim(), 'knowledge');
+      }
+      for (const record of normalizePersonStateRecords(room).filter(item => item.active)) {
+        addStructuredSearchSource('person-record', record.id, `${record.person || '인물'} → ${record.target || '상대'}`, record.type === 'speech' ? '호칭·말투' : '관계·감정선', `인물정보 › ${record.type === 'speech' ? '호칭·말투' : '관계·감정선'}`, [record.person,record.target,record.address,record.tone,record.context,record.official,record.stance,record.conflict,record.evidence].join('\n'), String(record.person || '').trim(), record.type);
+      }
+      for (const card of storyTimelineCardsFor(room)) {
+        addStructuredSearchSource('story', card.cardId, card.title || '타임라인 카드', '타임라인', `타임라인 › ${card.timelineLabel || DEFAULT_LOG_TIMELINE}`, [card.dateStart,card.dateEnd,card.title,card.content,...(card.tags || [])].join('\n'));
+      }
+      for (const pack of lorePacksFor(room)) for (const card of pack.cards || []) {
+        const fields = loreCardContentFields(card);
+        addStructuredSearchSource('lore', card.id, card.title || '자료 카드', '자료집', `자료집 › ${pack.title || '제목 없는 팩'}`, [fields.title,fields.full,fields.compact,fields.micro,fields.exactQuote,fields.speaker,fields.target,fields.location,fields.date,...fields.aliases,...fields.triggers,...fields.entities].join('\n'));
+      }
+      const restoreIndex = searchInput?.dataset.restoreIndex;
+      if (restoreIndex !== undefined) {
+        searchIndex = searchMatches.length ? Math.max(0, Math.min(searchMatches.length - 1, Number(restoreIndex) || 0)) : -1;
+        searchInput.dataset.searchIndex = searchIndex >= 0 ? String(searchIndex) : '';
+        delete searchInput.dataset.restoreIndex;
+      }
+      if (searchCount) searchCount.textContent = searchMatches.length ? (searchIndex >= 0 ? `${searchIndex + 1} / ${searchMatches.length}` : `– / ${searchMatches.length}`) : '0 / 0';
+      renderSearchResults();
+    };
+
+    const showSearchMatchAt = (index, hideDropdown = false) => {
+      if (!searchMatches.length) { collectSearchMatches(); if (!searchMatches.length) return; }
+      searchIndex = Math.max(0, Math.min(searchMatches.length - 1, Number(index) || 0));
+      if (searchInput) searchInput.dataset.searchIndex = String(searchIndex);
+      const match = searchMatches[searchIndex];
+      overlay.querySelectorAll('.rpcm-slot.is-search-hit').forEach(node => node.classList.remove('is-search-hit'));
+      overlay.querySelectorAll('.rpcm-inline-story-card.is-search-hit,.rpcm-knowledge-card.is-search-hit,.rpcm-person-record.is-search-hit').forEach(node => node.classList.remove('is-search-hit'));
+      if (match.type === 'story' || match.type === 'knowledge' || match.type === 'person-record' || match.type === 'lore') {
+        let target = null;
+        if (match.type === 'lore') {
+          if (isMobileManagerLayout()) activateMobileSection('rpcm-section-lore', false);
+          else showWorkView(overlay, 'lore', false);
+          const pack = lorePacksFor(room).find(item => (item.cards || []).some(card => String(card.id) === match.id));
+          if (pack) {
+            const ui = loreUiFor(room); ui.search = ''; ui.type = ''; ui.mode = ''; ui.pack = '';ui.openPacks[pack.id]=true;ui.openCards[match.id]=true;
+            const section = overlay.querySelector('#rpcm-section-lore');
+            section.querySelector('#rpcm-lore-search').value = '';
+            section.querySelectorAll('.rpcm-lore-filters select').forEach(select => select.value = '');
+            rpcmPatchHtml(section.querySelector('#rpcm-lore-list'), renderLoreListHtml(room));
+            target = [...section.querySelectorAll('.rpcm-lore-card[data-lore-card]')].find(node => node.dataset.loreCard === match.id);
+            const packNode=target?.closest('.rpcm-lore-pack');if(packNode)packNode.open=true;
+            if(target)target.open=true;
+          }
+        } else if (match.type === 'story') {
+          if (isMobileManagerLayout()) activateMobileSection('rpcm-section-timeline', false);
+          else showWorkView(overlay, 'timeline', false);
+          target = [...overlay.querySelectorAll('.rpcm-inline-story-card[data-inline-story-id]')].find(node => node.dataset.inlineStoryId === match.id);
+          const month = target?.closest('.rpcm-inline-story-month');
+          if (month) month.open = true;
+        } else {
+          if (isMobileManagerLayout()) activateMobileSection('rpcm-section-people', false);
+          else showWorkView(overlay, 'people', false);
+          const advanced = overlay.querySelector('.rpcm-person-advanced');
+          state.personAdvancedOpen = true;
+          if (advanced) { advanced.hidden = false; advanced.open = true; }
+          state.personPane = match.pane;
+          state.personFilter = match.person;
+          state.personReturnSource = { chatId:String(room.chatId), name:match.person, id:match.id, kind:match.type === 'knowledge' ? 'knowledge' : match.pane };
+          renderPersonPanel(room, overlay);
+          const selector = match.type === 'knowledge' ? '.rpcm-knowledge-card[data-knowledge-id]' : '.rpcm-person-record[data-person-record]';
+          target = [...overlay.querySelectorAll(selector)].find(node => (match.type === 'knowledge' ? node.dataset.knowledgeId : node.dataset.personRecord) === match.id);
+          if (target) target.open = true;
+        }
+        setHeaderSearchOpen(false);
+        if (target) { target.classList.add('is-search-hit'); target.scrollIntoView({ behavior:'smooth', block:'center' }); target.querySelector('summary')?.focus({ preventScroll:true }); }
+        if (searchCount) searchCount.textContent = `${searchIndex + 1} / ${searchMatches.length}`;
+        if (hideDropdown && searchResults) searchResults.hidden = true;
+        return;
+      }
+      const card = [...overlay.querySelectorAll('.rpcm-slot[data-slot-id]')].find(node => String(node.dataset.slotId) === match.slotId);
+      const textarea = card?.querySelector('.rpcm-textarea');
+      if (!card || !textarea) return;
+      const itemFolder = card.closest('.rpcm-item-folder');
+      if (itemFolder) itemFolder.open = true;
+      const extraFolder = card.closest('.rpcm-extra-folder');
+      if (extraFolder) extraFolder.open = true;
+      const memoryPane = card.closest('.rpcm-memory-pane');
+      if (memoryPane) activateMemoryPane(memoryPane.dataset.memoryContent);
+      const targetSection = card.closest('.rpcm-section,.rpcm-tools');
+      if (isMobileManagerLayout() && targetSection?.id) activateMobileSection(targetSection.id, false);
+      else if (targetSection?.id) showWorkView(overlay, ({ 'rpcm-section-basic':'memory', 'rpcm-section-people':'people', 'rpcm-section-character':'characters', 'rpcm-section-item':'items', 'rpcm-section-extra':'extra', 'rpcm-section-tools':'tools' })[targetSection.id] || 'memory', false);
+      setHeaderSearchOpen(false);
+      card.open = true;
+      if (card.querySelector('.rpcm-edit')?.hidden) card.querySelector('.rpcm-raw-edit-toggle,.rpcm-item-edit-toggle')?.click();
+      card.classList.add('is-search-hit');
+      card.scrollIntoView({ behavior:'smooth', block:'center' });
+      setTimeout(() => {
+        textarea.focus();
+        if (match.end > match.start) textarea.setSelectionRange(match.start, match.end);
+        else textarea.setSelectionRange(0, 0);
+      }, 180);
+      if (searchCount) searchCount.textContent = `${searchIndex + 1} / ${searchMatches.length}`;
+      if (hideDropdown && searchResults) searchResults.hidden = true;
+    };
+
+    const showSearchMatch = direction => {
+      if (!searchMatches.length) { collectSearchMatches(); if (!searchMatches.length) return; }
+      const next = (searchIndex + direction + searchMatches.length) % searchMatches.length;
+      showSearchMatchAt(next, true);
+    };
+
+    if (searchInput) {
+      searchInput.oninput = collectSearchMatches;
+      searchInput.onfocus = () => { if (String(searchInput.value || '').trim() && searchResults?.innerHTML) searchResults.hidden = false; };
+      searchInput.onkeydown = event => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          if (searchItems.length) showSearchMatchAt(searchItems[0].matchIndex, true);
+          else showSearchMatch(event.shiftKey ? -1 : 1);
+        }
+        if (event.key === 'Escape' && searchResults && !searchResults.hidden) {
+          event.stopPropagation();
+          searchResults.hidden = true;
+        }
+      };
+    }
+    overlay.querySelector('#rpcm-search-prev').onclick = () => showSearchMatch(-1);
+    overlay.querySelector('#rpcm-search-next').onclick = () => showSearchMatch(1);
+    overlay.onmousedown = event => {
+      if (searchResults && !event.target.closest('.rpcm-search-box')) searchResults.hidden = true;
+      if (!headerSearchPop.hidden && !event.target.closest('#rpcm-header-search-pop,#rpcm-header-search-toggle')) setHeaderSearchOpen(false);
+      if (headerMenu?.open && !event.target.closest('.rpcm-header-menu')) headerMenu.open = false;
+    };
+    overlay.onkeydown = event => {
+      if (event.key === 'Escape' && !headerSearchPop.hidden) { event.preventDefault(); setHeaderSearchOpen(false); headerSearchToggle.focus(); return; }
+      if (event.key === 'Escape' && headerMenu?.open) { event.preventDefault(); headerMenu.open = false; headerMenu.querySelector('summary')?.focus(); return; }
+      if (event.key === 'Escape' && mainHelpPanel && !mainHelpPanel.hidden) {
+        event.preventDefault();
+        mainHelpPanel.hidden = true;
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLocaleLowerCase() === 'f') {
+        event.preventDefault(); setHeaderSearchOpen(true); searchInput?.select(); return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+        const arm = overlay.querySelector('#rpcm-arm');
+        if (arm && !room.pending && !arm.disabled && !document.querySelector('#rpcm-preview-backdrop,#rpcm-import-backdrop')) { event.preventDefault(); arm.click(); }
+        return;
+      }
+    };
+
+    const activeTimelineMain = overlay.querySelector('#rpcm-active-log-timeline-main');
+    if (activeTimelineMain) activeTimelineMain.onchange = async () => {
+      const previous = activeLogTimelineLabel(room);
+      const desired = cleanLogTimelineLabel(activeTimelineMain.value) || DEFAULT_LOG_TIMELINE;
+      room.activeLogTimeline = desired;
+      normalizeRoomLogTimelines(room);
+      try {
+        if (room.pending && room.autoLogRecallEnabled) await rebuildPendingLogItems(room, 'active-log-timeline-change');
+        await saveRoom(room);
+        notify(`다음 날짜 로그 저장 위치를 ‘${desired}’으로 바꿨습니다. API 요약과 수기 추가 로그가 이 시간선에 저장됩니다.`, 'success', 4600);
+        renderModalIfOpen();
+      } catch (e) {
+        room.activeLogTimeline = previous;
+        activeTimelineMain.value = previous;
+        notify(`시간선 변경 실패: ${e.message}`, 'error', 6000);
+      }
+    };
+
+    const autoLogCb = overlay.querySelector('#rpcm-auto-log');
+    const autoLogRelevance = overlay.querySelector('#rpcm-auto-log-relevance');
+    overlay.querySelector('#rpcm-log-count-quick')?.addEventListener('click', () => showWorkView(overlay,'logs',true));
+    overlay.querySelector('#rpcm-context-refresh')?.addEventListener('click', async event => {
+      const button = event.currentTarget;
+      const original = button.textContent;
+      button.disabled = true;
+      button.textContent = '최신 RP 읽는 중…';
+      try {
+        const result = await refreshInjectionSelectionFromLatestRp(room);
+        const sync = result.slotSync || {added:0,removed:0,updated:0};
+        notify(`주입 재검사 완료 · 캐릭터 ${result.characters} · 중요 물품 ${result.items} · 인물정보 ${result.people}${result.pending ? ` · 현재 주입 정리 +${sync.added}/−${sync.removed}/갱신 ${sync.updated}` : ' · 다음 주입 후보 갱신'}`, 'success', 5600);
+        renderModalIfOpen();
+        state.modal?.querySelector('[data-injection-recheck-report]')?.setAttribute('open','');
+      } catch (error) {
+        notify(`주입 내용 새로고침 실패: ${error.message}`, 'error', 6500);
+        if (button.isConnected) { button.disabled = false; button.textContent = original; }
+      }
+    });
+    for (const [id,field,defaultCount] of [['rpcm-log-recent-count','autoLogRecentBlocks',2],['rpcm-log-related-count','autoLogRelatedBlocks',APP.defaultRelatedLogBlocks]]) {
+      const select=overlay.querySelector('#'+id);
+      if (!select) continue;
+      select.onchange=async()=>{
+        const old=room[field];
+        const next=Math.max(0,Math.min(10,Number(select.value)||0));
+        if(room.pending && room.autoLogRecallEnabled && !confirm(`현재 RP 주입 중입니다. 날짜로그 ${field==='autoLogRecentBlocks'?'최근':'관련'} 자동 개수를 ${next}개로 바꾸어 주입문에 반영할까요?\n직접 주입하거나 고정한 날짜로그는 그대로 유지됩니다.`)){
+          select.value=String(old??defaultCount);return;
+        }
+        room[field]=next;
+        try{
+          if(room.pending && room.autoLogRecallEnabled) await rebuildPendingLogItems(room,'log-count-change');
+          await saveRoom(room);
+          notify(`날짜로그 자동 선택: 최근 ${recentLogInjectionCount(room)}개 · 관련 최대 ${relatedLogInjectionCount(room)}개`, 'success',3500);
+          renderModalIfOpen();
+        }catch(error){room[field]=old;select.value=String(old??defaultCount);notify(`날짜로그 개수 저장/반영 실패: ${error.message}`, 'error',6500);}
+      };
+    }
+    if (autoLogCb) autoLogCb.onchange = async () => {
+      const previous = !!room.autoLogRecallEnabled;
+      const desired = autoLogCb.checked;
+      if (room.pending && !confirm(`현재 컨텍스트가 주입 중입니다.\n최근·관련 로그 자동 선택을 ${desired ? '켜기' : '끄기'}로 즉시 바꿀까요?
+자동 선택을 꺼도 직접 주입/📌항상 주입 날짜는 유지됩니다.`)) { autoLogCb.checked = previous; return; }
+      room.autoLogRecallEnabled = desired;
+      try { if (room.pending) await rebuildPendingLogItems(room, 'log-auto-toggle'); await saveRoom(room); }
+      catch (e) { room.autoLogRecallEnabled = previous; autoLogCb.checked = previous; notify(`로그 자동 선택 변경 실패: ${e.message}`, 'error', 6500); }
+      renderModalIfOpen();
+    };
+    if (autoLogRelevance) autoLogRelevance.onchange = async () => {
+      const previous = logRelevanceSetting(room);
+      room.autoLogRelevance = autoLogRelevance.value;
+      try { if (room.pending && room.autoLogRecallEnabled) await rebuildPendingLogItems(room, 'log-relevance-change'); await saveRoom(room); }
+      catch (e) { room.autoLogRelevance = previous; autoLogRelevance.value = previous; notify(`관련도 기준 반영 실패: ${e.message}`, 'error', 6000); }
+      refreshStatsOnly();
+    };
+    const logDateFixBtn = overlay.querySelector('#rpcm-log-date-fix');
+    if (logDateFixBtn) logDateFixBtn.onclick = async () => {
+      readModalIntoRoom();
+      const before=rpcmRoomClone(room);
+      const changed = await openLogDateNormalizerDialog(room);
+      if (!changed) return;
+      try { await saveRoom(room); }
+      catch (e) { rpcmReplaceRoomObject(room,before); notify(`날짜 수정 저장 실패 · 원래 상태 유지: ${e.message}`, 'error', 6000); renderModalIfOpen(); return; }
+      try {
+        if (room.pending) await rebuildPendingLogItems(room, 'log-date-normalize');
+        notify('날짜/연도 정리를 로그요약에 반영했습니다.', 'success', 4200);
+        renderModalIfOpen();
+      } catch (e) { notify(`로그 날짜는 저장했지만 현재 주입 반영에 실패했습니다: ${e.message}`, 'error', 7000); renderModalIfOpen(); }
+    };
+
+    const storyInjectionCb = overlay.querySelector('#rpcm-story-injection-enabled');
+    if (storyInjectionCb) storyInjectionCb.onchange = async () => {
+      const previous = room.storyTimelineInjectionEnabled !== false;
+      const desired = !!storyInjectionCb.checked;
+      if (room.pending && !confirm(`현재 컨텍스트가 주입 중입니다.\n타임라인 전체 주입을 ${desired ? '켜기' : '끄기'}로 즉시 바꿀까요?\n카드별 ‘GPT 주입 포함’ 설정은 그대로 유지됩니다.`)) {
+        storyInjectionCb.checked = previous;
+        return;
+      }
+      const previousRemoved = room.pending ? quickRemovedPendingItems(room.pending).map(item => ({ ...item })) : null;
+      room.storyTimelineInjectionEnabled = desired;
+      try {
+        // 전체 ON은 사용자의 명시적인 재활성화이므로, 이 주입 세션에서 간편 관리로 뺀 타임라인도 다시 켭니다.
+        if (desired && room.pending) room.pending.quickRemovedItems = quickRemovedPendingItems(room.pending).filter(item => !isStoryTimelinePendingItem(item));
+        const result = room.pending ? await rebuildPendingStoryTimelineItem(room, 'story-timeline-master-toggle') : null;
+        await saveRoom(room);
+        if (desired) notify(room.pending && result?.synced ? '타임라인 주입을 켜고 현재 carrier에 즉시 반영했습니다.' : '타임라인 주입을 켰습니다. 다음 주입부터 포함됩니다.', 'success', 4300);
+        else notify(result?.cleared ? '타임라인 주입을 끄고, 남은 주입 항목이 없어 현재 주입도 정상 종료했습니다.' : '타임라인 전체 주입을 껐습니다. 카드별 포함 설정은 보존됩니다.', 'success', 4500);
+        renderModalIfOpen();
+      } catch (e) {
+        room.storyTimelineInjectionEnabled = previous;
+        if (room.pending && previousRemoved) room.pending.quickRemovedItems = previousRemoved;
+        storyInjectionCb.checked = previous;
+        notify(`타임라인 주입 설정 변경 실패: ${e.message}`, 'error', 6500);
+        renderModalIfOpen();
+      }
+    };
+
+    const storyManageBtn = overlay.querySelector('#rpcm-story-manage');
+    const runStoryDialog = async (options={}) => {
+      // 타임라인 창은 다른 슬롯의 화면값을 일괄 수집하지 않고 자체 데이터만 편집합니다.
+      // 주입 중이라도 저장 후 타임라인 항목만 현재 carrier에 재동기화합니다.
+      const changed = await openStoryTimelineManagerDialogV35(room, options);
+      if (!changed) return;
+
+      // 먼저 타임라인 원본을 저장합니다. carrier 갱신이 실패해도 사용자의 편집본은 잃지 않습니다.
+      try {
+        await saveRoom(room);
+      } catch (e) {
+        notify(`연속성 타임라인 저장 실패: ${e.message}`, 'error', 6500);
+        return;
+      }
+
+      try {
+        const syncResult = room.pending ? await rebuildPendingStoryTimelineItem(room, 'story-timeline-edit') : null;
+
+        if (!room.pending && syncResult?.cleared) {
+          notify('연속성 타임라인을 저장했습니다. 현재 주입에서 남은 항목이 없어 자동 주입은 정상 종료되었습니다.', 'success', 5200);
+        } else if (syncResult?.suppressed) {
+          notify(syncResult.payloadChanged
+            ? '연속성 타임라인을 저장했습니다. 현재 주입에서 타임라인을 꺼둔 상태는 유지하고, 다시 켤 때 사용할 내용만 최신화했습니다.'
+            : '연속성 타임라인 변경사항을 저장했습니다. 현재 주입에서 타임라인을 꺼둔 상태는 그대로 유지됩니다.', 'success', 5600);
+        } else if (syncResult?.synced) {
+          notify('연속성 타임라인을 저장하고 현재 주입에도 즉시 반영했습니다.', 'success', 4700);
+        } else if (room.pending) {
+          notify('연속성 타임라인 변경사항을 저장했습니다. 현재 주입에 들어간 타임라인 내용은 바뀌지 않았습니다.', 'success', 4700);
+        } else {
+          notify(room.storyTimelineInjectionEnabled === false
+            ? '연속성 타임라인을 저장했습니다. 전체 주입은 OFF이며 카드별 포함 설정은 보존됩니다.'
+            : '연속성 타임라인을 저장했습니다. 주입 포함 카드는 다음 주입부터 항상 들어갑니다.', 'success', 4700);
+        }
+        renderModalIfOpen();
+      } catch (e) {
+        // carrier 갱신이 실패하면 서버 carrier는 직전 검증본으로 롤백되고, 위에서 저장한 타임라인 원본은 유지됩니다.
+        notify(`타임라인은 저장했지만 현재 주입 반영에 실패했습니다. carrier는 직전 검증 상태를 유지합니다: ${e.message}`, 'error', 7500);
+        renderModalIfOpen();
+      }
+    };
+    const storyDirectReplace=overlay.querySelector('#rpcm-story-direct-replace');
+    if(storyDirectReplace)storyDirectReplace.onclick=()=>{readModalIntoRoom();rpcmDirectPasteDialog('타임라인 · 전체 원문 붙여넣기','결과 가져오기가 실패했을 때 쓰는 복구용 전체 교체입니다. 현재 활성 시간선만 바꾸고 수동 업데이트 체크포인트는 이동하지 않습니다.','[TIMELINE]\n[CARD]\nREF=C001\nDATE_START=...\nTITLE=...\nCONTENT=\n...\n[/CARD]\n[/TIMELINE]',()=>{const run=createStoryTimelineRun(room,activeLogTimelineLabel(room),'direct-view','FULL');return serializeStoryTimelineRefMaster(snapshotStoryTimelineCardsForLabel(room,run.timelineLabel),run,true);},value=>prepareDirectTimelineReplace(room,value),prepared=>applyDirectTimelineReplace(room,prepared));};
+    if (storyManageBtn) storyManageBtn.onclick=()=>overlay.querySelector('.rpcm-inline-story-list')?.scrollIntoView({block:'start'});
+
+    const timelineSection=overlay.querySelector('#rpcm-section-timeline');
+    const commitStoryCardChange=async(label,mutate)=>{
+      const beforeCards=snapshotStoryTimelineCards(room),beforeBackup=room.storyTimelineBackup?structuredClone(room.storyTimelineBackup):null;
+      try{
+        backupStoryTimeline(room,label+' 전');
+        const master=normalizeStoryTimelineCards(room);
+        mutate(master);
+        normalizeStoryTimelineCards(room);
+        await saveRoom(room);
+      }catch(error){
+        room.storyTimelineCards=beforeCards;room.storyTimelineBackup=beforeBackup;normalizeStoryTimelineCards(room);throw error;
+      }
+      if(room.pending) await rebuildPendingStoryTimelineItem(room,'timeline-inline-edit');
+      renderModalIfOpen();
+    };
+    timelineSection?.addEventListener('click',async event=>{
+      const pop=timelineSection.querySelector('.rpcm-story-popover');
+      if(pop && !event.target.closest('.rpcm-story-popover,.rpcm-story-horizontal .rpcm-inline-story-top'))pop.remove();
+      const horizontalSummary=event.target.closest('.rpcm-story-horizontal .rpcm-inline-story-top');
+      if(horizontalSummary){event.preventDefault();const card=horizontalSummary.closest('[data-inline-story-id]');if(pop?.dataset.inlineStoryId===card?.dataset.inlineStoryId){pop.remove();return;}openInlineStoryPopover(timelineSection,card);return;}
+      const viewButton=event.target.closest('[data-story-view]');
+      if(viewButton){switchInlineTimelineView(timelineSection,room,viewButton.dataset.storyView);return;}
+      const step=event.target.closest('[data-story-step]');
+      if(step){const rail=timelineSection.querySelector('.rpcm-story-horizontal');if(rail){const card=rail.querySelector('.rpcm-inline-story-card');rail.scrollBy({left:Number(step.dataset.storyStep)*(card?.getBoundingClientRect().width||280),behavior:'smooth'});}return;}
+      const jump=event.target.closest('[data-inline-story-jump]');
+      if(jump){const card=[...timelineSection.querySelectorAll('.rpcm-inline-story-card[data-inline-story-id]')].find(node=>node.dataset.inlineStoryId===jump.dataset.inlineStoryJump);const month=card?.closest('.rpcm-inline-story-month');if(month)month.open=true;if(card)card.open=!timelineSection.querySelector('.rpcm-story-horizontal');card?.scrollIntoView({behavior:'smooth',block:'center',inline:'center'});if(card&&timelineSection.querySelector('.rpcm-story-horizontal'))setTimeout(()=>openInlineStoryPopover(timelineSection,card),300);return;}
+      const action=event.target.closest('[data-inline-story-action]');if(!action)return;
+      const node=action.closest('[data-inline-story-id]');const id=node?.dataset.inlineStoryId;
+      const master=room.storyTimelineCards?.find(card=>String(card.cardId)===id);if(!master)return;
+      const edit=node.querySelector('.rpcm-inline-story-edit');
+      if(action.dataset.inlineStoryAction==='edit'){edit.hidden=false;node.querySelector('.rpcm-inline-story-read').hidden=true;edit.querySelector('[data-field="title"]')?.focus();return;}
+      if(action.dataset.inlineStoryAction==='cancel'){edit.hidden=true;node.querySelector('.rpcm-inline-story-read').hidden=false;return;}
+      if(action.dataset.inlineStoryAction==='delete'){
+        if(!confirm(`‘${master.title||'제목 없는 카드'}’를 삭제할까요?`))return;
+        try{await commitStoryCardChange('카드 삭제',cards=>{room.storyTimelineCards=cards.filter(card=>String(card.cardId)!==id);});}
+        catch(error){notify('타임라인 삭제 실패: '+error.message,'error');}return;
+      }
+      if(action.dataset.inlineStoryAction==='save'){
+        const value=field=>edit.querySelector(`[data-field="${field}"]`)?.value||'';
+        const rawStart=value('dateStart').trim(),rawEnd=value('dateEnd').trim();
+        const start=normalizeStoryDate(rawStart),end=normalizeStoryDate(rawEnd);
+        if((rawStart&&!start)||(rawEnd&&!end)||(end&&start&&end<start)){notify('날짜 형식을 확인해 주세요. 종료일은 시작일보다 빠를 수 없습니다.','warn');return;}
+        if(!value('title').trim()){notify('카드 제목을 입력해 주세요.','warn');return;}
+        const updated={timelineLabel:cleanLogTimelineLabel(value('timelineLabel'))||DEFAULT_LOG_TIMELINE,dateStart:start,dateEnd:end,title:value('title').trim(),tags:[...new Set(value('tags').split(/[,，#]/).map(x=>x.trim()).filter(Boolean))],content:value('content').trim(),userLocked:!!edit.querySelector('[data-field="userLocked"]')?.checked,updatedAt:nowIso()};
+        try{await commitStoryCardChange('카드 편집',cards=>{const current=cards.find(card=>String(card.cardId)===id);if(current)Object.assign(current,updated);});}
+        catch(error){notify('타임라인 저장 실패: '+error.message,'error');}
+      }
+    });
+    timelineSection?.addEventListener('change',async event=>{
+      const setting=event.target.closest('[data-inline-story-setting]');
+      if(setting){const key=setting.dataset.inlineStorySetting;room.storyTimelineReviewSettings=room.storyTimelineReviewSettings||{};room.storyTimelineReviewSettings[key]=setting.type==='checkbox'?setting.checked:Math.max(key==='threshold'?1:2,Math.min(key==='threshold'?1000:100,Number(setting.value)||8));await saveRoom(room);renderModalIfOpen();return;}
+      const input=event.target.closest('[data-inline-story-inject]');if(!input)return;
+      const id=input.closest('[data-inline-story-id]')?.dataset.inlineStoryId;
+      if(room.pending&&!confirm(`‘${room.storyTimelineCards?.find(card=>String(card.cardId)===id)?.title||'이 카드'}’ 주입 포함을 현재 carrier에도 반영할까요?`)) {input.checked=!input.checked;return;}
+      try{await commitStoryCardChange('카드 주입 변경',cards=>{const card=cards.find(item=>String(item.cardId)===id);if(card){card.inject=input.checked;card.updatedAt=nowIso();}});}
+      catch(error){input.checked=!input.checked;notify('타임라인 주입 변경 실패: '+error.message,'error');}
+    });
+    overlay.querySelector('#rpcm-inline-story-add')?.addEventListener('click',async()=>{
+      const title=prompt('새 타임라인 카드 제목을 입력해 주세요.');if(title===null)return;
+      if(!title.trim()){notify('카드 제목을 입력해 주세요.','warn');return;}
+      const id=makeStoryCardId();
+      try{await commitStoryCardChange('수동 카드 추가',cards=>cards.push({cardId:id,timelineLabel:activeLogTimelineLabel(room),dateStart:'',dateEnd:'',title:title.trim(),content:'',tags:[],userLocked:false,inject:true,sortOrder:cards.length,createdAt:nowIso(),updatedAt:nowIso()}));
+        const node=state.modal?.querySelector(`[data-inline-story-id="${CSS.escape(id)}"]`);node?.querySelector('[data-inline-story-action="edit"]')?.click();node?.scrollIntoView({block:'center'});}
+      catch(error){notify('카드 추가 실패: '+error.message,'error');}
+    });
+    overlay.querySelector('#rpcm-inline-story-undo')?.addEventListener('click',async()=>{
+      if(!confirm('직전 타임라인으로 되돌릴까요?'))return;
+      const beforeCards=snapshotStoryTimelineCards(room),beforeBackup=room.storyTimelineBackup?structuredClone(room.storyTimelineBackup):null;
+      if(!restoreStoryTimelineBackup(room))return;
+      try{await saveRoom(room);}
+      catch(error){room.storyTimelineCards=beforeCards;room.storyTimelineBackup=beforeBackup;normalizeStoryTimelineCards(room);notify('타임라인 되돌리기 저장 실패 · 원래 상태 유지: '+error.message,'error');renderModalIfOpen();return;}
+      try{if(room.pending)await rebuildPendingStoryTimelineItem(room,'timeline-inline-undo');renderModalIfOpen();}
+      catch(error){notify('타임라인은 되돌렸지만 현재 주입 반영에 실패했습니다: '+error.message,'error');renderModalIfOpen();}
+    });
+
+    overlay.querySelector('#rpcm-log-calendar-open')?.addEventListener('click',()=>openWishLogCalendar(room));
+    const logManageBtn = overlay.querySelector('#rpcm-log-manage');
+    if (logManageBtn) logManageBtn.onclick = async () => {
+      readModalIntoRoom();
+      const before=rpcmRoomClone(room);
+      const changed = await openLogRecallManagerDialog(room);
+      if (!changed) return;
+      try { await saveRoom(room); }
+      catch (e) { rpcmReplaceRoomObject(room,before); notify(`로그 관리 저장 실패 · 원래 상태 유지: ${e.message}`, 'error', 6000); renderModalIfOpen(); return; }
+      try {
+        if (room.pending) await rebuildPendingLogItems(room, 'log-direct-pin-exclude');
+        notify(`시간선·로그 설정을 반영했습니다. 다음 요약 저장 시간선: ${activeLogTimelineLabel(room)}`, 'success', 4200);
+        renderModalIfOpen();
+      } catch (e) { notify(`로그 설정은 저장했지만 현재 주입 반영에 실패했습니다: ${e.message}`, 'error', 7000); renderModalIfOpen(); }
+    };
+
+    const autoCharCb = overlay.querySelector('#rpcm-auto-char');
+    const autoCharIncludeUnchecked = overlay.querySelector('#rpcm-auto-char-include-unchecked');
+    const autoCharReset = overlay.querySelector('#rpcm-auto-char-reset');
+    const autoCharLibrary = overlay.querySelector('#rpcm-auto-char-library');
+    const autoCharHelp=()=>{
+      if(autoCharIncludeUnchecked)autoCharIncludeUnchecked.disabled=!autoCharCb?.checked;
+      let help=overlay.querySelector('#rpcm-auto-char-status');
+      if(!help&&autoCharLibrary){help=document.createElement('div');help.id='rpcm-auto-char-status';help.className='rpcm-auto-note';autoCharLibrary.closest('label').after(help);}
+      if(help)help.textContent=room.autoCharacterDetection&&(!room.autoCharacterLibraryId||autoCharLibrary?.selectedOptions[0]?.dataset.unavailable==='true')?'자동 선택 설정은 유지됩니다. 감지 대상 설정집을 확인할 때까지 감지만 잠시 대기합니다.':'';
+    };
+    if (autoCharCb) autoCharCb.onchange = async () => {
+      try{
+        room.autoCharacterDetection=autoCharCb.checked;
+        if(autoCharLibrary?.dataset.ready==='true')room.autoCharacterLibraryId=autoCharLibrary.value||'';
+        autoCharHelp();await saveRoom(room);
+      }catch(error){notify(`자동 선택 설정 저장 실패: ${error.message}`,'error');}
+    };
+    if (autoCharIncludeUnchecked) autoCharIncludeUnchecked.onchange = async () => {
+      const previous=!!room.autoCharacterIncludeUnchecked;
+      let carrierApplied=false;
+      const pendingBefore=room.pending ? structuredClone(room.pending) : null;
+      const enabledBefore=new Map((room.slots||[]).filter(slot=>slot.group==='character').map(slot=>[String(slot.id),!!slot.enabled]));
+      room.autoCharacterIncludeUnchecked=autoCharIncludeUnchecked.checked;
+      try{
+        // OFF로 바꾸면 이 정책으로만 살아 있던 수동 OFF 자동선택 캐릭터의 메인 체크도 즉시 내립니다.
+        // Quick Monitor의 '이번 주입에만 추가' 항목은 reconcile에서 별도로 보존합니다.
+        if(!room.autoCharacterIncludeUnchecked){
+          for(const slot of (room.slots||[]).filter(slot=>slot.group==='character')){
+            if(slot.manualInjectionOverride==='off'&&!slot.autoPinned&&rpAutomaticSlot(room,slot))slot.enabled=false;
+          }
+        }
+        // ON은 다음 자동감지부터 현재 RP 등장 캐릭터를 다시 선택합니다.
+        if(room.pending){reconcilePendingSlotsWithCurrentSelection(room);await syncPendingCarrier(room,'character-unchecked-auto-policy');carrierApplied=true;}
+        await saveRoom(room);
+        renderModalIfOpen();
+      }catch(error){
+        room.autoCharacterIncludeUnchecked=previous;autoCharIncludeUnchecked.checked=previous;
+        for(const slot of (room.slots||[]).filter(slot=>slot.group==='character')){
+          const key=String(slot.id);if(enabledBefore.has(key))slot.enabled=enabledBefore.get(key);
+        }
+        if(pendingBefore)room.pending=structuredClone(pendingBefore);
+        let rollbackError=null;
+        if(pendingBefore&&(carrierApplied||error.rpcmCarrierNeedsRollback)){
+          try{await syncPendingCarrier(room,'character-unchecked-auto-policy-rollback');}
+          catch(failure){
+            rollbackError=failure;
+            if(room.pending){room.pending.verified=false;room.pending.policyRollbackError=String(failure.message||failure);savePendingBackup(room.chatId,room.pending);}
+          }
+        }
+        try{await saveRoom(room);}catch(failure){rollbackError ||= failure;}
+        if(rollbackError)notify(`자동 선택 설정 복구 확인 필요: ${rollbackError.message}`,'error',8500);
+        renderModalIfOpen();
+        notify(`체크 해제 캐릭터 자동 선택 설정 저장 실패: ${error.message}`,'error',6500);
+      }
+    };
+    if (autoCharReset) autoCharReset.onchange = async () => { room.autoCharacterResetOnReappear = autoCharReset.checked; await saveRoom(room); };
+    const autoItemCb = overlay.querySelector('#rpcm-auto-item');
+    const autoItemReset = overlay.querySelector('#rpcm-auto-item-reset');
+    if (autoItemCb) autoItemCb.onchange = async () => { room.autoItemDetection = autoItemCb.checked; await saveRoom(room); };
+    if (autoItemReset) autoItemReset.onchange = async () => { room.autoItemResetOnReappear = autoItemReset.checked; await saveRoom(room); };
+    if (autoCharLibrary) {
+      const keepSelected=()=>{
+        const id=String(room.autoCharacterLibraryId||'');
+        if(id&&![...autoCharLibrary.options].some(opt=>opt.value===id)){
+          const opt=new Option('저장된 설정집 · 조회 대기',id,true,true);opt.dataset.unavailable='true';autoCharLibrary.append(opt);
+        }
+        autoCharLibrary.value=id;
+      };
+      keepSelected();
+      listUsableCharacterLibraries().then(libs => {
+        if (state.currentRoom!==room || !document.contains(autoCharLibrary)) return;
+        autoCharLibrary.replaceChildren(new Option('선택 안 함',''));
+        for (const lib of libs)autoCharLibrary.append(new Option(`${libraryDisplayName(lib)} (${lib.characters.length}명)`,lib.scopeId));
+        keepSelected();autoCharLibrary.dataset.ready='true';autoCharHelp();
+      }).catch(error=>{if(document.contains(autoCharLibrary)){keepSelected();autoCharHelp();}console.warn('[Wish] 설정집 조회 실패',error);});
+      autoCharLibrary.onchange = async () => {
+        try{room.autoCharacterLibraryId=autoCharLibrary.value||'';autoCharHelp();await saveRoom(room);}
+        catch(error){notify(`감지 대상 저장 실패: ${error.message}`,'error');}
+      };
+    }
+
+    const charLibSaveBtn = overlay.querySelector('#rpcm-charlib-save');
+    const charLibLoadBtn = overlay.querySelector('#rpcm-charlib-load');
+
+    if (charLibSaveBtn) charLibSaveBtn.onclick = async () => {
+      try {
+        if (room.pending) { notify('주입 중에는 설정집을 변경하지 않는 편이 안전합니다. 먼저 지금 해제해 주세요.', 'warn', 5000); return; }
+        readModalIntoRoom();
+        await saveRoom(room);
+        const available = characterSlotsForLibrary(room);
+        if (!available.length) { notify('저장할 캐릭터 설정이 없습니다.', 'warn'); return; }
+
+        const choice = await openCharacterSelectionDialog({
+          title: '설정집에 저장할 캐릭터 선택',
+          description: '체크한 캐릭터만 선택한 설정집에 저장/갱신합니다.',
+          items: available,
+          confirmText: '선택 항목 저장',
+          preserveOption: true,
+          preserveDefault: true,
+        });
+        if (!choice) return;
+
+        const allLibraries = await listUsableCharacterLibraries();
+        const lastLib = room.lastCharacterLibraryId ? allLibraries.find(lib => lib.scopeId === room.lastCharacterLibraryId) : null;
+        const defaultName = libraryDisplayName(lastLib) || `${room.label || '캐릭터'} 설정집`;
+        const entered = prompt('설정집 이름을 입력해 주세요.\n같은 이름으로 저장하면 기존 설정집을 갱신합니다.', defaultName);
+        if (entered === null) return;
+        const presetName = String(entered || '').trim();
+        if (!presetName) { notify('설정집 이름을 입력해 주세요.', 'warn'); return; }
+
+        const nameKey = normalizedLibraryLabel(presetName);
+        let existing = allLibraries.find(lib => normalizedLibraryLabel(libraryDisplayName(lib)) === nameKey) || null;
+        if (!existing && lastLib && normalizedLibraryLabel(libraryDisplayName(lastLib)) === nameKey) existing = lastLib;
+        const scopeId = existing?.scopeId || presetScopeIdFromName(presetName);
+        const merged = mergeCharacterLibraryItems(existing?.characters || [], choice.items, choice.preserve);
+        const scopeAliases = [...new Set([...(existing?.scopeAliases || []), ...getCharacterLibraryScopeCandidates(room), scopeId])];
+        await saveCharacterLibrary({
+          ...(existing || {}),
+          scopeId,
+          kind: 'preset',
+          presetName,
+          label: presetName,
+          sourceLabel: room.label || existing?.sourceLabel || '',
+          sourceLabels: [...new Set([...(existing?.sourceLabels || []), room.label].filter(Boolean))],
+          scopeAliases,
+          characters: merged,
+          createdAt: existing?.createdAt || nowIso(),
+        });
+        room.lastCharacterLibraryId = scopeId;
+        if (!room.autoCharacterLibraryId) room.autoCharacterLibraryId = scopeId;
+        await saveRoom(room);
+        notify(`설정집 ‘${presetName}’ 저장 완료 · 선택 ${choice.items.length}명 · 총 ${merged.length}명`, 'success', 5500);
+      } catch (e) { notify(`설정집 저장 실패: ${e.message}`, 'error', 6000); }
+    };
+
+    if (charLibLoadBtn) charLibLoadBtn.onclick = async () => {
+      try {
+        if (room.pending) { notify('주입 중에는 설정집을 불러올 수 없습니다. 먼저 지금 해제해 주세요.', 'warn', 5000); return; }
+        readModalIntoRoom();
+        await saveRoom(room);
+
+        const libraries = await listUsableCharacterLibraries();
+        if (!libraries.length) { notify('저장된 캐릭터 설정집이 없습니다. 먼저 어느 방에서든 ‘설정집 저장’을 눌러주세요.', 'warn', 5500); return; }
+        const library = await openLibraryPickerDialog(libraries, { title: '불러올 설정집 선택', confirmText: '선택한 설정집 열기' });
+        if (!library) return;
+
+        const choice = await openCharacterSelectionDialog({
+          title: '현재 방으로 불러올 캐릭터 선택',
+          description: `${libraryDisplayName(library)} · 체크한 캐릭터만 현재 방에 추가/갱신합니다.`,
+          items: library.characters,
+          confirmText: '선택 항목 불러오기',
+        });
+        if (!choice) return;
+        const result = applySelectedCharacterLibraryToRoom(room, choice.items);
+        room.lastCharacterLibraryId = library.scopeId;
+        if (!room.autoCharacterLibraryId) room.autoCharacterLibraryId = library.scopeId;
+        await saveRoom(room);
+        notify(`‘${libraryDisplayName(library)}’ 불러오기 완료 · ${result.count}명 (추가 ${result.added}, 갱신 ${result.updated}) · 체크 해제 상태`, 'success', 6000);
+        renderModalIfOpen();
+      } catch (e) { notify(`설정집 불러오기 실패: ${e.message}`, 'error', 6000); }
+    };
+
+    overlay.querySelector('#rpcm-add-character').onclick = async () => {
+      readModalIntoRoom();
+      const slot = makeDynamicSlot('character', `캐릭터 ${room.slots.filter(x => x.group === 'character').length + 1}`);
+      room.slots.push(slot);
+      await saveRoom(room);
+      renderModalIfOpen();
+      setTimeout(() => {
+        const card = state.modal?.querySelector(`[data-slot-id="${slot.id}"]`);
+        if (card) { card.open = true; card.querySelector('.rpcm-title-input')?.focus(); }
+      }, 50);
+    };
+
+    overlay.querySelector('#rpcm-add-item').onclick = async () => {
+      readModalIntoRoom();
+      const slot = makeDynamicSlot('item', `중요 물품 ${room.slots.filter(x => x.group === 'item').length + 1}`);
+      slot.content = IMPORTANT_ITEM_CONTENT_TEMPLATE;
+      room.slots.push(slot);
+      await saveRoom(room);
+      renderModalIfOpen();
+      setTimeout(() => {
+        const card = state.modal?.querySelector(`[data-slot-id="${slot.id}"]`);
+        if (card) { card.open = true; card.querySelector('.rpcm-item-edit-toggle')?.click(); card.querySelector('.rpcm-title-input')?.focus(); }
+      }, 50);
+    };
+
+    overlay.querySelector('#rpcm-item-ai-folder').onclick = () => {
+      readModalIntoRoom();
+      openImportantItemAiFolderDialog(room);
+    };
+    const itemsDirectReplace=overlay.querySelector('#rpcm-items-direct-replace');
+    if(itemsDirectReplace)itemsDirectReplace.onclick=()=>{readModalIntoRoom();rpcmDirectPasteDialog('중요 물품 · 전체 원문 붙여넣기','결과 가져오기가 실패했을 때 쓰는 복구용 전체 교체입니다. 입력에 없는 기존 물품은 제외되며, 같은 제목 물품은 ID·주입 설정을 이어받습니다.','- **물품 이름 | 최초 날짜**\n  최신 상태...',()=>allImportantItemRawText(room),value=>prepareDirectItemsReplace(room,value),prepared=>applyDirectItemsReplace(room,prepared));};
+
+    const itemChecks = () => [...overlay.querySelectorAll('#rpcm-section-item .rpcm-item-delete-select')];
+    overlay.querySelector('#rpcm-items-select-all').onclick = () => {
+      itemChecks().forEach(check => { check.checked = true; });
+      updateItemDeleteSelection();
+    };
+    overlay.querySelector('#rpcm-items-clear-selection').onclick = () => {
+      itemChecks().forEach(check => { check.checked = false; });
+      updateItemDeleteSelection();
+    };
+    overlay.querySelector('#rpcm-items-delete-selected').onclick = async () => {
+      const ids = new Set(itemChecks().filter(check => check.checked).map(check => String(check.closest('[data-slot-id]')?.dataset.slotId || '')));
+      const selected = room.slots.filter(slot => slot.group === 'item' && ids.has(String(slot.id)));
+      if (!selected.length) { updateItemDeleteSelection(); return; }
+      const active = room.pending?.items?.filter(item => ids.has(String(item.slotId)) && (Number(item.totalTurns || 0) === 0 || Number(item.usedTurns || 0) < Number(item.totalTurns || 0))) || [];
+      const names = selected.slice(0, 5).map(slot => `• ${slot.title || '중요 물품'}`).join('\n');
+      const overflow = selected.length > 5 ? `\n외 ${selected.length - 5}개` : '';
+      if (!confirm(`중요 물품 ${selected.length}개를 삭제할까요?\n${names}${overflow}${active.length ? `\n현재 주입된 ${active.length}개도 함께 해제합니다.` : ''}\n\n삭제 전 백업을 권장합니다.`)) return;
+      readModalIntoRoom();
+      const originalSlots = room.slots.slice();
+      const originalPending = room.pending?.items?.slice();
+      let carrierApplied = false;
+      try {
+        // 직접 해제(0턴) 슬롯은 carrier 동기화 도중 자동 복원되므로 먼저 목록에서 제외합니다.
+        room.slots = room.slots.filter(slot => !(slot.group === 'item' && ids.has(String(slot.id))));
+        if (active.length) {
+          room.pending.items = room.pending.items.filter(item => !ids.has(String(item.slotId)));
+          await syncPendingCarrier(room, 'delete-selected-items');
+          carrierApplied = true;
+        }
+        await saveRoom(room);
+        notify(`중요 물품 ${selected.length}개를 삭제했습니다.`, 'success', 3900);
+        renderModalIfOpen();
+      } catch (error) {
+        if (!carrierApplied) {
+          room.slots = originalSlots;
+          if (originalPending && room.pending) room.pending.items = originalPending;
+        }
+        notify(`선택 삭제 실패: ${error.message}`, 'error', 6500);
+      }
+    };
+    updateItemDeleteSelection();
+
+    overlay.querySelector('#rpcm-import-items').onclick = async () => {
+      if (room.pending) { notify('목록 일괄 붙여넣기는 주입을 해제한 뒤 사용해 주세요. 현재 carrier와 저장 원문이 어긋나는 것을 막습니다.', 'warn', 5200); return; }
+      readModalIntoRoom();
+      const parsed = await openImportantItemBulkImportDialog();
+      if (!parsed?.length) return;
+      let added = 0, updated = 0, duplicatesAdded = 0;
+      const exactKey = title => cleanImportantItemTitle(title).replace(/\s*[｜|]\s*/g, '|').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+      for (const source of parsed) {
+        const exactMatches = room.slots.filter(item => item.group === 'item' && exactKey(item.title) === exactKey(source.title));
+        if (exactMatches.length === 1) {
+          exactMatches[0].content = source.content;
+          updated++;
+          continue;
+        }
+        const key = importantItemDuplicateKey(source.title);
+        if (room.slots.some(item => item.group === 'item' && importantItemDuplicateKey(item.title) === key)) duplicatesAdded++;
+        const slot = makeDynamicSlot('item', source.title);
+        slot.content = source.content;
+        room.slots.push(slot);
+        added++;
+      }
+      await saveRoom(room);
+      if (duplicateImportantItemGroups(room).length) {
+        notify(`중요 물품 추가 ${added}개 · 갱신 ${updated}개 · 중복 후보 ${duplicatesAdded}개. 유지할 항목을 선택해 주세요.`, 'warn', 5200);
+        const decisions = await openImportantItemDuplicateResolverDialog(room);
+        if (decisions) {
+          let removed;
+          try{removed=await applyImportantItemDuplicateDecisionsSaved(room,decisions);}
+          catch(error){notify(`중복 물품 정리 저장 실패: ${error.message}`,'error',6500);renderModalIfOpen();return;}
+          notify(removed ? `물품 목록 저장 완료 · 중복 ${removed}개 정리` : `물품 목록 저장 완료 · 중복 항목 전체 유지`, 'success', 4300);
+        }
+      } else notify(`중요 물품 목록 반영 완료 · 추가 ${added}개 · 갱신 ${updated}개`, 'success', 4200);
+      renderModalIfOpen();
+    };
+
+    const extraLibSaveBtn = overlay.querySelector('#rpcm-extralib-save');
+    const extraLibLoadBtn = overlay.querySelector('#rpcm-extralib-load');
+
+    if (extraLibSaveBtn) extraLibSaveBtn.onclick = async () => {
+      try {
+        readModalIntoRoom();
+        await saveRoom(room);
+        const available = extraSlotsForLibrary(room);
+        const folders = extraRoomFolderNames(room);
+        if (!folders.length) { notify('저장할 기타 폴더가 없습니다.', 'warn'); return; }
+
+        const choice = await openExtraFolderSelectionDialog({
+          title: '저장할 설정집 폴더 선택',
+          description: '성인지침·문체·유저노트 등 폴더별로 체크하세요. 폴더를 펼치면 하위 항목 원문도 확인할 수 있습니다.',
+          items: available,
+          folders,
+          confirmText: '선택 폴더 저장',
+          preserveOption: true,
+        });
+        if (!choice) return;
+
+        const allLibraries = await listUsableExtraLibraries();
+        const lastLib = room.lastExtraLibraryId ? allLibraries.find(lib => lib.scopeId === room.lastExtraLibraryId) : null;
+        const defaultName = lastLib ? extraLibraryDisplayName(lastLib) : `${room.label || '공용'} 기타 설정집`;
+        const entered = prompt('기타 설정집 이름을 입력해 주세요.\n같은 이름으로 저장하면 기존 설정집을 갱신합니다.', defaultName);
+        if (entered === null) return;
+        const presetName = String(entered || '').trim();
+        if (!presetName) { notify('기타 설정집 이름을 입력해 주세요.', 'warn'); return; }
+
+        const nameKey = normalizedLibraryLabel(presetName);
+        let existing = allLibraries.find(lib => normalizedLibraryLabel(extraLibraryDisplayName(lib)) === nameKey) || null;
+        if (!existing && lastLib && normalizedLibraryLabel(extraLibraryDisplayName(lastLib)) === nameKey) existing = lastLib;
+        const scopeId = existing?.scopeId || extraPresetScopeIdFromName(presetName);
+        const merged = mergeExtraLibraryItems(existing?.extras || [], choice.items, choice.preserve);
+        const mergedFolders = [...new Set([...(choice.preserve ? extraSavedFolderNames(existing) : []), ...choice.folders, ...extraLibraryFolderGroups(merged).keys()])];
+        await saveCharacterLibrary({
+          ...(existing || {}),
+          scopeId,
+          kind: 'extra-preset',
+          presetName,
+          label: presetName,
+          sourceLabel: room.label || existing?.sourceLabel || '',
+          sourceLabels: [...new Set([...(existing?.sourceLabels || []), room.label].filter(Boolean))],
+          extras: merged,
+          folders: mergedFolders,
+          createdAt: existing?.createdAt || nowIso(),
+        });
+        room.lastExtraLibraryId = scopeId;
+        await saveRoom(room);
+        notify(`기타 설정집 ‘${presetName}’ 저장 완료 · 폴더 ${mergedFolders.length}개 · 항목 ${merged.length}개`, 'success', 5500);
+      } catch (e) { notify(`기타 설정집 저장 실패: ${e.message}`, 'error', 6000); }
+    };
+
+    if (extraLibLoadBtn) extraLibLoadBtn.onclick = async () => {
+      try {
+        const importEpoch = state.routeEpoch;
+        readModalIntoRoom();
+        await saveRoom(room);
+
+        const libraries = await listUsableExtraLibraries();
+        if (!libraries.length) { notify('저장된 기타 설정집이 없습니다. 먼저 어느 방에서든 ‘기타 설정집 저장’을 눌러주세요.', 'warn', 5500); return; }
+        const library = await openLibraryPickerDialog(libraries, { title: '불러올 기타 설정집 선택', confirmText: '선택한 설정집 열기', mode: 'extra' });
+        if (!library) return;
+
+        const choice = await openExtraFolderSelectionDialog({
+          title: '현재 방으로 불러올 설정집 폴더 선택',
+          description: `${extraLibraryDisplayName(library)} · 선택한 폴더와 내부 항목을 원래 카테고리에 그대로 불러옵니다.`,
+          items: library.extras || [],
+          folders: extraSavedFolderNames(library),
+          confirmText: '선택 폴더 불러오기',
+        });
+        if (!choice) return;
+        if (state.currentRoom !== room || state.routeEpoch !== importEpoch) throw new Error('설정집 선택 중 방이 바뀌었습니다. 현재 방에서 다시 열어 주세요.');
+        const selectedCount = choice.selectedCount ?? choice.items.length;
+        const result = applySelectedExtraLibraryToRoom(room, choice.items, choice.folders, selectedCount);
+        room.lastExtraLibraryId = library.scopeId;
+        assertExtraLibraryImport(room, result.items, selectedCount);
+        await saveRoom(room, 'extra-library-import', candidate => assertExtraLibraryImport(candidate, result.items, selectedCount));
+        const stored = await readManualStoredRoom(room);
+        assertExtraLibraryImport(stored, result.items, selectedCount);
+        renderModalIfOpen();
+        assertExtraLibraryImport(room, result.items, selectedCount);
+        try { await syncImportedExtraSlotsIntoPending(room, result.items); }
+        catch (error) { notify(`설정집 불러오기·로컬 저장 완료 · 현재 주입 반영 실패: ${error.message}`, 'warn', 7000); return; }
+        notify(`‘${extraLibraryDisplayName(library)}’ 불러오기 완료 · 폴더 ${choice.folders.length}개 · 항목 ${result.count}개 (추가 ${result.added}, 갱신 ${result.updated})`, 'success', 6000);
+      } catch (e) { notify(`기타 설정집 불러오기 실패: ${e.message}`, 'error', 6000); }
+    };
+
+    const copyAllItems = overlay.querySelector('#rpcm-items-copy-all');
+    if (copyAllItems) copyAllItems.onclick = async () => {
+      readModalIntoRoom();
+      const value = allImportantItemRawText(room);
+      if (!value) { notify('복사할 중요 물품이 없습니다.', 'warn'); return; }
+      const copied = await copyPlainText(value);
+      notify(copied ? '중요 물품 전체 원문을 복사했습니다.' : '복사에 실패했습니다. ‘전체 원문 보기’에서 직접 복사해 주세요.', copied ? 'success' : 'warn', 3800);
+    };
+    const viewAllItems = overlay.querySelector('#rpcm-items-raw-preview');
+    if (viewAllItems) viewAllItems.onclick = () => {
+      readModalIntoRoom();
+      const backdrop = document.createElement('div');
+      backdrop.id = 'rpcm-items-raw-backdrop';
+      backdrop.innerHTML = '<div class="rpcm-items-raw-dialog" role="dialog" aria-modal="true" aria-label="중요 물품 전체 원문"><header><strong>📦 중요 물품 전체 원문</strong><button type="button" data-items-raw-close aria-label="닫기" data-rpcm-close="icon">✕</button></header><p>각 폴더와 물품 제목 뒤에 저장한 원문을 그대로 모았습니다. 점검 요청에 붙여넣을 수 있습니다.</p><textarea readonly spellcheck="false"></textarea><footer><button type="button" class="rpcm-btn secondary" data-items-raw-close aria-label="닫기" data-rpcm-close="text">닫기</button><button type="button" class="rpcm-btn primary" data-items-raw-copy>전체 복사</button></footer></div>';
+      const textarea = backdrop.querySelector('textarea');
+      textarea.value = allImportantItemRawText(room);
+      backdrop.querySelectorAll('[data-items-raw-close]').forEach(button => button.onclick = () => backdrop.remove());
+      backdrop.querySelector('[data-items-raw-copy]').onclick = async () => {
+        const ok = await copyPlainText(textarea.value);
+        notify(ok ? '전체 원문을 복사했습니다.' : '복사에 실패했습니다. 원문을 선택해 직접 복사해 주세요.', ok ? 'success' : 'warn', 3400);
+      };
+      backdrop.onclick = event => { if (event.target === backdrop) backdrop.remove(); };
+      backdrop.onkeydown = event => { if (event.key === 'Escape') backdrop.remove(); };
+      document.body.appendChild(backdrop);
+      textarea.focus();
+    };
+
+    const itemDuplicateReview = overlay.querySelector('#rpcm-item-review-duplicates');
+    if (itemDuplicateReview) itemDuplicateReview.onclick = () => overlay.querySelector('#rpcm-resolve-duplicate-items')?.click();
+    overlay.querySelector('#rpcm-item-collapse-all').onclick = () => {
+      overlay.querySelectorAll('#rpcm-item-slots .rpcm-slot[open]').forEach(card => { card.open = false; });
+    };
+
+    overlay.querySelector('#rpcm-add-extra-category').onclick = async () => {
+      const entered = prompt('새 카테고리 이름을 입력해 주세요.');
+      if (entered === null) return;
+      const category = String(entered || '').trim();
+      if (!category || category === '미분류') { notify('미분류 이외의 카테고리 이름을 입력해 주세요.', 'warn'); return; }
+      readModalIntoRoom();
+      const existing = room.slots.find(slot => slot.group === 'extra' && String(slot.extraCategory || '').trim().toLocaleLowerCase() === category.toLocaleLowerCase());
+      if (existing) { notify('이미 있는 카테고리입니다. 해당 항목에서 기존 카테고리를 선택해 주세요.', 'warn'); return; }
+      const slot = makeDynamicSlot('extra', '새 기타 항목');
+      slot.extraCategory = category;
+      room.slots.push(slot);
+      await saveRoom(room);
+      renderModalIfOpen();
+      setTimeout(() => {
+        const card = state.modal?.querySelector(`[data-slot-id="${slot.id}"]`);
+        if (card) { card.closest('.rpcm-extra-folder').open = true; card.open = true; card.querySelector('.rpcm-title-input')?.focus(); }
+      }, 50);
+    };
+
+    overlay.querySelector('#rpcm-add-extra').onclick = async () => {
+      readModalIntoRoom();
+      const slot = makeDynamicSlot('extra', `기타 ${room.slots.filter(x => x.group === 'extra').length + 1}`);
+      room.slots.push(slot);
+      await saveRoom(room);
+      renderModalIfOpen();
+      setTimeout(() => {
+        const card = state.modal?.querySelector(`[data-slot-id="${slot.id}"]`);
+        if (card) { card.open = true; card.querySelector('.rpcm-title-input')?.focus(); }
+      }, 50);
+    };
+
+    const mainHelpPanel = overlay.querySelector('#rpcm-main-help-panel');
+    overlay.querySelector('#rpcm-main-help-open').onclick = () => { if (headerMenu) headerMenu.open = false; mainHelpPanel.hidden = false; };
+    overlay.querySelector('#rpcm-main-help-close').onclick = () => { mainHelpPanel.hidden = true; };
+    overlay.querySelector('#rpcm-main-api-open').onclick = () => { if (headerMenu) headerMenu.open = false; if(isMobileManagerLayout()) activateMobileSection('rpcm-section-ai',true); else showWorkView(overlay,'ai',true); overlay.querySelector('#rpcm-ai-inline-settings')?.click(); };
+    // Keep the existing completed-turn cache for the AI status summary after the retired panel is gone.
+    void scheduleManualReviewHistory(room).catch(() => {});
+    const apiHost=overlay.querySelector('#rpcm-ai-inline-host');
+    overlay.querySelectorAll('#rpcm-section-ai [data-ai-work-tab]').forEach(button => {
+      button.onclick = () => showAiWorkTab(overlay, button.dataset.aiWorkTab);
+      button.onkeydown = event => {
+        if (!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return;
+        event.preventDefault();
+        const tabs = [...overlay.querySelectorAll('#rpcm-section-ai [data-ai-work-tab]')];
+        const index = tabs.indexOf(button);
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+          : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+        showAiWorkTab(overlay, tabs[next].dataset.aiWorkTab);
+        tabs[next].focus();
+      };
+    });
+    const openAiSettings=async()=>{
+      if(!apiHost.hidden)return;
+      const changed=await openUnifiedApiSettingsDialog(room,apiHost);
+      if(changed)renderModalIfOpen();
+    };
+    overlay.querySelector('#rpcm-ai-folder-open').onclick=()=>overlay.querySelector('#rpcm-item-ai-folder')?.click();
+    overlay.querySelector('#rpcm-ai-utility-open').onclick=()=>openMemoryAssistantDialog(room);
+    overlay.onclick=event=>{const shortcut=event.target.closest('[data-utility-shortcut]');if(!shortcut)return;event.preventDefault();event.stopPropagation();openMemoryAssistantDialog(room,{tool:shortcut.dataset.utilityShortcut,ref:shortcut.dataset.utilityRef||'',autoRun:!!shortcut.dataset.utilityRef || shortcut.dataset.utilityShortcut!=='naturalSearch'});};
+    overlay.querySelector('#rpcm-ai-inline-settings').onclick=openAiSettings;
+    overlay.querySelector('#rpcm-ai-context-settings').onclick=openAiSettings;
+    overlay.querySelector('#rpcm-ai-refiner-open')?.addEventListener('click', () => {
+      const refiner=window.__WISH_RP_MANAGER_REFINER__;
+      if(typeof refiner?.openSettings==='function')refiner.openSettings();
+      else notify('응답교정 모듈이 초기화되지 않았습니다. 페이지를 새로고침한 뒤 다시 시도해 주세요.','error',5500);
+    });
+    overlay.querySelector('#rpcm-ai-summary-card-open')?.addEventListener('click',()=>overlay.querySelector('#rpcm-ai-summary')?.click());
+    overlay.querySelectorAll('[data-rpcm-guide]').forEach(button=>button.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();openCommonGuideEditor(room,button.dataset.rpcmGuide);}));
+    overlay.querySelector('#rpcm-ai-context-toggle').onchange=async event=>{
+      room.aiContextLogRerankEnabled=event.target.checked;await saveRoom(room);renderModalIfOpen();
+    };
+    overlay.querySelector('#rpcm-ai-memory-open-settings')?.addEventListener('click',()=>showWorkView(overlay,'tools',true));
+    overlay.querySelector('#rpcm-ai-timeline-update').onclick=()=>runStoryDialog({initialMode:'api-update'});
+    overlay.querySelector('#rpcm-ai-timeline-audit').onclick=()=>runStoryDialog({initialMode:'audit'});
+    overlay.querySelector('#rpcm-ai-timeline-guide')?.addEventListener('click',()=>openCommonGuideEditor(room,'timeline'));
+
+    overlay.querySelector('#rpcm-close').onclick = closeModal;
+    overlay.querySelector('#rpcm-auto-start-now')?.addEventListener('click', () => openAutoStartDialog(room));
+    overlay.querySelector('#rpcm-save-retry').onclick = async () => {
+      try {
+        readModalIntoRoom();
+        updateSaveStatusUi('saving');
+        await saveRoom(room);
+      } catch (error) {
+        state.lastSaveError = String(error?.message || error || '저장 실패');
+        updateSaveStatusUi('error');
+        notify('로컬 저장 실패: ' + state.lastSaveError, 'error', 7000);
+      }
+    };
+
+    overlay.querySelector('#rpcm-arm').onclick = async () => {
+      const btn = overlay.querySelector('#rpcm-arm');
+      try {
+        btn.disabled = true;
+        if (room.pending) { await restorePending(room, 'manual'); return; }
+        btn.querySelector('.rpcm-footer-arm-label').textContent = '주입 준비 중…';
+        readModalIntoRoom();
+        await saveRoom(room);
+        await armInjection(room);
+      } catch (e) {
+        notify(e.message, 'error', 6000);
+        renderModalIfOpen();
+      }
+    };
+
+    overlay.querySelector('#rpcm-cleanup-retry')?.addEventListener('click',()=>queuePendingCarrierOperation(room,()=>restorePendingNow(room,'manual'),{release:true,label:'이전 주입 정리'}).catch(error=>{rpcmCarrierIssue(room,'release',error);notify('서버 정리 미완료 · 주입 OFF는 유지됩니다.','warn');}));
+    if (pending) {
+      overlay.querySelector('#rpcm-current-injected-rooms')?.addEventListener('click',openInjectedRoomsDialog);
+      const showRawButton = overlay.querySelector('#rpcm-show-raw');
+      if (showRawButton) showRawButton.onclick = async () => {
+        try { await showInjectedRaw(room); }
+        catch (e) { notify(`확인 실패: ${e.message}`, 'error', 6000); }
+      };
+      const reverifyButton = overlay.querySelector('#rpcm-reverify');
+      if (reverifyButton) reverifyButton.onclick = async () => {
+        try {
+          const r = await reverifyPending(room, {recoverLatest:true});
+          notify(r.verified ? '서버 재검증 성공 ✓' : '서버에서 숨김 주입 블록을 확인하지 못했습니다. ‘지금 해제’ 후 다시 주입해 주세요.', r.verified ? 'success' : 'error', 6500);
+          renderModalIfOpen();
+        } catch (e) { notify(`재검증 실패: ${e.message}`, 'error', 6000); }
+      };
+      const retryReanchorButton = overlay.querySelector('#rpcm-retry-reanchor');
+      if (retryReanchorButton) retryReanchorButton.onclick = async () => {
+        if (!room.pending?.reanchorRetry) return;
+        try {
+          const result=await reverifyPending(room,{recoverLatest:true});
+          notify(result.verified?'최신 AI 기준 주입 복구 확인 ✓':'숨김 주입을 확인하지 못했습니다. 복구정보는 보존됩니다.',result.verified?'success':'warn',5600);
+          renderModalIfOpen();
+        } catch (e) { notify(`다시 시도 실패 · 설정은 보존됨: ${e.message}`, 'error', 6500); }
+      };
+      overlay.querySelector('#rpcm-restore-now').onclick = async () => {
+        try { await restorePending(room, 'manual'); }
+        catch (e) { notify(`복원 실패: ${e.message}`, 'error', 6000); }
+      };
+    }
+
+    bindRpcmHelp(overlay);
+    bindRpcmPreferences(overlay,room);
+    bindSemanticUi(overlay,room);
+    bindAiMemoryPreferences(overlay,room);
+    bindModalDrag();
+    updateSaveStatusUi(state.saveStatus);
+    renderCarrierSyncStatusUi(room);
+
+    const maxInput = overlay.querySelector('#rpcm-maxchars');
+    room.maxChars = APP.defaultMaxChars;
+    if (maxInput) maxInput.value = String(APP.defaultMaxChars);
+
+    overlay.querySelector('#rpcm-preview-btn').onclick = () => {
+      readModalIntoRoom();
+      const originalChars = carrierOriginalCharsForUi(room);
+      const previewBudget = originalChars === null ? contextBudgetForPreview(room) : contextBudgetForCarrier(room, originalChars);
+      let items = room.pending ? activePendingItems(room.pending) : snapshotSelectedItems(room, null, previewBudget);
+      const originalText = carrierOriginalTextForUi(room);
+      if (!room.pending && originalText !== null) items = fitItemsToCarrierLimits(room, originalText, items);

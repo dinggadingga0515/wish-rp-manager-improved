@@ -1,0 +1,1000 @@
+        </div>`;
+      document.body.appendChild(backdrop);
+      let settled=false;const finish = value => {if(settled)return;settled=true;backdrop.remove();resolve(value);};
+      backdrop._rpcmClose=()=>finish(null);
+      backdrop.querySelector('.rpcm-lib-close').onclick = () => finish(null);
+      backdrop.querySelector('[data-act="cancel"]').onclick = () => finish(null);
+      const refreshPickerRow = (index, lib) => {
+        const nameEl = backdrop.querySelector(`[data-lib-name="${index}"]`);
+        const countEl = backdrop.querySelector(`[data-lib-count="${index}"]`);
+        const renameBtn = backdrop.querySelector(`[data-rename-index="${index}"]`);
+        const deleteBtn = backdrop.querySelector(`[data-delete-library-index="${index}"]`);
+        const displayName = displayNameOf(lib);
+        if (nameEl) nameEl.textContent = displayNameOf(lib);
+        if (countEl) countEl.textContent = `${itemCountOf(lib)}${isExtra ? '개' : '명'}`;
+        if (renameBtn) renameBtn.setAttribute('aria-label', `${displayName} 이름 수정`);
+        if (deleteBtn) deleteBtn.setAttribute('aria-label', `${displayName} 설정집 삭제`);
+        // 항목 관리에서 바뀐 폴더·원문을 설정집 선택창에도 즉시 갱신합니다.
+        if (isExtra) {
+          const preview = backdrop.querySelector(`[data-library-row="${index}"] .rpcm-extra-picker-preview`);
+          if (preview) {
+            const wasOpen = preview.open;
+            preview.innerHTML = `<summary>저장된 폴더 · ${extraSavedFolderNames(lib).length}개 보기</summary><div>${extraLibraryPreviewHtml(lib.extras,lib.folders)}</div>`;
+            preview.open = wasOpen;
+          }
+        }
+      };
+      const removePickerRow = index => {
+        libraries[index] = null;
+        backdrop.querySelector(`[data-library-row="${index}"]`)?.remove();
+        const firstRadio = backdrop.querySelector('input[name="rpcm-library-choice"]');
+        if (firstRadio) firstRadio.checked = true;
+        else finish(null);
+      };
+      async function renameLibraryAtIndex(index) {
+        const lib = libraries[index];
+        if (!lib) return;
+        const before = displayNameOf(lib);
+        const entered = prompt('설정집 새 이름을 입력해 주세요.', before);
+        if (entered === null) return;
+        const nextName = String(entered || '').trim();
+        if (!nextName) { notify('설정집 이름을 입력해 주세요.', 'warn'); return; }
+        if (nextName === before) return;
+        const nextKey = normalizedLibraryLabel(nextName);
+        const duplicated = libraries.some((other, otherIndex) => other && otherIndex !== index && normalizedLibraryLabel(displayNameOf(other)) === nextKey);
+        if (duplicated) { notify('같은 이름의 설정집이 이미 있습니다.', 'warn', 4500); return; }
+        try {
+          const updated = { ...lib, presetName: nextName, label: nextName };
+          await saveCharacterLibrary(updated);
+          libraries[index] = updated;
+          refreshPickerRow(index, updated);
+          const renameBtn = backdrop.querySelector(`[data-rename-index="${index}"]`);
+          if (renameBtn) {
+            renameBtn.title = '설정집 이름 수정';
+            renameBtn.setAttribute('aria-label', `${nextName} 이름 수정`);
+          }
+          if (!isExtra) {
+            const autoOpt = document.querySelector(`#rpcm-auto-char-library option[value="${CSS.escape(String(updated.scopeId || ''))}"]`);
+            if (autoOpt) autoOpt.textContent = `${nextName} (${Array.isArray(updated.characters) ? updated.characters.length : 0}명)`;
+          }
+          notify(`설정집 이름을 ‘${nextName}’(으)로 수정했습니다.`, 'success', 4200);
+        } catch (e) {
+          notify(`설정집 이름 수정 실패: ${e.message}`, 'error', 5500);
+        }
+      }
+      backdrop.querySelectorAll('[data-rename-index]').forEach(btn => {
+        btn.onclick = async e => {
+          e.preventDefault();
+          e.stopPropagation();
+          const index = Number(btn.dataset.renameIndex);
+          const radio = backdrop.querySelector(`input[name="rpcm-library-choice"][data-lib-index="${index}"]`);
+          if (radio) radio.checked = true;
+          await renameLibraryAtIndex(index);
+        };
+      });
+      backdrop.querySelectorAll('[data-manage-index]').forEach(button => {
+        button.onclick = async event => {
+          event.preventDefault(); event.stopPropagation();
+          const index = Number(button.dataset.manageIndex);
+          const library = libraries[index];
+          if (!library) return;
+          const radio = backdrop.querySelector(`input[name="rpcm-library-choice"][data-lib-index="${index}"]`);
+          if (radio) radio.checked = true;
+          const result = await openStoredLibraryManagerDialog(library, { mode, allLibraries:libraries.filter(Boolean) });
+          if (!result) return;
+          if (result.action === 'deleted') { removePickerRow(index); return; }
+          if (result.action === 'saved' && result.library) {
+            libraries[index] = result.library;
+            refreshPickerRow(index, result.library);
+            if (!isExtra) {
+              const autoOpt = document.querySelector(`#rpcm-auto-char-library option[value="${CSS.escape(String(result.library.scopeId || ''))}"]`);
+              if (autoOpt) autoOpt.textContent = `${libraryDisplayName(result.library)} (${itemCountOf(result.library)}명)`;
+            }
+          }
+        };
+      });
+      backdrop.querySelectorAll('[data-delete-library-index]').forEach(button => {
+        button.onclick = async event => {
+          event.preventDefault(); event.stopPropagation();
+          const index = Number(button.dataset.deleteLibraryIndex);
+          const library = libraries[index];
+          if (!library) return;
+          const name = displayNameOf(library);
+          if (!confirm(`‘${name}’ 설정집 전체를 삭제할까요?\n내부 항목 ${itemCountOf(library)}${isExtra ? '개' : '명'}도 함께 삭제되며 되돌릴 수 없습니다.`)) return;
+          try {
+            await deleteStoredLibrary(library.scopeId, Number(library._rpcmLibraryRevision||0));
+            notify(`‘${name}’ 설정집을 삭제했습니다.`, 'success', 4200);
+            removePickerRow(index);
+          } catch (error) { notify(`설정집 삭제 실패: ${error.message}`, 'error', 6000); }
+        };
+      });
+      backdrop.querySelector('[data-act="confirm"]').onclick = () => {
+        const checked = backdrop.querySelector('input[name="rpcm-library-choice"]:checked');
+        if (!checked) { notify('설정집을 하나 선택해 주세요.', 'warn'); return; }
+        finish(libraries[Number(checked.dataset.libIndex)] || null);
+      };
+      backdrop.onclick = e => { if (e.target === backdrop) finish(null); };
+    });
+  }
+
+  function downloadText(text, filename, mime = 'application/json') {
+    const blob = new Blob([text], { type: `${mime};charset=utf-8` });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function daysInLogMonth(year, month) {
+    const normalizedYear = Number.isInteger(Number(year)) && Number(year) > 0 ? Number(year) : 2000;
+    const normalizedMonth = Number(month);
+    if (normalizedMonth === 2) {
+      const leap = normalizedYear % 4 === 0 && (normalizedYear % 100 !== 0 || normalizedYear % 400 === 0);
+      return leap ? 29 : 28;
+    }
+    return [4, 6, 9, 11].includes(normalizedMonth) ? 30 : 31;
+  }
+
+  function openLogDateNormalizerDialog(room) {
+    return new Promise(resolve => {
+      const log = (room.slots || []).find(s => s.id === 'logSummary');
+      const originalStoredText = String(log?.content || '');
+      const originalText = normalizeLineBreaks(originalStoredText);
+      // Parser sourceStart/sourceEnd offsets are LF-normalized.
+      // Convert back to original newline style only after all validations pass.
+      const wasCrLf = originalStoredText.includes('\r\n') && !originalStoredText.replace(/\r\n/g,'').includes('\n');
+      const blocks = parseDatedLogBlocks(originalText);
+      if (!blocks.length) {
+        notify('수정할 날짜 로그 블록을 찾지 못했습니다.', 'warn', 4200);
+        resolve(false);
+        return;
+      }
+
+      const dated = blocks.filter(b => !b.isUnknown && !b.isSpecialDate);
+      const special = blocks.filter(b => b.isSpecialDate);
+      const unknown = blocks.filter(b => b.isUnknown);
+      const acceptedUnknown = new Set((room.acceptedUnknownLogKeys || []).map(String));
+      const old = document.getElementById('rpcm-log-dialog-backdrop');
+      if (old) old.remove();
+      const backdrop = document.createElement('div');
+      backdrop.id = 'rpcm-log-dialog-backdrop';
+
+      const datedHtml = dated.length ? `
+        <details class="rpcm-log-year" open>
+          <summary><strong>날짜가 있는 로그</strong><span>${dated.length}개</span></summary>
+          <div class="rpcm-log-help">이미 정리한 날짜도 언제든 다시 수정할 수 있습니다. 여러 항목을 체크한 뒤 연·월·일 중 필요한 값만 한꺼번에 바꿀 수 있습니다. 일괄 수정에서 비워 둔 값은 기존 날짜를 유지합니다.</div>
+          <div class="rpcm-log-groupbar rpcm-date-bulkbar">
+            <button type="button" class="rpcm-lib-small" id="rpcm-date-select-all">전체 선택</button>
+            <button type="button" class="rpcm-lib-small" id="rpcm-date-select-none">전체 해제</button>
+            <strong id="rpcm-date-selected-count">선택 0개</strong>
+            <span class="rpcm-date-bulk-fields">
+              <label>연 <input id="rpcm-date-bulk-year" type="number" min="1" max="999999" step="1" placeholder="유지"></label>
+              <label>월 <input id="rpcm-date-bulk-month" type="number" min="1" max="12" step="1" placeholder="유지"></label>
+              <label>일 <input id="rpcm-date-bulk-day" type="number" min="1" max="31" step="1" placeholder="유지"></label>
+            </span>
+            <button type="button" class="rpcm-lib-small" id="rpcm-date-apply-bulk">선택 날짜 일괄 적용</button>
+            <button type="button" class="rpcm-lib-small" id="rpcm-date-clear-year">선택 연도 비우기</button>
+          </div>
+          ${dated.map(b => `<div class="rpcm-log-row rpcm-date-row" data-log-index="${b.index}"><div class="rpcm-log-row-head"><label style="display:flex;align-items:center;gap:7px;flex:1;min-width:0"><input type="checkbox" class="rpcm-date-select"><strong>${esc(b.titleText)}</strong></label><div style="display:flex;align-items:center;gap:4px;flex-wrap:nowrap"><input class="rpcm-date-year" type="number" min="1" max="999999" step="1" value="${b.year || ''}" placeholder="연도" style="width:86px" title="비우면 연도 없는 날짜로 변경"><span style="font-size:10px;color:#777">년</span><input class="rpcm-date-month" type="number" min="1" max="12" step="1" value="${b.month}" style="width:48px"><span style="font-size:10px;color:#777">월</span><input class="rpcm-date-day" type="number" min="1" max="31" step="1" value="${b.day}" style="width:48px"><span style="font-size:10px;color:#777">일</span></div></div><div class="rpcm-log-row-reason">원문: ${esc(b.heading)}</div></div>`).join('')}
+        </details>` : '';
+
+      const unknownHtml = unknown.length ? `
+        <details class="rpcm-log-year" open>
+          <summary><strong>날짜 미상</strong><span>${unknown.length}개</span></summary>
+          <div class="rpcm-log-help">날짜를 모르는 사건은 가장 과거의 ‘날짜 미상’ 구역에 그대로 보관합니다. <b>날짜 미상으로 계속 유지</b>를 체크하면 메인 화면의 노란 안내가 사라집니다. 각 항목의 제목과 본문을 직접 고치거나 삭제할 수도 있습니다.</div>
+          <div class="rpcm-log-groupbar"><button type="button" class="rpcm-lib-small" id="rpcm-unknown-accept-all">모두 날짜 미상으로 유지</button><button type="button" class="rpcm-lib-small" id="rpcm-unknown-accept-none">유지 확인 모두 해제</button></div>
+          ${unknown.map(b => `<div class="rpcm-log-row rpcm-date-unknown-row" data-log-index="${b.index}"><div class="rpcm-log-row-head"><strong>${esc(b.titleText)}</strong><input class="rpcm-date-full" type="date" title="실제 날짜를 알게 된 경우에만 지정" style="width:145px"></div><div class="rpcm-unknown-controls"><label><input type="checkbox" class="rpcm-unknown-accepted" ${acceptedUnknown.has(String(b.key)) ? 'checked' : ''}> 날짜 미상으로 계속 유지</label><button type="button" class="rpcm-lib-small rpcm-unknown-toggle">내용 보기·수정</button><button type="button" class="rpcm-lib-small rpcm-unknown-delete">삭제</button></div><div class="rpcm-unknown-editor" hidden><label><span>제목·키워드</span><input type="text" class="rpcm-unknown-events" value="${esc(b.events)}" placeholder="사건명·키워드" spellcheck="false"></label><label><span>본문</span><textarea class="rpcm-unknown-body" spellcheck="false">${esc(b.body)}</textarea></label></div><div class="rpcm-log-row-reason">원문: ${esc(b.heading)} · ${formatCount(b.body.length)}자</div></div>`).join('')}
+        </details>` : '';
+
+      const specialHtml = special.length ? `
+        <details class="rpcm-log-year" open>
+          <summary><strong>작품 고유 연호</strong><span>${special.length}개</span></summary>
+          <div class="rpcm-log-help">BC·BCE·AD·CE·기원전·서기 표기는 날짜 블록으로 정상 인식됩니다. 일반 연도로 바꾸지 않고 원문 그대로 유지합니다.</div>
+          ${special.map(b => `<div class="rpcm-log-row"><div class="rpcm-log-row-head"><strong>${esc(b.titleText)}</strong></div><div class="rpcm-log-row-reason">원문 유지: ${esc(b.heading)}</div></div>`).join('')}
+        </details>` : '';
+
+      backdrop.innerHTML = `
+        <div class="rpcm-log-dialog" role="dialog" aria-modal="true">
+          <div class="rpcm-lib-dialog-head"><div><div class="rpcm-lib-dialog-title">날짜 / 연도 수정</div><div class="rpcm-lib-dialog-desc">연도 누락 보정뿐 아니라 이미 정리한 날짜도 언제든 다시 수정합니다. 로그 본문은 건드리지 않고 [날짜-사건명] 제목만 변경합니다.</div></div><button type="button" class="rpcm-lib-close" aria-label="닫기" data-rpcm-close="icon">✕</button></div>
+          <div class="rpcm-log-list">${datedHtml}${specialHtml}${unknownHtml}</div>
+          <div class="rpcm-lib-dialog-actions"><div class="rpcm-spacer"></div><button type="button" class="rpcm-btn secondary" data-act="cancel">취소</button><button type="button" class="rpcm-btn primary" data-act="confirm">날짜 수정 적용</button></div>
+        </div>`;
+      document.body.appendChild(backdrop);
+
+      const finish = value => { backdrop.remove(); resolve(value); };
+      backdrop.querySelector('.rpcm-lib-close').onclick = () => finish(false);
+      backdrop.querySelector('[data-act="cancel"]').onclick = () => finish(false);
+      backdrop.onclick = e => { if (e.target === backdrop) finish(false); };
+
+      const allBtn = backdrop.querySelector('#rpcm-date-select-all');
+      const noneBtn = backdrop.querySelector('#rpcm-date-select-none');
+      const applyBulkBtn = backdrop.querySelector('#rpcm-date-apply-bulk');
+      const clearYearBtn = backdrop.querySelector('#rpcm-date-clear-year');
+      const selectedDateRows = () => [...backdrop.querySelectorAll('.rpcm-date-row')].filter(row => row.querySelector('.rpcm-date-select')?.checked);
+      const updateSelectedDateCount = () => {
+        const selected = selectedDateRows();
+        const count = backdrop.querySelector('#rpcm-date-selected-count');
+        if (count) count.textContent = `선택 ${selected.length}개`;
+        backdrop.querySelectorAll('.rpcm-date-row').forEach(row => row.classList.toggle('is-selected', !!row.querySelector('.rpcm-date-select')?.checked));
+      };
+      backdrop.querySelectorAll('.rpcm-date-select').forEach(cb => cb.addEventListener('change', updateSelectedDateCount));
+      if (allBtn) allBtn.onclick = () => { backdrop.querySelectorAll('.rpcm-date-select').forEach(cb => { cb.checked = true; }); updateSelectedDateCount(); };
+      if (noneBtn) noneBtn.onclick = () => { backdrop.querySelectorAll('.rpcm-date-select').forEach(cb => { cb.checked = false; }); updateSelectedDateCount(); };
+      if (applyBulkBtn) applyBulkBtn.onclick = () => {
+        const selected = selectedDateRows();
+        if (!selected.length) { notify('일괄 수정할 날짜를 먼저 선택해 주세요.', 'warn', 3800); return; }
+        const values = {
+          year:String(backdrop.querySelector('#rpcm-date-bulk-year')?.value || '').trim(),
+          month:String(backdrop.querySelector('#rpcm-date-bulk-month')?.value || '').trim(),
+          day:String(backdrop.querySelector('#rpcm-date-bulk-day')?.value || '').trim(),
+        };
+        if (!values.year && !values.month && !values.day) { notify('바꿀 연·월·일 중 하나 이상을 입력해 주세요.', 'warn', 3800); return; }
+        const parsed = {
+          year:values.year ? Number(values.year) : null,
+          month:values.month ? Number(values.month) : null,
+          day:values.day ? Number(values.day) : null,
+        };
+        if (values.year && (!Number.isInteger(parsed.year) || parsed.year < 1 || parsed.year > 999999)) { notify('연도는 1~6자리 숫자로 입력해 주세요.', 'warn', 3800); return; }
+        if (values.month && (!Number.isInteger(parsed.month) || parsed.month < 1 || parsed.month > 12)) { notify('월은 1~12 사이로 입력해 주세요.', 'warn', 3800); return; }
+        if (values.day && (!Number.isInteger(parsed.day) || parsed.day < 1 || parsed.day > 31)) { notify('일은 1~31 사이로 입력해 주세요.', 'warn', 3800); return; }
+        const changes = [];
+        for (const row of selected) {
+          const currentYearText = String(row.querySelector('.rpcm-date-year')?.value || '').trim();
+          const year = values.year ? parsed.year : (currentYearText ? Number(currentYearText) : null);
+          const month = values.month ? parsed.month : Number(row.querySelector('.rpcm-date-month')?.value || 0);
+          const day = values.day ? parsed.day : Number(row.querySelector('.rpcm-date-day')?.value || 0);
+          const maxDay = daysInLogMonth(year, month);
+          if (!Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(day) || day < 1 || day > maxDay) {
+            const title = row.querySelector('strong')?.textContent?.trim() || '선택한 날짜';
+            notify(`${title}: ${year ? `${year}년 ` : ''}${month}월 ${day}일은 올바른 날짜가 아닙니다.`, 'warn', 5200);
+            return;
+          }
+          changes.push({ row, year, month, day });
+        }
+        changes.forEach(({ row, year, month, day }) => {
+          if (values.year) row.querySelector('.rpcm-date-year').value = String(year);
+          if (values.month) row.querySelector('.rpcm-date-month').value = String(month);
+          if (values.day) row.querySelector('.rpcm-date-day').value = String(day);
+        });
+        notify(`선택한 날짜 ${changes.length}개의 입력값을 일괄 수정했습니다. 아래 ‘날짜 수정 적용’을 눌러 저장해 주세요.`, 'success', 4200);
+      };
+      if (clearYearBtn) clearYearBtn.onclick = () => {
+        const selected = selectedDateRows();
+        if (!selected.length) { notify('연도를 비울 날짜를 먼저 선택해 주세요.', 'warn', 3800); return; }
+        selected.forEach(row => { const input = row.querySelector('.rpcm-date-year'); if (input) input.value = ''; });
+        notify(`선택한 날짜 ${selected.length}개의 연도를 비웠습니다. 아래 ‘날짜 수정 적용’을 눌러 저장해 주세요.`, 'success', 4200);
+      };
+      updateSelectedDateCount();
+      const acceptAllUnknownBtn = backdrop.querySelector('#rpcm-unknown-accept-all');
+      const clearAcceptedUnknownBtn = backdrop.querySelector('#rpcm-unknown-accept-none');
+      if (acceptAllUnknownBtn) acceptAllUnknownBtn.onclick = () => backdrop.querySelectorAll('.rpcm-unknown-accepted').forEach(cb => { cb.checked = true; });
+      if (clearAcceptedUnknownBtn) clearAcceptedUnknownBtn.onclick = () => backdrop.querySelectorAll('.rpcm-unknown-accepted').forEach(cb => { cb.checked = false; });
+      backdrop.querySelectorAll('.rpcm-unknown-toggle').forEach(button => button.onclick = () => {
+        const editor = button.closest('.rpcm-date-unknown-row')?.querySelector('.rpcm-unknown-editor');
+        if (!editor) return;
+        editor.hidden = !editor.hidden;
+        button.textContent = editor.hidden ? '내용 보기·수정' : '내용 닫기';
+      });
+      backdrop.querySelectorAll('.rpcm-unknown-delete').forEach(button => button.onclick = () => {
+        const row = button.closest('.rpcm-date-unknown-row');
+        if (!row) return;
+        const block = blocks[Number(row.dataset.logIndex)];
+        const deleting = !row.classList.contains('is-delete-pending');
+        if (deleting && !confirm(`‘${block?.titleText || '날짜 미상 로그'}’ 항목을 삭제할까요?\n아래 ‘적용’을 누르기 전에는 저장되지 않습니다.`)) return;
+        row.classList.toggle('is-delete-pending', deleting);
+        button.textContent = deleting ? '삭제 취소' : '삭제';
+        row.querySelectorAll('input,textarea').forEach(input => { input.disabled = deleting; });
+      });
+
+      backdrop.querySelector('[data-act="confirm"]').onclick = () => {
+        const replacements = [];
+        const expectedHeadings = new Map();
+        const expectedBodies = new Map();
+        let invalidMessage = '';
+
+        backdrop.querySelectorAll('.rpcm-date-row').forEach(row => {
+          if (invalidMessage) return;
+          const idx = Number(row.dataset.logIndex);
+          const block = blocks[idx];
+          if (!block) return;
+          const rawYear = String(row.querySelector('.rpcm-date-year')?.value || '').trim();
+          const rawMonth = String(row.querySelector('.rpcm-date-month')?.value || '').trim();
+          const rawDay = String(row.querySelector('.rpcm-date-day')?.value || '').trim();
+          const year = rawYear ? Number(rawYear) : null;
+          const month = Number(rawMonth);
+          const day = Number(rawDay);
+          if (year != null && (!Number.isInteger(year) || year < 1 || year > 999999)) { invalidMessage = `${block.titleText}: 연도를 1~6자리 숫자로 입력해 주세요.`; return; }
+          if (!Number.isInteger(month) || month < 1 || month > 12) { invalidMessage = `${block.titleText}: 월은 1~12 사이여야 합니다.`; return; }
+          const maxDay = daysInLogMonth(year, month);
+          if (!Number.isInteger(day) || day < 1 || day > maxDay) { invalidMessage = `${block.titleText}: ${month}월의 날짜가 올바르지 않습니다.`; return; }
+          const changed = (year || null) !== (block.year || null) || month !== block.month || day !== block.day;
+          if (!changed) return;
+          const heading = formatNormalizedLogHeading(block, year, month, day);
+          expectedHeadings.set(idx, heading);
+          replacements.push({ start:block.sourceStart, end:block.headingEnd, text:heading });
+        });
+
+        if (invalidMessage) { notify(invalidMessage, 'warn', 5200); return; }
+
+        const deletedIndexes = new Set();
+        const desiredAcceptedOldKeys = new Set();
+        backdrop.querySelectorAll('.rpcm-date-unknown-row').forEach(row => {
+          const idx = Number(row.dataset.logIndex);
+          const block = blocks[idx];
+          if (!block) return;
+          if (row.classList.contains('is-delete-pending')) {
+            deletedIndexes.add(idx);
+            replacements.push({ start:block.sourceStart, end:block.sourceEnd, text:'' });
+            return;
+          }
+          const value = String(row.querySelector('.rpcm-date-full')?.value || '').trim();
+          const events = String(row.querySelector('.rpcm-unknown-events')?.value || '').trim();
+          const body = String(row.querySelector('.rpcm-unknown-body')?.value || '').trim();
+          if (!body) { invalidMessage = `${block.titleText}: 본문을 비울 수 없습니다. 필요 없는 항목은 삭제를 눌러 주세요.`; return; }
+          const editedBlock = { ...block, events };
+          let heading = formatNormalizedLogHeading(editedBlock);
+          if (value) {
+            const m = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+            if (!m) { invalidMessage = `${block.titleText}: 날짜 형식이 올바르지 않습니다.`; return; }
+            heading = formatNormalizedLogHeading(editedBlock, Number(m[1]), Number(m[2]), Number(m[3]));
+          } else if (row.querySelector('.rpcm-unknown-accepted')?.checked) {
+            desiredAcceptedOldKeys.add(String(block.key));
+          }
+          // Header-only changes MUST NOT consume the original inter-block separator.
+          // The parser's sourceEnd extends to the next title and includes blank lines.
+          // Replacing the entire span with heading+body used to collapse adjacent logs.
+          if (heading !== block.heading) {
+            expectedHeadings.set(idx, heading);
+            replacements.push({start:block.sourceStart, end:block.headingEnd, text:heading});
+          }
+          if (body !== block.body) {
+            const oldSpan=originalText.slice(block.headingEnd,block.sourceEnd);
+            const leading=(oldSpan.match(/^\s*/)||['\n'])[0];
+            const trailing=(oldSpan.match(/\s*$/)||['\n\n'])[0];
+            expectedBodies.set(idx,body);
+            replacements.push({start:block.headingEnd,end:block.sourceEnd,text:`${leading}${body}${trailing}`});
+          }
+        });
+
+        if (invalidMessage) { notify(invalidMessage, 'warn', 5200); return; }
+        const previousAccepted = [...new Set((room.acceptedUnknownLogKeys || []).map(String))].sort();
+        const desiredAcceptedBeforeRemap = [...desiredAcceptedOldKeys].sort();
+        const acceptanceChangedBeforeRemap = JSON.stringify(previousAccepted) !== JSON.stringify(desiredAcceptedBeforeRemap);
+        if (!replacements.length && !acceptanceChangedBeforeRemap) { notify('변경된 내용이 없습니다.', 'info', 3200); return; }
+        let next = originalText;
+        replacements.sort((a,b) => b.start - a.start).forEach(r => { next = next.slice(0, r.start) + r.text + next.slice(r.end); });
+        const newBlocks = parseDatedLogBlocks(next);
+        const survivingBlocks = blocks.filter(block => !deletedIndexes.has(Number(block.index)));
+        if (newBlocks.length !== survivingBlocks.length) { notify('수정 후 로그 블록 수가 예상과 달라져 적용을 중단했습니다.', 'error', 6200); return; }
+        const corrupted = survivingBlocks.some((block,index) => {
+          const nextBlock=newBlocks[index];
+          const expectedHeading=expectedHeadings.get(block.index) ?? block.heading;
+          const expectedBody=expectedBodies.get(block.index) ?? block.body;
+          return !nextBlock || nextBlock.heading !== expectedHeading || nextBlock.body !== expectedBody;
+        });
+        if (corrupted) {notify('날짜 수정 검증에서 제목·본문·순서 불일치를 발견해 저장하지 않았습니다.','error',7000);return;}
+        const liveLog = (room.slots || []).find(s => s.id === 'logSummary');
+        if (!liveLog) { notify('현재 로그요약 항목을 찾지 못해 적용을 중단했습니다.', 'error', 6200); return; }
+        liveLog.content = wasCrLf ? next.replace(/\n/g,'\r\n') : next;
+        const keyMap = new Map();
+        survivingBlocks.forEach((block, index) => { if (newBlocks[index]) keyMap.set(String(block.key), String(newBlocks[index].key)); });
+        remapLogSelectionKeys(room, keyMap, newBlocks);
+        const newByKey = new Map(newBlocks.map(block => [String(block.key), block]));
+        room.acceptedUnknownLogKeys = [...desiredAcceptedOldKeys]
+          .map(key => keyMap.get(String(key)) || String(key))
+          .filter(key => newByKey.get(String(key))?.isUnknown);
+        finish(true);
+      };
+    });
+  }
+
+  function manualLogSelectionStats(room) {
+    const log = (room.slots || []).find(s => s.id === 'logSummary');
+    const blocks = parseDatedLogBlocks(log?.content || '');
+    const selected = new Set((room.manualLogSelectedKeys || []).map(String));
+    const items = blocks.filter(b => selected.has(String(b.key)));
+    return {
+      count: items.length,
+      chars: items.reduce((n, b) => n + String(b.raw || '').length, 0),
+      blocks: items,
+    };
+  }
+
+  function openLogRecallManagerDialog(room) {
+    return new Promise(resolve => {
+      const log = (room.slots || []).find(s => s.id === 'logSummary');
+      const blocks = parseDatedLogBlocks(log?.content || '');
+      if (!blocks.length) { notify('로그요약에서 날짜 블록을 찾지 못했습니다. [2026년 8월 31일-사건명]·[BC206-사건명] 같은 형식을 사용해 주세요.', 'warn', 6500); resolve(false); return; }
+      const old = document.getElementById('rpcm-log-dialog-backdrop');
+      if (old) old.remove();
+      const backdrop = document.createElement('div');
+      backdrop.id = 'rpcm-log-dialog-backdrop';
+      const pinned = new Set((room.autoLogPinnedKeys || []).map(String));
+      const excluded = new Set((room.autoLogExcludedKeys || []).map(String));
+      const manual = new Set((room.manualLogSelectedKeys || []).map(String));
+      const favorite = new Set((room.favoriteLogKeys || []).map(String));
+      const contextText = room.autoRecallContextText || '';
+      const scored = new Map(scoreRelatedLogBlocks(blocks, contextText, new Set(), room).map(x => [x.block.key, x]));
+      const timelineLabels = normalizeRoomLogTimelines(room).slice();
+      const hasMultipleTimelines = timelineLabels.length > 1;
+      const activeTimeline = activeLogTimelineLabel(room);
+      const totalChars = blocks.reduce((n,b) => n + b.raw.length, 0);
+      const timelineOptionHtml = selected => timelineLabels.map(label => `<option value="${esc(label)}" ${normalizedLogTimelineKey(label === DEFAULT_LOG_TIMELINE ? '' : label) === normalizedLogTimelineKey(selected === DEFAULT_LOG_TIMELINE ? '' : selected) ? 'selected' : ''}>${esc(label)}</option>`).join('');
+      const rowHtml = b => {
+        const sc = scored.get(b.key);
+        const reason = sc ? relatedLogReason(sc) : '현재 문맥 일치 없음';
+        const timeline = logTimelineLabelOfBlock(b);
+        return `<div class="rpcm-log-row${favorite.has(b.key) ? ' is-favorite' : ''}" data-log-key="${esc(b.key)}"><div class="rpcm-log-row-head"><strong>${esc(b.titleText)}</strong><span>${formatCount(b.raw.length)}자</span></div><div class="rpcm-log-row-reason">${esc(reason)}${sc ? ` · 점수 ${Number(sc.score).toFixed(1)}` : ''}</div><div class="rpcm-log-row-controls">${hasMultipleTimelines ? `<label class="rpcm-log-timeline-choice">이 블록 시간선 <select class="rpcm-log-timeline-select">${timelineOptionHtml(timeline)}</select></label>` : ''}<label><input type="checkbox" class="rpcm-log-favorite" ${favorite.has(b.key) ? 'checked' : ''}> ★ 즐겨찾기</label><label title="자동 선택을 꺼도 이 날짜를 주입 후보에 포함합니다."><input type="checkbox" class="rpcm-log-manual" ${manual.has(b.key) ? 'checked' : ''}> 직접 주입</label><label title="자동 선택 여부와 관계없이 이 날짜를 항상 우선 주입합니다."><input type="checkbox" class="rpcm-log-pin" ${pinned.has(b.key) ? 'checked' : ''}> 📌 항상 주입</label><label title="최근·관련 로그 자동 선택에서 제외합니다. 직접 주입은 가능합니다."><input type="checkbox" class="rpcm-log-exclude" ${excluded.has(b.key) ? 'checked' : ''}> 🚫 자동 선택 제외</label><button type="button" class="rpcm-lib-small rpcm-log-toggle">내용 보기</button></div><pre class="rpcm-log-content" hidden>${esc(b.raw)}</pre></div>`;
+      };
+      const timelineFolderHtml = (timelineLabel, timelineIndex) => {
+        const timelineBlocks = blocks.filter(block => blockBelongsToTimeline(block, timelineLabel)).sort(compareLogBlocksChronologically);
+        const grouped = new Map();
+        const unknownBlocks = timelineBlocks.filter(b => b.isUnknown);
+        const specialBlocks = timelineBlocks.filter(b => b.isSpecialDate);
+        for (const b of timelineBlocks.filter(b => !b.isUnknown && !b.isSpecialDate)) {
+          const yearLabel = b.year == null ? '연도 미상' : `${b.year}년`;
+          if (!grouped.has(yearLabel)) grouped.set(yearLabel, new Map());
+          const months = grouped.get(yearLabel);
+          const monthLabel = `${b.month}월`;
+          if (!months.has(monthLabel)) months.set(monthLabel, []);
+          months.get(monthLabel).push(b);
+        }
+        const yearEntries = [...grouped.entries()];
+        const latestYearIndex = yearEntries.length - 1;
+        const dated = yearEntries.map(([yearLabel, months], yi) => {
+          const monthEntries = [...months.entries()];
+          return `<details class="rpcm-log-year" ${yi === latestYearIndex ? 'open' : ''}><summary><strong>${esc(yearLabel)}</strong><span>${[...months.values()].reduce((n,a)=>n+a.length,0)}개 날짜</span></summary>${monthEntries.map(([monthLabel, monthBlocks], mi) => {
+            const weekGroups = [1,2,3,4,5].map(w => ({ w, arr:monthBlocks.filter(b => b.weekOfMonth === w) })).filter(x => x.arr.length);
+            return `<details class="rpcm-log-month" ${yi === latestYearIndex && mi === monthEntries.length - 1 ? 'open' : ''}><summary><strong>${esc(monthLabel)}</strong><span>${monthBlocks.length}개 · ${formatCount(monthBlocks.reduce((n,b)=>n+b.raw.length,0))}자</span></summary><div class="rpcm-log-groupbar"><label><input type="checkbox" class="rpcm-log-group-select" data-keys="${esc(monthBlocks.map(b=>b.key).join('|'))}"> 월 전체 직접 주입</label>${weekGroups.map(g => `<label><input type="checkbox" class="rpcm-log-group-select" data-keys="${esc(g.arr.map(b=>b.key).join('|'))}"> ${g.w}주 (${g.arr.length})</label>`).join('')}</div>${monthBlocks.map(rowHtml).join('')}</details>`;
+          }).join('')}</details>`;
+        }).join('');
+        const special = specialBlocks.length ? `<details class="rpcm-log-year"><summary><strong>작품 고유 연호</strong><span>${specialBlocks.length}개</span></summary>${specialBlocks.map(rowHtml).join('')}</details>` : '';
+        const unknown = unknownBlocks.length ? `<details class="rpcm-log-year"><summary><strong>날짜 미상</strong><span>${unknownBlocks.length}개</span></summary>${unknownBlocks.map(rowHtml).join('')}</details>` : '';
+        const bodyHtml = `${unknown}${dated}${special}${timelineBlocks.length ? '' : '<div class="rpcm-log-empty">아직 저장된 날짜 블록이 없습니다.</div>'}`;
+        if (!hasMultipleTimelines) return `<div class="rpcm-log-single-timeline">${bodyHtml}</div>`;
+        const isActive = blockBelongsToTimeline({ timelineLabel:timelineLabel === DEFAULT_LOG_TIMELINE ? '' : timelineLabel }, activeTimeline);
+        return `<details class="rpcm-log-timeline-folder" data-timeline-folder="${esc(timelineLabel)}" ${isActive ? 'open' : ''}><summary><strong>🗂️ ${esc(timelineLabel)}</strong><span>${isActive ? '다음 저장 · ' : ''}${timelineBlocks.length}개 블록 · ${formatCount(timelineBlocks.reduce((n,b)=>n+b.raw.length,0))}자</span></summary><div class="rpcm-log-timeline-body">${bodyHtml}</div></details>`;
+      };
+      const rowsHtml = timelineLabels.map(timelineFolderHtml).join('');
+
+      backdrop.innerHTML = `
+        <div class="rpcm-log-dialog" role="dialog" aria-modal="true">
+          <div class="rpcm-lib-dialog-head"><div><div class="rpcm-lib-dialog-title">날짜별 로그 저장소 · ${hasMultipleTimelines ? '시간선/주입 관리' : '주입 관리'}</div><div class="rpcm-lib-dialog-desc">원본 로그 ${blocks.length}개 블록 · ${formatCount(totalChars)}자 · ${hasMultipleTimelines ? '시간선→연도→월' : '연도→월'} 순서로 관리합니다.</div></div><button type="button" class="rpcm-lib-close" aria-label="닫기" data-rpcm-close="icon">✕</button></div>
+          ${hasMultipleTimelines ? `<div class="rpcm-log-timeline-toolbar"><label><span>다음 요약 저장 시간선</span><select id="rpcm-active-log-timeline">${timelineOptionHtml(activeTimeline)}</select></label><button type="button" class="rpcm-lib-small" id="rpcm-add-log-timeline">＋ 새 시간선</button><button type="button" class="rpcm-lib-small" id="rpcm-rename-log-timeline">이름 변경</button><button type="button" class="rpcm-lib-small rpcm-log-timeline-delete" id="rpcm-delete-log-timeline">시간선 삭제</button></div><div class="rpcm-log-help"><b>활성 시간선은 다음 API 날짜요약이 이어서 저장될 시간선</b>만 정합니다. 최근·관련 로그 자동 선택은 현재 회차와 그보다 앞선 모든 시간선의 날짜를 함께 검색합니다. 활성 회차의 최신 날짜 1개는 직전 흐름으로 유지하고, 이전 회차는 사건명 등 강한 일치가 있을 때 관련 로그로 찾습니다.<br><b>기본 시간선</b>은 회귀 전 원래 전개이며 기존 ‘원래 시간선’ 표기도 이 폴더로 자동 합쳐집니다.</div>` : `<div class="rpcm-log-timeline-toolbar is-simple"><select id="rpcm-active-log-timeline" hidden>${timelineOptionHtml(activeTimeline)}</select><span class="rpcm-log-simple-label">날짜 로그</span><span class="rpcm-log-simple-desc">시간선이 필요한 경우에만 추가해 주세요.</span><button type="button" class="rpcm-lib-small" id="rpcm-add-log-timeline">＋ 시간선 추가</button></div>`}
+          <details class="rpcm-log-help-details"><summary>선택 상태 설명</summary><div class="rpcm-log-help"><b>★ 즐겨찾기</b>=나중에 빠르게 찾기 · <b>직접 주입</b>=다음 주입 후보에 강제 포함 · <b>📌 항상 주입</b>=항상 우선 포함 · <b>🚫 자동 선택 제외</b>=최근·관련 로그 자동 선택에서만 제외</div></details>
+          <details class="rpcm-log-picked is-open" id="rpcm-log-picked" open><summary class="rpcm-log-picked-trigger" id="rpcm-log-picked-trigger" aria-expanded="true"><strong>즐겨찾기·항상 주입·직접 주입 로그</strong><span id="rpcm-log-picked-count"></span></summary><div id="rpcm-log-picked-body"></div></details>
+          <div class="rpcm-log-help" id="rpcm-log-manager-summary"></div>
+          <div class="rpcm-log-filterbar"><label>날짜·제목 검색<input id="rpcm-log-filter-query" type="search" placeholder="날짜나 사건 제목"></label><label>상태<select id="rpcm-log-filter-status"><option value="all">전체</option><option value="favorite">★ 즐겨찾기</option><option value="manual">직접 주입</option><option value="pinned">📌 항상 주입</option><option value="excluded">🚫 자동 제외</option></select></label><span id="rpcm-log-filter-count" role="status"></span></div>
+          <div class="rpcm-log-filter-empty" id="rpcm-log-filter-empty" hidden>조건에 맞는 날짜로그가 없습니다.</div>
+          <div class="rpcm-log-list">${rowsHtml}</div>
+          <div class="rpcm-lib-dialog-actions"><button type="button" class="rpcm-btn secondary" id="rpcm-log-clear-manual">직접 주입 전체 해제</button><div class="rpcm-spacer"></div><button type="button" class="rpcm-btn secondary" data-act="cancel">취소</button><button type="button" class="rpcm-btn primary" data-act="confirm">적용</button></div>
+        </div>`;
+      document.body.appendChild(backdrop);
+
+      const finish = value => { backdrop.remove(); resolve(value); };
+      const managerSummary = backdrop.querySelector('#rpcm-log-manager-summary');
+      const logFilterQuery = backdrop.querySelector('#rpcm-log-filter-query');
+      const logFilterStatus = backdrop.querySelector('#rpcm-log-filter-status');
+      const logFilterCount = backdrop.querySelector('#rpcm-log-filter-count');
+      const logFilterEmpty = backdrop.querySelector('#rpcm-log-filter-empty');
+      let logFilterOpenBefore = new Map();
+      let logFilterWasActive = false;
+      const logBlockByKey = new Map(blocks.map(block => [String(block.key), block]));
+      const applyLogFilters = () => {
+        const query = String(logFilterQuery.value || '').trim().toLocaleLowerCase('ko-KR');
+        const status = logFilterStatus.value;
+        const filtering = !!query || status !== 'all';
+        const logFilterFolders = [...backdrop.querySelectorAll('.rpcm-log-list details')];
+        if (filtering && !logFilterWasActive) logFilterOpenBefore = new Map(logFilterFolders.map(folder => [folder, folder.open]));
+        let visible = 0;
+        backdrop.querySelectorAll('.rpcm-log-list .rpcm-log-row').forEach(row => {
+          const block = logBlockByKey.get(String(row.dataset.logKey || ''));
+          const titleAndDate = `${block?.titleText || ''} ${block?.heading || ''} ${block?.fullDate || ''} ${logTimelineLabelOfBlock(block || {})}`.toLocaleLowerCase('ko-KR');
+          const selector = { favorite:'.rpcm-log-favorite', manual:'.rpcm-log-manual', pinned:'.rpcm-log-pin', excluded:'.rpcm-log-exclude' }[status];
+          const show = (!query || titleAndDate.includes(query)) && (!selector || !!row.querySelector(selector)?.checked);
+          row.hidden = !show;
+          if (show) visible++;
+        });
+        logFilterFolders.slice().reverse().forEach(folder => {
+          folder.hidden = filtering && !folder.querySelector('.rpcm-log-row:not([hidden])');
+          if (filtering) folder.open = !folder.hidden;
+          else if (logFilterWasActive) folder.open = logFilterOpenBefore.get(folder) ?? folder.open;
+        });
+        logFilterWasActive = filtering;
+        logFilterCount.textContent = `${visible}/${backdrop.querySelectorAll('.rpcm-log-list .rpcm-log-row').length}개 표시`;
+        logFilterEmpty.hidden = visible !== 0;
+      };
+      logFilterQuery.addEventListener('input', applyLogFilters);
+      logFilterStatus.addEventListener('change', applyLogFilters);
+      backdrop.addEventListener('change', event => { if (event.target.matches('.rpcm-log-favorite,.rpcm-log-manual,.rpcm-log-pin,.rpcm-log-exclude')) applyLogFilters(); });
+      const activeTimelineSelect = backdrop.querySelector('#rpcm-active-log-timeline');
+      const pickedBody = backdrop.querySelector('#rpcm-log-picked-body');
+      const pickedCount = backdrop.querySelector('#rpcm-log-picked-count');
+      const pickedPanel = backdrop.querySelector('#rpcm-log-picked');
+      const pickedTrigger = backdrop.querySelector('#rpcm-log-picked-trigger');
+      const setPickedPanelOpen = open => {
+        const isOpen = !!open;
+        if (pickedPanel) pickedPanel.open = isOpen;
+        pickedPanel?.classList.toggle('is-open', isOpen);
+        pickedTrigger?.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+        if (pickedBody) {
+          pickedBody.hidden = false;
+          pickedBody.removeAttribute('hidden');
+        }
+      };
+      const deletedBlockKeys = new Set();
+      const addTimelineOption = (label, selectIt = false) => {
+        if (!sanitizeLogTimelineLabel(label)) return '';
+        const clean = cleanLogTimelineLabel(label) || DEFAULT_LOG_TIMELINE;
+        const existing = timelineLabels.find(item => normalizedLogTimelineKey(item === DEFAULT_LOG_TIMELINE ? '' : item) === normalizedLogTimelineKey(clean === DEFAULT_LOG_TIMELINE ? '' : clean));
+        const resolved = existing || clean;
+        if (!existing) {
+          timelineLabels.push(resolved);
+          backdrop.querySelectorAll('#rpcm-active-log-timeline,.rpcm-log-timeline-select').forEach(select => {
+            const option = document.createElement('option');
+            option.value = resolved;
+            option.textContent = resolved;
+            select.appendChild(option);
+          });
+        }
+        if (selectIt && activeTimelineSelect) activeTimelineSelect.value = resolved;
+        return resolved;
+      };
+      const updateGroupState = () => {
+        backdrop.querySelectorAll('.rpcm-log-group-select').forEach(group => {
+          const keys = String(group.dataset.keys || '').split('|').filter(Boolean);
+          const states = keys.map(k => !!backdrop.querySelector(`.rpcm-log-row[data-log-key="${CSS.escape(k)}"] .rpcm-log-manual`)?.checked);
+          group.checked = states.length > 0 && states.every(Boolean);
+          group.indeterminate = states.some(Boolean) && !states.every(Boolean);
+        });
+        const selectedRows = [...backdrop.querySelectorAll('.rpcm-log-row')].filter(row => row.querySelector('.rpcm-log-manual')?.checked);
+        const selectedChars = selectedRows.reduce((n, row) => {
+          const key = String(row.dataset.logKey || '');
+          const block = blocks.find(b => String(b.key) === key);
+          return n + String(block?.raw || '').length;
+        }, 0);
+        if (managerSummary) managerSummary.innerHTML = `<b>현재 직접 주입 ${selectedRows.length}개</b> · ${formatCount(selectedChars)}자 · 최근·관련 로그 자동 선택을 꺼도 직접 주입 날짜는 주입 후보에 유지됩니다.`;
+      };
+      const refreshPickedManager = () => {
+        const picked = blocks.map(block => {
+          const row = backdrop.querySelector(`.rpcm-log-row[data-log-key="${CSS.escape(String(block.key))}"]`);
+          return { block, favorite:!!row?.querySelector('.rpcm-log-favorite')?.checked, manual:!!row?.querySelector('.rpcm-log-manual')?.checked, pinned:!!row?.querySelector('.rpcm-log-pin')?.checked };
+        }).filter(item => item.favorite || item.manual || item.pinned);
+        pickedPanel?.classList.toggle('is-empty', picked.length === 0);
+        if (pickedCount) pickedCount.textContent = picked.length ? `${picked.length}개` : '0개 · 지정 없음';
+        if (!pickedBody) return;
+        pickedBody.innerHTML = picked.length ? picked.map(item => `<div class="rpcm-log-picked-row" data-picked-key="${esc(item.block.key)}"><div><strong>${item.favorite ? '★ ' : ''}${esc(item.block.titleText)}</strong><span>${esc(logTimelineLabelOfBlock(item.block))} · ${formatCount(item.block.raw.length)}자</span></div><div>${item.favorite ? '<button type="button" data-picked-clear="favorite">★ 해제</button>' : ''}${item.manual ? '<button type="button" data-picked-clear="manual">직접 주입 해제</button>' : '<button type="button" data-picked-enable="manual">직접 주입</button>'}${item.pinned ? '<button type="button" data-picked-clear="pinned">📌 해제</button>' : ''}<button type="button" data-picked-jump>날짜 보기</button></div></div>`).join('') : '<div class="rpcm-log-picked-empty">즐겨찾기나 지정 로그가 없습니다.</div>';
+        setPickedPanelOpen(pickedPanel?.open ?? true);
+        pickedBody.querySelectorAll('[data-picked-clear]').forEach(button => button.onclick = () => {
+          const key = String(button.closest('[data-picked-key]')?.dataset.pickedKey || '');
+          const row = backdrop.querySelector(`.rpcm-log-row[data-log-key="${CSS.escape(key)}"]`);
+          const selector = button.dataset.pickedClear === 'manual' ? '.rpcm-log-manual' : button.dataset.pickedClear === 'favorite' ? '.rpcm-log-favorite' : '.rpcm-log-pin';
+          const checkbox = row?.querySelector(selector);
+          if (checkbox) { checkbox.checked = false; checkbox.dispatchEvent(new Event('change', { bubbles:true })); }
+          refreshPickedManager();
+        });
+        pickedBody.querySelectorAll('[data-picked-enable="manual"]').forEach(button => button.onclick = () => {
+          const key = String(button.closest('[data-picked-key]')?.dataset.pickedKey || '');
+          const checkbox = backdrop.querySelector(`.rpcm-log-row[data-log-key="${CSS.escape(key)}"] .rpcm-log-manual`);
+          if (checkbox) { checkbox.checked = true; checkbox.dispatchEvent(new Event('change', { bubbles:true })); }
+          refreshPickedManager();
+        });
+        pickedBody.querySelectorAll('[data-picked-jump]').forEach(button => button.onclick = () => {
+          const key = String(button.closest('[data-picked-key]')?.dataset.pickedKey || '');
+          const row = backdrop.querySelector(`.rpcm-log-row[data-log-key="${CSS.escape(key)}"]`);
+          if (!row) return;
+          let parent = row.parentElement;
+          while (parent && parent !== backdrop) { if (parent.tagName === 'DETAILS') parent.open = true; parent = parent.parentElement; }
+          row.scrollIntoView({ behavior:'smooth', block:'center' });
+          row.classList.add('is-picked-jump');
+          setTimeout(() => row.classList.remove('is-picked-jump'), 1400);
+        });
+      };
+      if (pickedPanel && pickedTrigger && pickedBody) pickedPanel.addEventListener('toggle', () => {
+        const isOpen = !!pickedPanel.open;
+        pickedPanel.classList.toggle('is-open', isOpen);
+        pickedTrigger.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+        pickedBody.hidden = false;
+        pickedBody.removeAttribute('hidden');
+      });
+      backdrop.querySelector('.rpcm-lib-close').onclick = () => finish(false);
+      backdrop.querySelector('[data-act="cancel"]').onclick = () => finish(false);
+      backdrop.querySelector('#rpcm-add-log-timeline').onclick = () => {
+        const label = prompt('새 시간선 이름을 입력해 주세요. 회차형이면 1회차·2회차처럼 관리할 수 있습니다.', nextLogTimelineRoundLabel(timelineLabels));
+        if (label == null) return;
+        const added = addTimelineOption(label, true);
+        if (!added) notify('시간선 이름을 입력해 주세요.', 'warn', 3200);
+        else if (!hasMultipleTimelines) notify(`‘${added}’ 시간선을 추가했습니다. 아래 적용을 누르면 다중 시간선 화면으로 바뀝니다.`, 'success', 4600);
+      };
+      const renameTimelineButton = backdrop.querySelector('#rpcm-rename-log-timeline');
+      if (renameTimelineButton) renameTimelineButton.onclick = () => {
+        const before = String(activeTimelineSelect?.value || DEFAULT_LOG_TIMELINE);
+        if (before === DEFAULT_LOG_TIMELINE) { notify('기본 시간선 이름은 변경할 수 없습니다.', 'info', 3200); return; }
+        const requested = prompt('시간선의 새 이름을 입력해 주세요.', before);
+        if (requested == null) return;
+        const after = cleanLogTimelineLabel(requested);
+        if (!after) { notify('시간선 이름을 입력해 주세요.', 'warn', 3200); return; }
+        if (timelineLabels.some(label => label !== before && normalizedLogTimelineKey(label === DEFAULT_LOG_TIMELINE ? '' : label) === normalizedLogTimelineKey(after))) { notify('같은 이름의 시간선이 이미 있습니다.', 'warn', 3600); return; }
+        const index = timelineLabels.indexOf(before);
+        if (index >= 0) timelineLabels[index] = after;
+        backdrop.querySelectorAll('#rpcm-active-log-timeline,.rpcm-log-timeline-select').forEach(select => {
+          [...select.options].forEach(option => { if (option.value === before) { option.value = after; option.textContent = after; } });
+        });
+        activeTimelineSelect.value = after;
+      };
+      const deleteTimelineButton = backdrop.querySelector('#rpcm-delete-log-timeline');
+      if (deleteTimelineButton) deleteTimelineButton.onclick = () => {
+        const target = String(activeTimelineSelect?.value || DEFAULT_LOG_TIMELINE);
+        if (target === DEFAULT_LOG_TIMELINE) {
+          notify('기본 시간선은 삭제할 수 없습니다.', 'info', 3400);
+          return;
+        }
+        const count = blocks.filter(block => blockBelongsToTimeline(block, target)).length;
+        if (count) {
+          if (!confirm(`‘${target}’ 시간선과 그 안의 날짜 블록 ${count}개를 함께 삭제할까요?\n아래 ‘적용’을 누르기 전에는 저장되지 않습니다.`)) return;
+          blocks.filter(block => blockBelongsToTimeline(block, target)).forEach(block => deletedBlockKeys.add(String(block.key)));
+        } else if (!confirm(`빈 시간선 ‘${target}’을 삭제할까요?`)) {
+          return;
+        }
+        const index = timelineLabels.findIndex(label => normalizedLogTimelineKey(label) === normalizedLogTimelineKey(target));
+        if (index >= 0) timelineLabels.splice(index, 1);
+        backdrop.querySelector(`.rpcm-log-timeline-folder[data-timeline-folder="${CSS.escape(target)}"]`)?.remove();
+        backdrop.querySelectorAll('#rpcm-active-log-timeline,.rpcm-log-timeline-select').forEach(select => {
+          [...select.options].forEach(option => { if (normalizedLogTimelineKey(option.value) === normalizedLogTimelineKey(target)) option.remove(); });
+        });
+        const fallbackTimeline = timelineLabels[Math.max(0, index - 1)] || DEFAULT_LOG_TIMELINE;
+        activeTimelineSelect.value = fallbackTimeline;
+        updateGroupState();
+        refreshPickedManager();
+        applyLogFilters();
+        notify(`‘${target}’ 시간선${count ? `과 날짜 블록 ${count}개` : ''}을 삭제 대상으로 표시했습니다. 아래 적용을 눌러 저장해 주세요.`, 'success', 4800);
+      };
+      backdrop.querySelectorAll('.rpcm-log-toggle').forEach(btn => btn.onclick = () => {
+        const pre = btn.closest('.rpcm-log-row')?.querySelector('.rpcm-log-content');
+        if (!pre) return;
+        pre.hidden = !pre.hidden;
+        btn.textContent = pre.hidden ? '내용 보기' : '내용 닫기';
+      });
+      backdrop.querySelectorAll('.rpcm-log-row').forEach(row => {
+        const pin = row.querySelector('.rpcm-log-pin');
+        const ex = row.querySelector('.rpcm-log-exclude');
+        const man = row.querySelector('.rpcm-log-manual');
+        const fav = row.querySelector('.rpcm-log-favorite');
+        fav.onchange = () => { row.classList.toggle('is-favorite', fav.checked); refreshPickedManager(); };
+        pin.onchange = () => { if (pin.checked) { ex.checked = false; setPickedPanelOpen(true); } updateGroupState(); refreshPickedManager(); };
+        ex.onchange = () => { if (ex.checked) pin.checked = false; updateGroupState(); refreshPickedManager(); };
+        man.onchange = () => { if (man.checked) setPickedPanelOpen(true); updateGroupState(); refreshPickedManager(); };
+      });
+      backdrop.querySelectorAll('.rpcm-log-group-select').forEach(group => group.onchange = () => {
+        const desired = group.checked;
+        for (const key of String(group.dataset.keys || '').split('|').filter(Boolean)) {
+          const cb = backdrop.querySelector(`.rpcm-log-row[data-log-key="${CSS.escape(key)}"] .rpcm-log-manual`);
+          if (cb) cb.checked = desired;
+        }
+        if (desired) setPickedPanelOpen(true);
+        updateGroupState();
+        refreshPickedManager();
+        applyLogFilters();
+      });
+      backdrop.querySelector('#rpcm-log-clear-manual').onclick = () => {
+        backdrop.querySelectorAll('.rpcm-log-manual').forEach(cb => { cb.checked = false; });
+        updateGroupState();
+        refreshPickedManager();
+        applyLogFilters();
+      };
+      backdrop.querySelector('[data-act="confirm"]').onclick = () => {
+        const nextPinned = [], nextExcluded = [], nextManual = [], nextFavorite = [];
+        const timelineByKey = new Map();
+        backdrop.querySelectorAll('.rpcm-log-row').forEach(row => {
+          const key = row.dataset.logKey;
+          if (row.querySelector('.rpcm-log-pin')?.checked) nextPinned.push(key);
+          if (row.querySelector('.rpcm-log-exclude')?.checked) nextExcluded.push(key);
+          if (row.querySelector('.rpcm-log-manual')?.checked) nextManual.push(key);
+          if (row.querySelector('.rpcm-log-favorite')?.checked) nextFavorite.push(key);
+          timelineByKey.set(String(key), String(row.querySelector('.rpcm-log-timeline-select')?.value || DEFAULT_LOG_TIMELINE));
+        });
+        room.autoLogPinnedKeys = nextPinned;
+        room.autoLogExcludedKeys = nextExcluded;
+        room.manualLogSelectedKeys = nextManual;
+        room.favoriteLogKeys = nextFavorite;
+        const replacements = blocks.filter(block => !deletedBlockKeys.has(String(block.key))).map(block => {
+          const targetTimeline = timelineByKey.get(String(block.key)) || logTimelineLabelOfBlock(block);
+          const nextHeading = formatLogHeadingForTimeline(block, targetTimeline);
+          return nextHeading === block.heading ? null : { start:block.sourceStart, end:block.headingEnd, text:nextHeading };
+        }).filter(Boolean).sort((a,b) => b.start - a.start);
+        const deletions = blocks.filter(block => deletedBlockKeys.has(String(block.key))).map(block => ({ start:block.sourceStart, end:block.sourceEnd, text:'' }));
+        const edits = [...replacements, ...deletions].sort((a,b) => b.start - a.start || b.end - a.end);
+        if (edits.length) {
+          let nextContent = String(log.content || '');
+          edits.forEach(edit => { nextContent = nextContent.slice(0, edit.start) + edit.text + nextContent.slice(edit.end); });
+          nextContent = sortDatedLogTextByTimeline(nextContent.trim(), room);
+          const nextBlocks = parseDatedLogBlocks(nextContent);
+          const survivingBlocks = blocks.filter(block => !deletedBlockKeys.has(String(block.key)));
+          if (nextBlocks.length !== survivingBlocks.length) { notify('시간선 이동·삭제 후 블록 수가 예상과 달라져 적용을 중단했습니다.', 'error', 5200); return; }
+          log.content = nextContent;
+          const keyMap = new Map();
+          const nextQueues = new Map();
+          nextBlocks.forEach(block => {
+            const signature = `${block.heading}\n${block.body}`;
+            if (!nextQueues.has(signature)) nextQueues.set(signature, []);
+            nextQueues.get(signature).push(block);
+          });
+          survivingBlocks.forEach(block => {
+            const targetTimeline = timelineByKey.get(String(block.key)) || logTimelineLabelOfBlock(block);
+            const signature = `${formatLogHeadingForTimeline(block, targetTimeline)}\n${block.body}`;
+            const nextBlock = nextQueues.get(signature)?.shift();
+            if (nextBlock) keyMap.set(String(block.key), String(nextBlock.key));
+          });
+          remapLogSelectionKeys(room, keyMap, nextBlocks);
+        }
+        room.logTimelines = timelineLabels.slice();
+        room.activeLogTimeline = cleanLogTimelineLabel(activeTimelineSelect?.value) || DEFAULT_LOG_TIMELINE;
+        normalizeRoomLogTimelines(room);
+        finish(true);
+      };
+      updateGroupState();
+      refreshPickedManager();
+      applyLogFilters();
+      backdrop.onclick = e => { if (e.target === backdrop) finish(false); };
+    });
+  }
+
+  function openDuplicateLogResolverDialog(room) {
+    return new Promise(resolve => {
+      const log = (room.slots || []).find(s => s.id === 'logSummary');
+      const blocks = parseDatedLogBlocks(log?.content || '');
+      const groups = duplicateLogDateGroups(room);
+      if (!groups.length) { notify('현재 중복 날짜 로그가 없습니다.', 'success', 3200); resolve(false); return; }
+
+      const old = document.getElementById('rpcm-dup-dialog-backdrop');
+      if (old) old.remove();
+      const backdrop = document.createElement('div');
+      backdrop.id = 'rpcm-dup-dialog-backdrop';
+      const branchHint = groups.map(timelineBranchHintForGroup).find(Boolean) || '';
+
+      const groupsHtml = groups.map((group, gi) => {
+        const hint = timelineBranchHintForGroup(group);
+        return `
+        <div class="rpcm-dup-group" data-date-key="${esc(group.dateKey)}">
+          <div class="rpcm-dup-group-head"><strong>${esc(group.label)}</strong>${hint ? `<em class="rpcm-timeline-hint">↩ 분기 신호 감지 · ${esc(hint)}</em>` : ''}<span>${group.blocks.length}개 블록 감지 · 유지할 블록 하나를 선택하세요.</span></div>
+          ${group.blocks.map((b, bi) => `
+            <div class="rpcm-dup-choice ${bi === group.blocks.length - 1 ? 'is-selected' : ''}" data-block-index="${b.index}">
+              <label class="rpcm-dup-choice-head">
+                <input type="radio" name="rpcm-dup-${gi}" value="${b.index}" ${bi === group.blocks.length - 1 ? 'checked' : ''}>
+                <strong>${bi + 1}번째 블록${bi === group.blocks.length - 1 ? ' · 기본 선택' : ''}</strong>
+                <span>${formatCount(b.raw.length)}자</span>
+              </label>
+              <label class="rpcm-dup-heading"><span>날짜 · 키워드 제목</span><input type="text" value="${esc(b.heading)}" placeholder="[2027년 10월 4일-키워드]" spellcheck="false"></label>
+              <textarea class="rpcm-dup-editor" spellcheck="false">${esc(b.body)}</textarea>
+            </div>`).join('')}
+        </div>`;
+      }).join('');
+
+      backdrop.innerHTML = `
+        <div class="rpcm-log-dialog rpcm-dup-dialog" role="dialog" aria-modal="true">
+          <div class="rpcm-lib-dialog-head"><div><div class="rpcm-lib-dialog-title">중복 날짜 로그 정리</div><div class="rpcm-lib-dialog-desc">같은 시간선·날짜로 감지된 블록입니다. 실제 중복이면 하나를 남기고, 시간회귀·IF 분기라면 각각 다른 시간선 폴더로 보관하세요.</div></div><button type="button" class="rpcm-lib-close" aria-label="닫기" data-rpcm-close="icon">✕</button></div>
+          <div class="rpcm-log-help">${branchHint ? `<b>↩ 시간선 분기 가능성을 감지했습니다.</b> ‘${esc(branchHint)}’ 문구가 있습니다. 자동 확정하지 않으니 아래 블록을 확인해 주세요.<br>` : ''}<b>일반 중복</b>=유지할 블록 하나를 선택 · <b>시간선 분기</b>=첫 블록은 기본 시간선, 다음 블록은 회귀 시간선 또는 추가 회차로 나눠 보관</div>
+          <div class="rpcm-log-list rpcm-dup-list">${groupsHtml}</div>
+          <div class="rpcm-lib-dialog-actions"><button type="button" class="rpcm-btn ${branchHint ? 'primary' : 'secondary'}" id="rpcm-split-duplicate-timelines">${branchHint ? '↩ 분기 감지 · ' : '🗂️ '}시간선 폴더로 나누기</button><div class="rpcm-spacer"></div><button type="button" class="rpcm-btn secondary" data-act="cancel">취소</button><button type="button" class="rpcm-btn primary" data-act="confirm">선택한 블록으로 정리</button></div>
+        </div>`;
+      document.body.appendChild(backdrop);
+
+      const finish = value => { backdrop.remove(); resolve(value); };
+      backdrop.querySelector('.rpcm-lib-close').onclick = () => finish(false);
+      backdrop.querySelector('[data-act="cancel"]').onclick = () => finish(false);
+      backdrop.querySelectorAll('.rpcm-dup-choice input[type="radio"]').forEach(radio => {
+        radio.onchange = () => {
+          const group = radio.closest('.rpcm-dup-group');
+          group?.querySelectorAll('.rpcm-dup-choice').forEach(choice => choice.classList.toggle('is-selected', !!choice.querySelector('input[type="radio"]')?.checked));
+        };
+      });
+      backdrop.querySelector('#rpcm-split-duplicate-timelines').onclick = () => {
+        const branchCount = Math.max(...groups.map(group => group.blocks.length));
+        const labels = [DEFAULT_LOG_TIMELINE];
+        for (let index = 1; index < branchCount; index++) {
+          const fallback = index === 1 ? DEFAULT_REGRESSION_TIMELINE : `${index}회차`;
+          const value = prompt(`${index + 1}번째 블록이 들어갈 시간선 이름`, fallback);
+          if (value == null) return;
+          const label = cleanLogTimelineLabel(value) || DEFAULT_LOG_TIMELINE;
+          if (!label) { notify('시간선 이름을 입력해 주세요.', 'warn', 3200); return; }
+          if (labels.some(item => normalizedLogTimelineKey(item) === normalizedLogTimelineKey(label))) { notify('시간선 이름은 서로 달라야 합니다.', 'warn', 3600); return; }
+          labels.push(label);
+        }
+        const targetByIndex = new Map();
+        groups.forEach(group => group.blocks.forEach((block, index) => targetByIndex.set(block.index, labels[index])));
+        const replacements = blocks.filter(block => targetByIndex.has(block.index)).map(block => ({
+          start:block.sourceStart,
+          end:block.headingEnd,
+          text:formatLogHeadingForTimeline(block, targetByIndex.get(block.index)),
+        })).sort((a,b) => b.start - a.start);
+        let next = String(log?.content || '');
+        replacements.forEach(replacement => { next = next.slice(0, replacement.start) + replacement.text + next.slice(replacement.end); });
+        const nextBlocks = parseDatedLogBlocks(next);
+        if (nextBlocks.length !== blocks.length) { notify('시간선 분리 후 블록 수가 달라져 적용을 중단했습니다.', 'error', 5200); return; }
+        log.content = next;
+        remapLogSelectionKeysByIndex(room, blocks, nextBlocks);
+        room.logTimelines = [...new Set([...(room.logTimelines || []), ...labels])];
+        room.activeLogTimeline = labels[labels.length - 1] || activeLogTimelineLabel(room);
+        normalizeRoomLogTimelines(room);
+        finish(true);
+      };
+      backdrop.querySelector('[data-act="confirm"]').onclick = () => {
+        const selectedByDate = new Map();
+        for (const group of groups) {
+          const groupEl = backdrop.querySelector(`.rpcm-dup-group[data-date-key="${CSS.escape(group.dateKey)}"]`);
+          const selected = groupEl?.querySelector('input[type="radio"]:checked');
+          if (!selected) { notify(`${group.label}: 유지할 블록을 선택해 주세요.`, 'warn', 4200); return; }
+          const choice = selected.closest('.rpcm-dup-choice');
+          const rawHeading = String(choice?.querySelector('.rpcm-dup-heading input')?.value || '').replace(/[\r\n]+/g, ' ').trim();
+          const innerHeading = rawHeading.replace(/^\[/, '').replace(/\]$/, '').trim();
+          const heading = /^\[[^\]\n]+\]$/.test(rawHeading) ? rawHeading : innerHeading ? `[${innerHeading}]` : '';
+          const body = String(choice?.querySelector('.rpcm-dup-editor')?.value || '').trim();
+          const edited = `${heading}${body ? `\n${body}` : ''}`.trim();
+          if (!heading || parseDatedLogBlocks(edited).length !== 1) {
+            notify(`${group.label}: 날짜 제목을 [2027년 10월 4일-키워드] 형태로 입력해 주세요.`, 'warn', 5200);
+            return;
+          }
+          selectedByDate.set(group.dateKey, { index: Number(selected.value), text: edited });
+        }
+
+        const src = normalizeLineBreaks(log?.content || '');
+        const prefix = blocks.length && blocks[0].sourceStart > 0 ? src.slice(0, blocks[0].sourceStart).trim() : '';
+        const duplicateDates = new Set(groups.map(g => g.dateKey));
+        const pieces = prefix ? [prefix] : [];
+        const pieceOriginKeys = [];
+        for (const block of blocks) {
+          if (!duplicateDates.has(block.dateKey)) {
+            pieces.push(String(block.raw || '').trim());
+            pieceOriginKeys.push(String(block.key));
+            continue;
+          }
+          const chosen = selectedByDate.get(block.dateKey);
+          if (chosen?.index === block.index) {
+            pieces.push(chosen.text);
+            pieceOriginKeys.push(String(block.key));
+          }
+        }
+        const liveLog = (room.slots || []).find(s => s.id === 'logSummary');
+        if (!liveLog) { notify('현재 로그요약 항목을 찾지 못해 적용을 중단했습니다.', 'error', 6200); return; }
+        liveLog.content = pieces.filter(Boolean).join('\n\n').trim();
+        const nextBlocks = parseDatedLogBlocks(liveLog.content);
+        const keyMap = new Map();
+        pieceOriginKeys.forEach((origin, index) => {
+          if (nextBlocks[index]) keyMap.set(origin, String(nextBlocks[index].key));
+        });
+        remapLogSelectionKeys(room, keyMap, nextBlocks);
+        finish(true);
+      };
+      backdrop.onclick = e => { if (e.target === backdrop) finish(false); };
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // IndexedDB
+  // ---------------------------------------------------------------------------
+
+  function openDb() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(APP.dbName, APP.dbVersion);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(APP.storeName)) {
+          db.createObjectStore(APP.storeName, { keyPath: 'chatId' });
+        }
+        if (!db.objectStoreNames.contains(APP.libraryStoreName)) {
+          db.createObjectStore(APP.libraryStoreName, { keyPath: 'scopeId' });
+        }
+      };
+      req.onsuccess = () => {const db=req.result;db.onversionchange=()=>{db.close();notify('저장소가 다른 탭에서 변경되었습니다. 새로고침 후 다시 저장하세요.','warn',8000);};resolve(db);};
+      req.onblocked=()=>notify('다른 RP Manager 탭이 저장소를 사용 중입니다. 다른 탭을 닫고 다시 시도하세요.','warn',8000);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+
+  async function getRoom(chatId, apiChatId = null) {
+    const room = await new Promise((resolve, reject) => {
+      const tx = state.db.transaction(APP.storeName, 'readonly');
+      const req = tx.objectStore(APP.storeName).get(chatId);
+      req.onsuccess = () => wishResolveStorageRecord(req,null,resolve,reject);
+      req.onerror = () => reject(req.error);
+      tx.onabort = () => reject(tx.error || new Error('IndexedDB 조회가 취소되었습니다.'));
+      tx.onerror = () => reject(tx.error || new Error('IndexedDB 조회 실패'));
+    });
+
+    if (room) {
+      state.roomObjectEpochs||=new WeakMap();
+      state.roomObjectEpochs.set(room,Number(state.roomResetEpochs?.get(String(room.chatId))||0));
+      rpcmRememberRoomBaseline(room);
+      const restoredPolicy=restoreTemp48RoomPolicy(room);
+      const needsStoryLogMigration = !room.storyLogReviewRevisionV1 || !room.storyTimelineGuideRevisionV15;
+      if (!Array.isArray(room.lorePacks)) room.lorePacks = [];
+      normalizeRoomSlots(room);
+      const oldPersonBuiltin = isLegacyBuiltinPersonGuide(room.personStateGuide);
+      if (oldPersonBuiltin) room.personStateGuide = canonicalGuideText('personInfo');
+      const oldLoreBuiltin = [PREVIOUS_MANUAL_LORE_GUIDE_V2_0_1,PREVIOUS_CANONICAL_GUIDES_V01456.lore].includes(room.manualUpdateGuides?.lore);
+      if (oldLoreBuiltin) delete room.manualUpdateGuides.lore;
+      const oldTimelineBuiltin = !room.storyTimelineGuide || room.storyTimelineGuide === STORY_TIMELINE_GUIDE_V15 || room.storyTimelineGuide === LEGACY_CANONICAL_GUIDES.timeline || room.storyTimelineGuide === PREVIOUS_CANONICAL_GUIDES_V01456.timeline;
+      if (oldTimelineBuiltin) {
+        room.storyTimelineGuide = canonicalGuideText('timeline');
+        room.storyTimelineGuideSource = 'builtin-v1.7.2';
+      }
+      normalizeAiReviewInbox(room);
+      room.maxChars = APP.defaultMaxChars;
+      room.apiChatId = room.apiChatId || apiChatId || String(chatId).split('::')[0];
+      if (room.pending) {
+        room.pending.contextBlock = String(room.pending.contextBlock || '');
+        room.pending.sessionStartedAt = Number(room.pending.sessionStartedAt || room.pending.armedAt || Date.now());
+        normalizePendingSlotMetadata(room);
+        if (!Array.isArray(room.pending.items) || !room.pending.items.length) {
+          const legacyTotal = room.pending.totalTurns == null ? APP.defaultRetentionTurns : normalizeRetentionTurns(room.pending.totalTurns);
+          const legacyUsed = Number(room.pending.usedTurns || 0);
+          room.pending.items = selectedSlots(room).map(slot => ({
+            slotId: slot.id, title: slot.title, group: slot.group, content: String(slot.content || ''),
+            totalTurns: normalizeRetentionTurns(slot.retentionTurns ?? legacyTotal), usedTurns: legacyUsed,
+          }));
+        }
+      }
+      if (restoredPolicy || needsStoryLogMigration || oldPersonBuiltin || oldLoreBuiltin || oldTimelineBuiltin) await saveRoom(room);
+      if(restoredPolicy&&room.rpcmTemp48PolicyRestore.missing.length)notify('이 방의 이전 설정 백업이 일부 없어 저장된 방별 설정을 유지했습니다. 자동 반영·알림 설정을 확인해 주세요.','warn',8000);
+      return room;
+    }
+
+    const created = {
+      chatId,
+      apiChatId: apiChatId || String(chatId).split('::')[0],
+      label: '',
+      maxChars: APP.defaultMaxChars,
+      slots: cloneSlots(),
+      pending: null,
+      autoCharacterDetection: false,
+      autoCharacterIncludeUnchecked: false,
+      autoCharacterLibraryId: '',
+      lastExtraLibraryId: '',
+      autoCharacterResetOnReappear: true,
+      autoItemDetection: true,
+      autoItemResetOnReappear: true,
+      allowedDuplicateItemSignatures: [],
+      autoLogRecallEnabled: false,
+      autoLogRecentBlocks: APP.defaultRecentLogBlocks,
+      autoLogRelevance: 'balanced',
+      autoLogRelatedBlocks: APP.defaultRelatedLogBlocks,
+      autoLogPinnedKeys: [],
+      autoLogExcludedKeys: [],
+      manualLogSelectedKeys: [],
+      favoriteLogKeys: [],
+      acceptedUnknownLogKeys: [],
+      aiContextLogRerankEnabled: false,
+      aiApiUsage: { version:1, features:{ summary:emptyRoomAiFeatureUsage(), timeline:emptyRoomAiFeatureUsage(), context:emptyRoomAiFeatureUsage(), itemFolder:emptyRoomAiFeatureUsage(), utility:emptyRoomAiFeatureUsage(), longTermManualFirst:emptyRoomAiFeatureUsage(), longTermAutoFirst:emptyRoomAiFeatureUsage(), longTermSecond:emptyRoomAiFeatureUsage(), longTermNative:emptyRoomAiFeatureUsage() }, history:[] },
+      logTimelines: [DEFAULT_LOG_TIMELINE],
+      activeLogTimeline: DEFAULT_LOG_TIMELINE,
+      storyTimelineCards: [],
+      lorePacks: [],
+      userCanonMemos: [],
+      knowledgeCards: [],
+      knowledgeInjectionEnabled: false,
+      personStateRecords: [],
+      personStateInjectionEnabled: false,
+      personPlayerName: '',
+      personBundleV01411: true,
+      storyTimelineInjectionEnabled: true,
+      storyLogReviews: [],
+      storyTimelineGuide: canonicalGuideText('timeline'),
+      storyTimelineGuideSource: 'builtin-v1.7.2',
+      storyTimelineGuideRevisionV15: true,
+      storyTimelinePendingReview: null,
+      storyLogReviewRevisionV1: true,
+      storyTimelineLastReviewedMessageId: '',
+      storyTimelineLastReviewedAt: '',
+      storyTimelineReviewSettings: { threshold:50, menuBadge:true, topNotice:true, popup:false, dateIndicator:true, monthlyFold:true, monthlyFoldMin:8 },
+      storyTimelineLastDiff: [],
+      storyTimelineBackup: null,
+      storyTimelineApiDraft: null,
+      storyTimelineApiHistory: [],
+      storyTimelineAuditHistory: [],
+      storyTimelineManualRun: null,
+      storyTimelineCarryoverTurnKeys: [],

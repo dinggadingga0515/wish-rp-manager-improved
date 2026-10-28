@@ -1,0 +1,1000 @@
+    document.getElementById('rpcm-ai-draft-popup')?.remove();
+    const popup=document.createElement('aside');popup.id='rpcm-ai-draft-popup';popup.setAttribute('role','status');popup.setAttribute('aria-live','polite');
+    popup.innerHTML=`<header><strong>AI 초안이 준비됐어요</strong><button type="button" data-popup-close aria-label="알림 닫기" data-rpcm-close="icon">${rpcmUiIcon('close')}</button></header><p>${esc(drafts.map(d=>AI_MEMORY_AREAS[d.area].label).join(' · '))} · 완료 RP ${Number(drafts[0].turnCount)||0}턴</p><small>변경 내용을 확인한 뒤 적용할 수 있어요.</small><div>${drafts.map(d=>`<button type="button" class="rpcm-btn secondary" data-popup-review="${esc(d.area)}">${esc(AI_MEMORY_AREAS[d.area].label)} 초안 보기</button>`).join('')}</div>`;
+    popup.querySelector('[data-popup-close]').onclick=()=>popup.remove();
+    popup.querySelectorAll('[data-popup-review]').forEach(button=>button.onclick=()=>{
+      if(state.currentRoom!==room){popup.remove();return;}
+      aiMemoryReviewDialog(room,button.dataset.popupReview);popup.remove();
+    });
+    popup.dataset.roomId=String(room.chatId);document.body.appendChild(popup);
+  }
+  async function aiMemorySettleReviewedSave(room,area){
+    const key=String(room.chatId||'');
+    if(manualUpdateRuntime.commits.has(key)||manualUpdateRuntime.commitLocks.has(key))throw new Error('다른 결과를 저장 중입니다. 완료 뒤 다시 적용해 주세요.');
+    const timer=state.autoSaveTimers.get(key);
+    if(timer){clearTimeout(timer);state.autoSaveTimers.delete(key);await saveRoom(room,'ai-memory-flush-editor');}
+    const queue=state.roomSaveQueues?.get(key);if(queue)await queue;
+    if(state.saveStatus==='error')throw new Error('로컬 저장에 실패한 편집이 있습니다. 저장을 다시 완료해 주세요.');
+    let stored=await readManualStoredRoom(room);
+    if(!stored)throw new Error('현재 방의 저장본을 찾지 못했습니다.');
+    if(aiMemoryComparableSnapshot(aiMemoryAreaSnapshot(stored,area),area)!==aiMemoryComparableSnapshot(aiMemoryAreaSnapshot(room,area),area))throw new Error('적용할 영역의 기억이 다른 저장본에서 변경됐습니다. 새 저장본과 다시 비교해 주세요.');
+    // UI normalizers and polling can add unsaved metadata at the same revision.
+    // Persist those through the existing revision-protected queue before committing.
+    if(JSON.stringify(stored)!==JSON.stringify(room)){
+      if(Number(stored._rpcmRevision||0)!==Number(room._rpcmRevision||0)){
+        const rebased=rpcmRebaseRoomOntoStored(room,stored);
+        if(!rebased.ok)throw new Error(`다른 저장 작업과 충돌했습니다. ${rebased.reason}`);
+        rpcmRememberRoomBaseline(stored);rpcmReplaceRoomObject(room,rebased.room);
+      }
+      await saveRoom(room,'ai-memory-flush-metadata');stored=await readManualStoredRoom(room);
+    }
+    if(!stored||JSON.stringify(stored)!==JSON.stringify(room))throw new Error('저장 중 새 변경이 들어왔습니다. 변경 내용을 다시 확인해 주세요.');
+    return stored;
+  }
+
+  function aiMemorySameDraft(a,b) {
+    return !!a&&!!b&&a.createdAt===b.createdAt&&a.sourceHash===b.sourceHash&&a.area===b.area&&a.output===b.output;
+  }
+  function aiMemoryManualWaiting(room,area) {
+    const task=AI_MEMORY_AREAS[area].manual,job=room.manualPendingJobs?.[task],integrated=room.manualIntegratedJob;
+    return !!(job&&!['applied','cancelled'].includes(job.status))||!!(integrated&&!['applied','cancelled'].includes(integrated.status));
+  }
+  function aiMemoryPolicyMatches(room,area,draft) {
+    if(!room)return false;
+    if((draft.globalPolicyRevision||0)!==(0))return false;
+    const config=aiMemoryConfig(room),row=config.areas[area];
+    return config.enabled&&row.enabled&&row.autoApply&&!aiMemoryManualWaiting(room,area)
+      &&draft.autoApplyEligible===true&&draft.applyRevision===row.applyRevision
+      &&draft.globalApplyRevision===config.applyRevision
+      &&draft.connectionStamp===JSON.stringify(aiFeatureSettings(loadAiSummarySettings(),area==='timeline'?'timeline':'summary'));
+  }
+  function aiMemoryAutoPermission(room,area,draft) {return !areaResetPaused(room)&&state.currentRoom===room&&aiMemoryPolicyMatches(room,area,draft); }
+  function aiMemoryEditingNow() {
+    const active=document.activeElement;
+    return !!document.querySelector('#rpcm-area-reset-dialog,#rpcm-ai-memory-backdrop,#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-compression-backdrop,#rpcm-lore-dialog-backdrop,#wish-rpcore-refiner-confirm,.rpcm-ltm-backdrop')
+      ||!!(state.modal?.contains(active)&&active?.matches('textarea,input:not([type=checkbox]):not([type=button]),[contenteditable=true]'));
+  }
+  async function aiMemoryCommitDraft(room,area,draft,prepared,automatic=false,noChangeAutomatic=false) {
+    if(areaResetPaused(room))throw new Error('영역 초기화 창을 닫은 뒤 다시 시도해 주세요.');
+    const row=aiMemoryConfig(room).areas[area],roomKey=String(room.chatId);
+    let storedSnapshot='',releaseAiCommit=null;
+    const assertPermission=()=>{
+      const current=aiMemoryConfig(room).areas[area].draft;
+      if(noChangeAutomatic&&!aiMemoryNoChangePermission(room,area,draft))throw new Error('변경 없음 자동 검토 설정·방·기준점이 바뀌었습니다.');
+      if(!aiMemorySameDraft(current,draft))throw new Error('초안이 교체되거나 처리됐습니다.');
+      if(current.stale)throw new Error(current.staleReason||'원문 변경으로 초안을 다시 검토해 주세요.');
+      if(automatic&&(!aiMemoryAutoPermission(room,area,draft)||aiMemoryEditingNow()))throw new Error('자동 반영을 보류했습니다. 설정·작업 모드를 확인하고 초안을 검토해 주세요.');
+    };
+    const releaseOwnedCommit=()=>{if(releaseAiCommit){manualUpdateRuntime.commits.delete(roomKey);manualUpdateRuntime.commitLocks.delete(roomKey);releaseAiCommit();releaseAiCommit=null;}};
+    try{
+      assertPermission();
+      await aiMemoryAssertDraft(room,area,draft);
+      assertPermission();
+      const latestStored=await aiMemorySettleReviewedSave(room,area);
+      const lock=new Promise(resolve=>{releaseAiCommit=resolve;});manualUpdateRuntime.commits.add(roomKey);manualUpdateRuntime.commitLocks.set(roomKey,lock);
+      assertPermission();
+      prepared=aiMemoryRebasePreview(room,area,prepared);
+      storedSnapshot=JSON.stringify(latestStored);
+      const candidate=prepared.candidate,config=aiMemoryConfig(candidate),target=config.areas[area];
+      const noChange=aiMemoryIsNoChange(room,area,prepared);
+      if(noChangeAutomatic&&!noChange)throw new Error('실제 변경이 있는 초안은 변경 없음으로 자동 완료할 수 없습니다.');
+      if(prepared.reviewSelection?.originalChanged&&prepared.reviewSelection.selected===0)throw new Error('실제 변경이 있는 초안에서 선택한 항목이 없습니다. 변경 없음으로 완료할 수 없습니다.');
+      if(!noChange){config.undo.push({area,at:nowIso(),previous:JSON.parse(aiMemoryAreaSnapshot(room,area)),after:JSON.parse(aiMemoryAreaSnapshot(candidate,area)),cursor:row.cursor,baseline:row.baseline,appliedAt:row.appliedAt,lastAppliedStart:row.lastAppliedStart||'',lastAppliedEnd:row.lastAppliedEnd||'',lastAttemptKey:row.lastAttemptKey||'',sourceAnchor:structuredClone(room.aiMemorySourceAnchors?.[area]||null)});config.undo=config.undo.filter((entry,index,all)=>all.slice(index+1).filter(next=>next.area===entry.area).length<3).slice(-18);}
+      if(noChange){if(room.pending)candidate.pending=structuredClone(room.pending);if(area==='personInfo')candidate.personLastImportSummary=room.personLastImportSummary;}
+      target.checkedSourceHash=String(draft.sourceHash||'');target.checkedResultHash=await longTermHash(aiMemoryAreaSnapshot(candidate,area));
+      if(draft.endAnchorEvidence){candidate.aiMemorySourceAnchors||={};candidate.aiMemorySourceAnchors[area]=structuredClone(draft.endAnchorEvidence);}
+      target.cursor=draft.endKey;target.lastAttemptKey=String(row.lastAttemptKey||draft.endKey);target.failedEnd='';target.lastCheckedStart=draft.startKey;target.lastCheckedEnd=draft.endKey;target.checkedAt=nowIso();if(!noChange){target.lastAppliedStart=draft.startKey;target.lastAppliedEnd=draft.endKey;target.appliedAt=target.checkedAt;}target.lastCheckNoChange=noChange;target.draft=null;target.status=noChange?'변경 없음 · 검토 완료':automatic?'자동 반영 완료':'적용 완료';target.autoApplyError='';target.error='';target.plannedStart='';target.plannedEnd='';
+      if(!noChange)await rpcmAttachBranchReceipt(candidate,room,area,draft.historyPrefix,'ai-memory');
+      candidate.updatedAt=nowIso();
+      if(!noChange)await stampVerifiedResult(candidate,AI_MEMORY_AREAS[area].manual,'ai-memory',draft);
+      const writeStartedAt=nowIso();
+      await new Promise((resolve,reject)=>{const tx=state.db.transaction(APP.storeName,'readwrite'),store=tx.objectStore(APP.storeName),request=store.get(room.chatId);let conflictReason='';request.onsuccess=()=>{try{assertPermission();}catch(error){conflictReason=error.message;tx.abort();return;}let persisted;try{persisted=wishLocalStorageRecord(request.result||null);}catch(error){conflictReason='저장본 복사 실패: '+error.message;tx.abort();return;}if(noChangeAutomatic&&(!persisted||!aiMemoryNoChangeStoredPermission(persisted,area,draft))){conflictReason='다른 탭에서 자동 검토 설정 또는 초안·기준점이 변경됐습니다.';tx.abort();return;}if(automatic&&(!aiMemoryPolicyMatches(persisted,area,draft)||!aiMemorySameDraft(aiMemoryConfig(persisted).areas[area].draft,draft)||aiMemoryConfig(persisted).areas[area].draft?.stale)){conflictReason='다른 탭에서 자동 반영 설정 또는 초안이 변경됐습니다.';tx.abort();return;}if(JSON.stringify(room)!==prepared.baseSnapshot){conflictReason='현재 화면 데이터가 검토 뒤 다시 바뀌었습니다.';traceRoomWrite(candidate,'ai-memory:'+area,'stale-rejected',room._rpcmRevision,persisted?._rpcmRevision,'',{startedAt:writeStartedAt,before:persisted||{}});tx.abort();return;}if(JSON.stringify(persisted)!==storedSnapshot){const base=JSON.parse(storedSnapshot),sameArea=aiMemoryComparableSnapshot(aiMemoryAreaSnapshot(persisted,area),area)===aiMemoryComparableSnapshot(aiMemoryAreaSnapshot(base,area),area);if(!sameArea){conflictReason='적용하려는 기억 영역이 다른 저장 작업에서 변경됐습니다.';traceRoomWrite(candidate,'ai-memory:'+area,'stale-rejected',room._rpcmRevision,persisted?._rpcmRevision,'',{startedAt:writeStartedAt,before:persisted||{}});tx.abort();return;}const conflicts=[],merged=rpcmThreeWayNode(true,base,true,candidate,true,persisted,'',conflicts).value;if(conflicts.length){conflictReason=`동시에 수정된 항목이 있습니다: ${conflicts.slice(0,4).join(', ')}`;traceRoomWrite(candidate,'ai-memory:'+area,'stale-rejected',room._rpcmRevision,persisted?._rpcmRevision,'',{startedAt:writeStartedAt,before:persisted||{}});tx.abort();return;}rpcmReplaceRoomObject(candidate,merged);traceRoomWrite(candidate,'ai-memory:'+area,'stale-rebased',room._rpcmRevision,persisted?._rpcmRevision,'',{startedAt:writeStartedAt,before:persisted||{},after:candidate});}candidate._rpcmRevision=Number(persisted?._rpcmRevision||0)+1;candidate.updatedAt=nowIso();store.put(candidate);};request.onerror=()=>tx.abort();tx.oncomplete=()=>{traceRoomWrite(candidate,'ai-memory:'+area,'committed',room._rpcmRevision,candidate._rpcmRevision,'',{startedAt:writeStartedAt,before:JSON.parse(storedSnapshot)||{}});resolve();};tx.onabort=()=>reject(new Error(conflictReason||'IndexedDB 저장 실패 · 어느 항목도 적용되지 않았습니다.'));tx.onerror=()=>reject(tx.error||new Error('저장 실패'));});
+      const verifiedAi=await readManualStoredRoom(room);
+      if(!verifiedAi||aiMemoryAreaSnapshot(verifiedAi,area)!==aiMemoryAreaSnapshot(candidate,area)||aiMemoryConfig(verifiedAi).areas[area].cursor!==draft.endKey)
+        throw new Error('AI 결과 저장 후 IndexedDB 재확인에 실패했습니다. 적용 완료로 표시하지 않았습니다.');
+      const checked=aiMemoryConfig(verifiedAi).areas[area];
+      if(checked.lastCheckedStart!==draft.startKey||checked.lastCheckedEnd!==draft.endKey||checked.checkedSourceHash!==String(draft.sourceHash||'')||checked.checkedResultHash!==await longTermHash(aiMemoryAreaSnapshot(verifiedAi,area)))throw new Error('검토 기록 또는 저장 결과 해시의 재확인에 실패했습니다.');
+      const finalizedAi=noChange?verifiedAi:await finalizeStoredResultReceipts(room,verifiedAi,[AI_MEMORY_AREAS[area].manual],'ai-memory:'+area);
+      const lateEdits=JSON.stringify(room)!==prepared.baseSnapshot;
+      rpcmReplaceRoomObject(room,rpcmKeepLateEdits(JSON.parse(prepared.baseSnapshot),room,finalizedAi));rpcmRememberRoomBaseline(finalizedAi);state.lastSavedAt=Date.now();updateSaveStatusUi('saved');
+      releaseOwnedCommit();
+      if(lateEdits)await saveRoom(room,'ai-memory-late-edits');
+      notify(noChange?`${AI_MEMORY_AREAS[area].label} 변경 없음 · 검토 완료`:`${AI_MEMORY_AREAS[area].label} AI ${automatic?'자동 반영':'초안 적용'} 완료`,'success');
+      if(!noChange&&room.pending){try{const result=await aiMemorySyncPending(room,area);if(result?.suspended||room.pending?.reanchorRetry)notify('로컬 저장 완료 · 현재 주입 반영 대기','warn',6500);}catch(error){notify(`로컬 저장 완료 · 현재 주입 반영 대기: ${error.message}`,'warn',6500);}}
+
+      try{if(!noChange)rpcmAiMemoryAppliedNotice(room,area,automatic);}catch(error){console.warn('[WRPM] 적용 성공 알림 표시 실패',error);}
+      return true;
+    }finally{releaseOwnedCommit();}
+  }
+  function aiMemoryNoChangeStoredPermission(room,area,draft){
+    if(!room||!AI_MEMORY_AREAS[area])return false;
+    const config=aiMemoryConfig(room),row=config.areas[area];
+    return config.enabled&&row.enabled&&!aiMemoryManualWaiting(room,area)&&aiMemoryAnchorReadyForAutomation(room,area)
+      &&aiMemorySameDraft(row.draft,draft)&&!row.draft?.stale;
+  }
+  function aiMemoryNoChangePermission(room,area,draft){
+    return !state.fullBackupRestoreBusy&&state.currentRoom===room&&!aiMemoryEditingNow()&&aiMemoryNoChangeStoredPermission(room,area,draft);
+  }
+  async function aiMemoryTryCompleteNoChange(room,area,draft){
+    if(!aiMemoryNoChangePermission(room,area,draft))return false;
+    try{
+      await aiMemoryAssertDraft(room,area,draft);
+      if(!aiMemoryNoChangePermission(room,area,draft))return false;
+      const prepared=aiMemoryPrepare(room,area,draft,draft.output);
+      if(!aiMemoryIsNoChange(room,area,prepared))return false;
+      const turns=await aiMemoryAssertSource(room,draft);
+      if(!aiMemoryNoChangePermission(room,area,draft)||settledAutomaticTurns(turns).length<=draft.endIndex)return false;
+      if(aiMemoryEffectiveCursor(room,area,turns).index>=draft.startIndex)return false;
+      // Acknowledgment keeps all source bodies/options and pending injection intact.
+      prepared.candidate=structuredClone(room);
+      prepared.baseSnapshot=JSON.stringify(room);
+      await aiMemoryCommitDraft(room,area,draft,prepared,false,true);
+      aiMemoryRuntime.lastCounts.delete(String(room.chatId));aiMemoryRefreshStatusUi(room);return true;
+    }catch(error){console.warn('[RP매니저] 변경 없는 초안 확인 보류',error);return false;}
+  }
+  async function aiMemoryTryAutoApply(room,area,draft) {
+    if(state.fullBackupRestoreBusy||state.currentRoom!==room||!aiMemoryAnchorReadyForAutomation(room,area))return false;
+    if(await aiMemoryTryCompleteNoChange(room,area,draft))return true;
+    if(!aiMemoryAutoPermission(room,area,draft))return false;
+    const row=aiMemoryConfig(room).areas[area];
+    if(row.autoApplyError||aiMemoryEditingNow())return false;
+    try{
+      const turns=await aiMemoryAssertSource(room,draft);
+      if(settledAutomaticTurns(turns).length<=draft.endIndex)throw new Error('응답교정 확인 전인 원문은 초안 검토 후 적용해 주세요.');
+      const cursor=aiMemoryEffectiveCursor(room,area,turns);
+      if(cursor.index>=draft.startIndex)throw new Error('다른 작업이 이 구간을 이미 처리했습니다. 중복 자동 반영을 보류합니다.');
+      const prepared=aiMemoryPrepare(room,area,draft,draft.output);
+      await aiMemoryCommitDraft(room,area,draft,prepared,true);
+      const counts=aiMemoryRuntime.lastCounts.get(String(room.chatId));
+      if(counts){counts[area]=Math.max(0,turns.length-draft.endIndex-1);counts.ready||={};counts.ready[area]=counts[area];}
+      aiMemoryRefreshStatusUi(room);return true;
+    }catch(error){
+      if(state.currentRoom===room&&aiMemorySameDraft(aiMemoryConfig(room).areas[area].draft,draft)){
+        const current=aiMemoryConfig(room).areas[area];current.status='자동 반영 보류 · 초안 검토';current.autoApplyError=String(error.message||error);current.error='';
+        await saveRoom(room).catch(()=>{});aiMemoryRefreshStatusUi(room);
+      }
+      return false;
+    }
+  }
+
+  function aiMemoryReviewDialog(room,area) {
+    const row=aiMemoryConfig(room).areas[area],draft=row.draft;
+    if(!draft){notify('검토할 AI 초안이 없습니다.','warn');return;}
+    document.querySelector('#rpcm-ai-memory-backdrop')?.remove();
+    const backdrop=document.createElement('div');backdrop.id='rpcm-ai-memory-backdrop';
+    backdrop.innerHTML=`<section class="rpcm-update-dialog rpcm-update-result-dialog" role="dialog" aria-modal="true" aria-labelledby="rpcm-ai-review-title"><header><div><span class="rpcm-ai-review-eyebrow">AI 기억정리 · 검토 대기</span><h2 id="rpcm-ai-review-title">${esc(AI_MEMORY_AREAS[area].label)} 변경 내용</h2><p>완료 RP ${draft.startIndex+1}–${draft.endIndex+1}턴 · ${draft.turnCount}턴 분석 · 아직 적용되지 않았어요</p></div><button type="button" class="rpcm-update-dialog-close" data-ai-memory-close aria-label="닫기" data-rpcm-close="icon">${rpcmUiIcon('close')}</button></header><div class="rpcm-update-result-body"><div class="rpcm-update-result-status" role="status">변경 내용을 불러오고 있어요…</div><div class="rpcm-ai-memory-selection"></div><details class="rpcm-ai-review-raw"><summary>초안 원문 수정</summary><p>직접 수정한 뒤 변경 내용 확인을 눌러 주세요.</p><textarea class="rpcm-ai-memory-output" spellcheck="false" aria-label="${esc(AI_MEMORY_AREAS[area].label)} 초안 원문"></textarea><button type="button" class="rpcm-btn secondary" data-ai-memory-save-draft>수정 초안 저장</button></details><details class="rpcm-ai-review-diff" hidden><summary>자세한 변경 비교</summary><div class="rpcm-update-diff"></div></details></div><footer><button type="button" class="rpcm-btn secondary" data-ai-memory-discard>초안 버리기</button><div><button type="button" class="rpcm-btn secondary" data-ai-memory-check>변경 내용 확인</button><button type="button" class="rpcm-btn primary" data-ai-memory-apply disabled>선택한 항목 적용</button></div></footer></section>`;
+    const input=backdrop.querySelector('textarea');
+    let companion=null;
+    if(!draft.sharedCurrentItems&&['currentState','importantItems'].includes(area)){
+      try{companion=aiMemoryOutputValues(area,draft.output);input.value=companion[area];}catch(_){input.value=draft.output;}
+    }else input.value=draft.output;
+    const editableOutput=()=>companion?JSON.stringify({...companion,[area]:input.value}):input.value;
+    const status=backdrop.querySelector('.rpcm-update-result-status'),diff=backdrop.querySelector('.rpcm-update-diff'),diffDetails=backdrop.querySelector('.rpcm-ai-review-diff'),selection=backdrop.querySelector('.rpcm-ai-memory-selection');
+    const check=backdrop.querySelector('[data-ai-memory-check]'),apply=backdrop.querySelector('[data-ai-memory-apply]');
+    let prepared=null,initialPrepared=null,storedSnapshot='',busy=false;
+    input.oninput=()=>{prepared=null;initialPrepared=null;apply.disabled=true;diffDetails.hidden=true;selection.innerHTML='';status.textContent='초안 수정됨 · 다시 검증해 주세요.';};
+    const showSelectedDiff=()=>{
+      const keys=[...selection.querySelectorAll('[data-ai-memory-change]:checked')].map(input=>input.dataset.aiMemoryChange);
+      if(selection.querySelectorAll('[data-ai-memory-change]').length&&!keys.length){prepared=null;apply.disabled=true;diffDetails.hidden=true;status.textContent='적용할 변경을 하나 이상 선택해 주세요.';return;}
+      selection.querySelectorAll('[data-ai-memory-change]').forEach(input=>input.closest('.rpcm-ai-review-change')?.classList.toggle('is-excluded',!input.checked));
+      prepared=aiMemorySelectedPreview(room,area,draft,editableOutput(),keys,initialPrepared);
+      const noChange=aiMemoryIsNoChange(room,area,prepared);
+      apply.textContent=noChange?'변경 없음으로 검토 완료':keys.length?`${keys.length}개 항목 적용`:'변경 내용 적용';
+      diff.innerHTML=`<p class="rpcm-update-diff-summary">${prepared.summary.map(esc).join(' · ')} · 선택한 변경만 적용</p>${manualUpdateDiffHtml(prepared)}`;
+      diffDetails.hidden=false;apply.disabled=false;status.textContent=noChange?'변경 없음 확인 · 완료 버튼을 누르면 검토한 범위만 기록합니다. 기존 적용 기록과 기억 내용은 유지됩니다.':'검증 완료 · 선택한 변경만 저장합니다. 이후 새 RP는 다음 작업에 이어서 반영됩니다.';
+    };
+    selection.addEventListener('change',event=>{if(!event.target.matches('[data-ai-memory-change]'))return;try{showSelectedDiff();}catch(error){prepared=null;apply.disabled=true;status.textContent=`선택 검증 실패: ${error.message}`;}});
+    check.onclick=async()=>{check.disabled=true;apply.disabled=true;status.textContent='원문·지침·저장본 재검증 중…';try{
+      await aiMemoryAssertDraft(room,area,draft);
+      const initial=aiMemoryPrepare(room,area,draft,editableOutput());initialPrepared=initial;
+      const stored=await aiMemorySettleReviewedSave(room,area);
+      if(!stored||aiMemoryComparableSnapshot(aiMemoryAreaSnapshot(stored,area),area)!==aiMemoryComparableSnapshot(aiMemoryAreaSnapshot(room,area),area))throw new Error('현재 화면과 저장된 기억이 다릅니다. 저장이 완료된 뒤 다시 확인해 주세요.');
+      storedSnapshot=JSON.stringify(stored);
+      const rows=aiMemoryChangeRows(room,area,initial);
+      selection.innerHTML=aiMemoryReviewCardsHtml(room,area,initial,rows);
+      showSelectedDiff();
+    }catch(error){prepared=null;status.textContent=`적용 불가: ${error.message}`;}finally{check.disabled=false;}};
+    apply.onclick=async()=>{if(!prepared||busy)return;if(!confirm(`${AI_MEMORY_AREAS[area].label} ${aiMemoryIsNoChange(room,area,prepared)?'변경 없음으로 검토를 완료할까요?':'AI 초안을 저장할까요?'}\n수동 체크포인트는 변경하지 않습니다.`))return;busy=true;apply.disabled=true;status.textContent='원문·저장본 최종 확인 및 저장 중…';const roomKey=String(room.chatId);let releaseAiCommit=null;const releaseOwnedCommit=()=>{if(releaseAiCommit){manualUpdateRuntime.commits.delete(roomKey);manualUpdateRuntime.commitLocks.delete(roomKey);releaseAiCommit();releaseAiCommit=null;}};try{
+      await aiMemoryCommitDraft(room,area,draft,prepared,false);
+      status.textContent='저장 완료 · AI 적용 기준점이 이 항목에서만 이동했습니다.';
+      backdrop.remove();renderModalIfOpen();
+    }catch(error){status.textContent=`저장 실패: ${error.message}`;apply.disabled=false;}finally{releaseOwnedCommit();busy=false;}};
+    backdrop.querySelector('[data-ai-memory-save-draft]').onclick=async()=>{draft.output=editableOutput();await saveRoom(room);prepared=null;apply.disabled=true;status.textContent='수정한 초안을 저장했습니다. 적용 전에 다시 검증해 주세요.';};
+    backdrop.querySelector('[data-ai-memory-discard]').onclick=async()=>{if(busy||!confirm('미적용 AI 초안을 버릴까요? 저장된 기억은 그대로 유지됩니다.'))return;const discardBefore={draft:row.draft,status:row.status,plannedStart:row.plannedStart,plannedEnd:row.plannedEnd};row.draft=null;row.status='대기';row.plannedStart='';row.plannedEnd='';try{await saveRoom(room);}catch(error){row.draft=discardBefore.draft;row.status=discardBefore.status;row.plannedStart=discardBefore.plannedStart;row.plannedEnd=discardBefore.plannedEnd;status.textContent=`초안 폐기 저장 실패: ${error.message}`;return;}backdrop.remove();renderModalIfOpen();};
+    backdrop.querySelector('[data-ai-memory-close]').onclick=()=>{if(!busy)backdrop.remove();};
+    backdrop.onkeydown=event=>{if(event.key==='Escape'&&!busy)backdrop.remove();};
+    document.body.appendChild(backdrop);backdrop.querySelector('[data-ai-memory-close]').focus();void check.onclick();
+  }
+
+
+  async function aiMemorySyncPending(room,area) {
+    if(!room.pending)return;
+    if(area==='personInfo')return rebuildPendingKnowledgeItem(room);
+    if(area==='timeline')return rebuildPendingStoryTimelineItem(room,'ai-memory-timeline');
+    if(area==='logSummary')return rebuildPendingLogItems(room,'ai-memory-log');
+    const pendingBefore=rpcmRoomClone(room.pending);
+    if(area==='lore'){
+      const previous=clonePendingItems(room.pending.items);
+      refreshPendingLoreItems(room);const attemptedPending=rpcmRoomClone(room.pending);
+      try{return await syncPendingCarrier(room,'ai-memory-lore');}
+      catch(error){if(rpcmRollbackDesiredPending(room,pendingBefore,attemptedPending))await saveRoom(room).catch(()=>{});throw error;}
+    }
+    const previous=structuredClone(room.pending);
+    const slots=new Map((room.slots||[]).map(slot=>[String(slot.id),slot]));
+    for(const field of ['items','quickRemovedItems'])if(Array.isArray(room.pending[field]))room.pending[field]=room.pending[field].map(item=>{
+      const slot=slots.get(String(item.slotId||''));
+      if(!slot || (area==='currentState'?slot.id!=='currentState':slot.group!=='item'))return item;
+      return {...item,title:slot.title,content:String(slot.content||'').trim()};
+    });
+    savePendingBackup(room.chatId,room.pending);
+    const attemptedPending=rpcmRoomClone(room.pending);
+    try{return await syncPendingCarrier(room,`ai-memory-${area}`);}
+    catch(error){if(rpcmRollbackDesiredPending(room,pendingBefore,attemptedPending))await saveRoom(room).catch(()=>{});throw error;}
+  }
+
+  async function aiMemoryUndo(room,area) {
+    const config=aiMemoryConfig(room),index=config.undo.map(entry=>entry.area).lastIndexOf(area);
+    if(index<0)throw new Error('이 항목에 되돌릴 AI 적용 기록이 없습니다.');
+    const entry=config.undo[index];
+    if(aiMemoryAreaSnapshot(room,area)!==JSON.stringify(entry.after))throw new Error('AI apply was followed by a manual edit. Undo is blocked to protect it.');
+    if(!confirm(`${AI_MEMORY_AREAS[area].label}의 직전 AI 적용 내용과 AI 기준점을 되돌릴까요? 현재 저장본의 이후 수동 편집은 덮어쓸 수 있습니다.`))return;
+    const undoBase=JSON.stringify(room);
+    const stored=await readManualStoredRoom(room);
+    if(JSON.stringify(stored)!==JSON.stringify(room))throw new Error('저장본이 바뀌었습니다. 다시 열어 확인해 주세요.');
+    const candidate=structuredClone(room),slots=candidate.slots||[],previous=structuredClone(entry.previous);
+    if(area==='currentState'){const i=slots.findIndex(slot=>slot.id==='currentState');if(i>=0&&previous)slots[i]=previous;}
+    else if(area==='importantItems')candidate.slots=slots.filter(slot=>slot.group!=='item').concat(previous||[]);
+    else if(area==='logSummary'){
+      const i=slots.findIndex(slot=>slot.id==='logSummary');if(i>=0&&previous?.slot)slots[i]=previous.slot;
+      candidate.autoLogPinnedKeys=previous?.pinned||[];candidate.manualLogSelectedKeys=previous?.selected||[];
+    }else if(area==='personInfo'){candidate.knowledgeCards=previous?.knowledge||[];candidate.personStateRecords=previous?.records||[];}
+    else if(area==='lore')candidate.lorePacks=previous||[];
+    else if(area==='timeline'){candidate.storyTimelineCards=previous?.cards||[];candidate.storyTimelineLastReviewedMessageId=previous?.reviewed||'';}
+    const target=aiMemoryConfig(candidate).areas[area];target.cursor=entry.cursor;target.baseline=entry.baseline;target.appliedAt=entry.appliedAt;target.lastAppliedStart=entry.lastAppliedStart;target.lastAppliedEnd=entry.lastAppliedEnd;target.lastAttemptKey=entry.lastAttemptKey||'';target.failedEnd='';candidate.aiMemorySourceAnchors||={};if(entry.sourceAnchor)candidate.aiMemorySourceAnchors[area]=structuredClone(entry.sourceAnchor);else delete candidate.aiMemorySourceAnchors[area];target.status='되돌림';target.draft=null;
+    candidate.aiMemoryAutomation.undo.splice(index,1);candidate.updatedAt=nowIso();
+    await stampVerifiedResult(candidate,AI_MEMORY_AREAS[area].manual,'ai-memory-undo');
+    const writeStartedAt=nowIso();
+    await new Promise((resolve,reject)=>{const tx=state.db.transaction(APP.storeName,'readwrite'),store=tx.objectStore(APP.storeName),request=store.get(room.chatId);request.onsuccess=()=>{if(JSON.stringify(request.result||null)!==JSON.stringify(stored)||JSON.stringify(room)!==undoBase){traceRoomWrite(candidate,'ai-memory-undo:'+area,'stale-rejected',room._rpcmRevision,request.result?._rpcmRevision,'',{startedAt:writeStartedAt,before:request.result||{}});tx.abort();return;}candidate._rpcmRevision=Number(request.result?._rpcmRevision||0)+1;store.put(candidate);};request.onerror=()=>tx.abort();tx.oncomplete=()=>{traceRoomWrite(candidate,'ai-memory-undo:'+area,'committed',room._rpcmRevision,candidate._rpcmRevision,'',{startedAt:writeStartedAt,before:stored});resolve();};tx.onabort=()=>reject(new Error('저장본 변경 또는 IndexedDB 실패 · 되돌리지 않았습니다.'));});
+    const verifiedUndo=await readManualStoredRoom(room);
+    if(!verifiedUndo||aiMemoryAreaSnapshot(verifiedUndo,area)!==aiMemoryAreaSnapshot(candidate,area))throw new Error('되돌린 결과를 IndexedDB에서 확인하지 못했습니다.');
+    const finalizedUndo=await finalizeStoredResultReceipts(room,verifiedUndo,[AI_MEMORY_AREAS[area].manual],'ai-memory-undo:'+area);
+    const lateEdits=JSON.stringify(room)!==undoBase;rpcmReplaceRoomObject(room,rpcmKeepLateEdits(JSON.parse(undoBase),room,finalizedUndo));rpcmRememberRoomBaseline(finalizedUndo);if(lateEdits)await saveRoom(room,'ai-memory-undo-late-edits');if(room.pending){try{const result=await aiMemorySyncPending(room,area);if(result?.suspended||room.pending?.reanchorRetry)notify('로컬 되돌리기 완료 · 현재 주입 반영 대기','warn');}catch(error){notify(`로컬 되돌리기 완료 · 현재 주입 반영 대기: ${error.message}`,'warn');}}
+  }
+
+  function bindAiMemoryPreferences(overlay,room) {
+    const config=aiMemoryConfig(room);
+    const policyControls=[overlay.querySelector('[data-ai-memory-global]'),
+      ...overlay.querySelectorAll('[data-ai-memory-enable]'),
+      ...overlay.querySelectorAll('[data-ai-memory-auto-apply]'),
+      ...overlay.querySelectorAll('[data-ai-memory-interval]')].filter(Boolean);
+    const policySaves=bindAiMemoryPreferences.policySaves ||= new Set(),policyKey=String(room.chatId);
+    if(policySaves.has(policyKey))policyControls.forEach(input=>input.disabled=true);
+    const savePolicyControl=async work=>{
+      if(policySaves.has(policyKey))return;
+      policySaves.add(policyKey);const disabled=new Map(policyControls.map(input=>[input,input.disabled]));
+      policyControls.forEach(input=>input.disabled=true);
+      try{await work();}
+      finally{
+        const current=aiMemoryConfig(room);
+        for(const input of policyControls){
+          if(input.dataset?.aiMemoryEnable)input.checked=current.areas[input.dataset.aiMemoryEnable].enabled;
+          else if(input.dataset?.aiMemoryAutoApply)input.checked=current.areas[input.dataset.aiMemoryAutoApply].autoApply;
+          else if(input.dataset?.aiMemoryInterval)input.value=String(current.areas[input.dataset.aiMemoryInterval].interval);
+          else input.checked=current.enabled;
+          input.disabled=disabled.get(input);
+        }
+        policySaves.delete(policyKey);
+        try{renderModalIfOpen();}
+        catch(error){notify('설정 화면 갱신 실패: '+error.message+' · 저장된 설정을 다시 확인해 주세요.','error');}
+      }
+    };
+    overlay.querySelector('[data-ai-memory-global]')?.addEventListener('change',event=>savePolicyControl(async()=>{
+      const input=event.currentTarget,config=aiMemoryConfig(room),previous=config.enabled,revision=config.applyRevision;input.disabled=true;let saved=false;
+      config.enabled=input.checked;config.applyRevision++;
+      try{await saveRoom(room);saved=true;}
+      catch(error){config.enabled=previous;config.applyRevision=revision;input.checked=previous;notify('자동 생성 설정 저장 실패: '+error.message,'error');}
+      finally{if(input.isConnected)input.disabled=false;}
+      if(saved&&config.enabled)void aiMemoryPoll(room,true);
+    }));
+    overlay.querySelectorAll('[data-ai-memory-enable]').forEach(input=>input.addEventListener('change',()=>savePolicyControl(()=>aiMemorySetEnabled(room,input.dataset.aiMemoryEnable,input.checked,input))));
+    overlay.querySelectorAll('[data-ai-memory-auto-apply]').forEach(input=>input.addEventListener('change',()=>savePolicyControl(async()=>{
+      const row=aiMemoryConfig(room).areas[input.dataset.aiMemoryAutoApply],previous=row.autoApply;let saved=false;
+      row.autoApply=input.checked;row.applyRevision++;
+      try{await saveRoom(room);saved=true;}
+      catch(error){row.autoApply=previous;input.checked=previous;notify(error.message,'error');}
+      if(saved)notify(row.autoApply?'이후 생성되는 유효한 AI 결과는 자동 반영합니다. 기존 초안은 검토 후 적용해 주세요.':'수동 검토 모드 · 기존 초안과 기준점은 유지합니다.','success');
+    })));
+    overlay.querySelectorAll('[data-ai-memory-interval]').forEach(input=>input.addEventListener('change',()=>savePolicyControl(async()=>{
+      const area=input.dataset.aiMemoryInterval,row=aiMemoryConfig(room).areas[area],value=Number(input.value),previous=row.interval;
+      if(!Number.isInteger(value)||value<1||value>100){input.value=String(previous);notify('주기는 1~100 완료 턴으로 지정해 주세요.','warn');return;}
+      row.interval=value;
+      try{await saveRoom(room);}
+      catch(error){row.interval=previous;input.value=String(previous);notify('자동 정리 주기 저장 실패: '+error.message,'error');}
+    })));
+    overlay.querySelectorAll('[data-ai-memory-run]').forEach(button=>button.addEventListener('click',async()=>{button.disabled=true;try{const area=button.dataset.aiMemoryRun,row=aiMemoryConfig(room).areas[area];if(row.draft&&!confirm('기존 미적용 초안을 버리고 새로 생성할까요?'))return;await aiMemoryGenerate(room,area,{force:true,replaceDraft:true});}catch(error){notify(`AI 기억정리 실패: ${error.message}`,'error',6500);}finally{if(button.isConnected)button.disabled=false;}}));
+    overlay.querySelectorAll('[data-ai-memory-review]').forEach(button=>button.addEventListener('click',()=>aiMemoryReviewDialog(room,button.dataset.aiMemoryReview)));
+    overlay.querySelectorAll('[data-ai-memory-undo]').forEach(button=>button.addEventListener('click',async()=>{try{await aiMemoryUndo(room,button.dataset.aiMemoryUndo);renderModalIfOpen();notify('AI 적용 내용과 해당 항목 기준점을 함께 되돌렸습니다.','success');}catch(error){notify(`되돌리기 실패: ${error.message}`,'error');}}));
+    overlay.querySelectorAll('[data-ai-memory-now]').forEach(button=>button.addEventListener('click',async()=>{
+      const area=button.dataset.aiMemoryNow,row=aiMemoryConfig(room).areas[area];
+      if(row.draft&&!confirm('검토 대기 중인 초안을 버리고 지금부터 새 RP만 셀까요?'))return;
+      button.disabled=true;
+      try{await aiMemoryStartFromNow(room,area);renderModalIfOpen();notify(`${AI_MEMORY_AREAS[area].label}은 지금부터 완료 RP를 셉니다.`,'success');}
+      catch(error){button.disabled=false;notify(`시작점 저장 실패: ${error.message}`,'error');}
+    }));
+    overlay.querySelectorAll('[data-ai-memory-baseline]').forEach(button=>button.addEventListener('click',()=>openAiMemoryBaselineDialog(room,button.dataset.aiMemoryBaseline).catch(error=>notify(`시작점 확인 실패: ${error.message}`,'error'))));
+  }
+
+  const RPCM_RESPONSE_REFINER_SETTINGS_KEY = 'wish-rp-core-response-refiner-settings-v3';
+  function rpcmResponseRefinerDisplayPrefs() {
+    try {
+      const raw=GM_getValue(RPCM_RESPONSE_REFINER_SETTINGS_KEY,'');
+      const saved=raw?JSON.parse(raw):{};
+      return {showButton:saved.showButton!==false,showBadge:saved.showBadge!==false};
+    } catch (_) { return {showButton:true,showBadge:true}; }
+  }
+  function rpcmSetResponseRefinerDisplayPref(field,value) {
+    if(!['showButton','showBadge'].includes(field))return false;
+    try {
+      const raw=GM_getValue(RPCM_RESPONSE_REFINER_SETTINGS_KEY,'');
+      const saved=raw?JSON.parse(raw):{};
+      saved[field]=!!value;
+      GM_setValue(RPCM_RESPONSE_REFINER_SETTINGS_KEY,JSON.stringify(saved));
+      window.__WISH_RP_MANAGER_REFINER__?.setDisplayPreference?.(field,!!value);
+      return true;
+    } catch (_) { return false; }
+  }
+
+  function renderRpcmPreferences(room) {
+    const ai=aiFeatureSettings(loadAiSummarySettings(),'summary'),provider=ai.provider,model=ai.models?.[provider]||'';
+    const secret=!!readAiSecret(provider);
+    const refinerDisplay=rpcmResponseRefinerDisplayPrefs();
+    const guideRows=['currentItems','logSummary','personInfo','timeline','lore'].map(task=>{const meta=manualGuideMetadata(room,task);return `<div class="rpcm-pref-row"><span>${esc(MANUAL_UPDATE_TASKS[task].title)}<small>${esc(meta.version)} · ${esc(meta.source)}</small></span><button type="button" class="rpcm-btn secondary" data-rpcm-pref-guide="${task}">지침</button></div>`;}).join('');
+    return `<div class="rpcm-pref-grid rpcm-settings-grid">
+      <article class="rpcm-pref-card"><header><h3>AI 연결 ${rpcmHelpButton('ai')}</h3><span class="rpcm-pref-scope">이 기기</span></header><p>${secret?'인증 저장됨':'인증 필요'} · ${esc(provider)} · ${esc(model)}</p><button type="button" class="rpcm-btn secondary" data-rpcm-pref-action="api">API · 모델 설정</button></article>
+      <article class="rpcm-pref-card"><header><h3>기억 회수·주입 ${rpcmHelpButton('recall')}</h3><span class="rpcm-pref-scope">현재 방</span></header>
+        <label class="rpcm-pref-row"><span>최근·관련 날짜로그 자동 선택<small>직접 선택·고정·제외는 기억 화면에서 관리</small></span><input type="checkbox" data-rpcm-pref-field="autoLogRecallEnabled" ${room.autoLogRecallEnabled?'checked':''}></label>
+        <label class="rpcm-pref-row"><span>관련도 기준<small>최근 연속성 로그에는 적용되지 않음</small></span><select data-rpcm-pref-field="autoLogRelevance"><option value="strict" ${room.autoLogRelevance==='strict'?'selected':''}>엄격</option><option value="balanced" ${room.autoLogRelevance==='balanced'?'selected':''}>균형</option><option value="broad" ${room.autoLogRelevance==='broad'?'selected':''}>넓게</option></select></label>
+        <label class="rpcm-pref-row"><span>AI 맥락 검토 ${rpcmHelpButton('context')}<small>관련 날짜로그 후보만 API로 재검토</small></span><input type="checkbox" data-rpcm-pref-field="aiContextLogRerankEnabled" ${room.aiContextLogRerankEnabled?'checked':''}></label></article>
+      ${semanticUiHtml(room)}
+      <article class="rpcm-pref-card"><header><h3>화면·모니터</h3><span class="rpcm-pref-scope">이 기기</span></header><p>상단 WISH 버튼을 짧게 누르면 빠른 관리, 길게 누르면 전체 Manager가 열립니다. 작은 초록색 표시가 있으면 주입이 켜진 상태입니다.</p>
+        <label class="rpcm-pref-row"><span>응답교정 바로가기 표시<small>크랙 채팅 상단의 🪽 응답교정 버튼을 표시합니다. 꺼도 Manager의 AI 화면에서 응답교정 설정을 열 수 있습니다.</small></span><input type="checkbox" data-rpcm-refiner-ui-field="showButton" ${refinerDisplay.showButton?'checked':''}></label>
+        <label class="rpcm-pref-row"><span>응답교정 검토 알림 표시<small>검토 중·검토 완료 상태를 채팅 화면 상단에 잠시 표시합니다.</small></span><input type="checkbox" data-rpcm-refiner-ui-field="showBadge" ${refinerDisplay.showBadge?'checked':''}></label>
+        <button type="button" class="rpcm-btn secondary" data-rpcm-pref-action="quick">Quick Panel 열기</button></article>
+      <article class="rpcm-pref-card"><header><h3>AI 작업</h3><span class="rpcm-pref-scope">이 기기 · 현재 방</span></header><p>AI 요약은 현재상태·날짜로그의 수동 실행 도구입니다. 결과 확인 후 선택 적용합니다.</p><button type="button" class="rpcm-btn secondary" data-rpcm-pref-action="summary">AI 요약 열기</button></article>
+      <article class="rpcm-pref-card"><header><h3>지침·백업 ${rpcmHelpButton('guide')}</h3><span class="rpcm-pref-scope">지침별 · 현재 방</span></header>${guideRows}<div class="rpcm-pref-row"><span>전체 재구축 Master<small>기본 v1.0.5 또는 사용자 수정본</small></span><button type="button" class="rpcm-btn secondary" data-rpcm-pref-action="rebuild-guide">지침</button></div><button type="button" class="rpcm-btn secondary" data-rpcm-pref-action="backup">백업·복원 열기</button></article>
+    </div>`;
+  }
+  function bindRpcmPreferences(overlay,room) {
+    overlay.querySelectorAll('[data-rpcm-pref-field]').forEach(input=>input.addEventListener('change',async()=>{
+      const field=input.dataset.rpcmPrefField, old=room[field], value=input.type==='checkbox'?input.checked:input.value;
+      const main=field==='autoLogRecallEnabled'?overlay.querySelector('#rpcm-auto-log'):field==='autoLogRelevance'?overlay.querySelector('#rpcm-auto-log-relevance'):overlay.querySelector('#rpcm-ai-context-toggle');
+      if(main){main.value=input.type==='checkbox'?main.value:value;if(input.type==='checkbox')main.checked=value;main.dispatchEvent(new Event('change',{bubbles:true}));}
+      else {room[field]=value;try{await saveRoom(room);}catch(error){room[field]=old;notify(`설정 저장 실패: ${error.message}`,'error');}}
+    }));
+    overlay.querySelectorAll('[data-rpcm-refiner-ui-field]').forEach(input=>input.addEventListener('change',()=>{
+      const field=input.dataset.rpcmRefinerUiField,value=input.checked;
+      if(!rpcmSetResponseRefinerDisplayPref(field,value)){input.checked=!value;notify('응답교정 화면 설정을 저장하지 못했습니다.','error');return;}
+      notify(field==='showButton'?(value?'응답교정 바로가기를 표시합니다.':'응답교정 바로가기를 숨겼습니다.'):(value?'응답교정 검토 알림을 표시합니다.':'응답교정 검토 알림을 숨겼습니다.'),'success',2200);
+    }));
+    overlay.querySelectorAll('[data-rpcm-pref-guide]').forEach(button=>button.addEventListener('click',()=>{const task=button.dataset.rpcmPrefGuide;const guide=manualGuideMetadata(room,task);openManualUpdateTextDialog(`${MANUAL_UPDATE_TASKS[task].title} · 지침`,`${guide.source} · ${guide.version} · ${guide.hash}`,manualGuideOnlyText(room,task),'내용 복사');}));
+    overlay.querySelectorAll('[data-rpcm-pref-action]').forEach(button=>button.addEventListener('click',()=>{
+      const action=button.dataset.rpcmPrefAction;
+      if(action==='api'){showWorkView(overlay,'ai',true);overlay.querySelector('#rpcm-ai-inline-settings')?.click();}
+      else if(action==='quick')openQuickInjectionPanel().catch(error=>notify(error.message,'error'));
+      else if(action==='summary')overlay.querySelector('#rpcm-ai-summary')?.click();
+      else if(action==='backup')overlay.querySelector('[data-jump="rpcm-section-tools"]')?.click();
+      else if(action==='rebuild-guide')overlay.querySelector('[data-rebuild-guide]')?.click();
+    }));
+  }
+
+  function replaceManagerContents(overlay, markup) {
+    const template=document.createElement('template');template.innerHTML=markup;
+    const wrap=overlay.querySelector('#rpcm-modal-wrap'),nextWrap=template.content.querySelector('#rpcm-modal-wrap');
+    const panel=wrap?.querySelector('#rpcm-modal'),nextPanel=nextWrap?.querySelector('#rpcm-modal');
+    if(wrap&&panel&&nextWrap&&nextPanel){
+      panel.dataset.rpcmRefreshed = 'true';
+      panel.replaceChildren(...nextPanel.childNodes);
+    }else overlay.replaceChildren(template.content);
+  }
+
+  function renderModal() {
+    rpcmNewBadgeSchedule();
+    const overlay = state.modal;
+    const room = state.currentRoom;
+    if (!overlay || !room) return;
+    rpcmBindEditingGuards();
+    if (overlay.querySelector('.rpcm-body') && overlay.contains(document.activeElement) && rpcmTextEditor(document.activeElement)) {
+      overlay._rpcmDeferredEditorRender = true;
+      return;
+    }
+    if (rpcmHasActiveComposition()) { overlay._rpcmDeferredEditorRender = true; return; }
+    overlay._rpcmDeferredEditorRender = false;
+    noticeReconcile(room);
+    ensureUserCanonMemoStyles();
+    addLongTermStyles();
+    const ui2TransientState = captureUi2TransientState(overlay, room);
+    // 전체 재렌더가 일어나면 기존 focus card도 사라지므로 배경 shade도 같이 정리합니다.
+    document.querySelector('.rpcm-focus-shade')?.remove();
+
+    // 비동기 설정 변경 후 전체 재렌더가 필요해도 사용자가 보고 있던 위치를 유지합니다.
+    const previousBody = overlay.querySelector('.rpcm-body');
+    const previousScrollTop = previousBody ? previousBody.scrollTop : null;
+    const previousContentScrollTop = overlay.querySelector('.rpcm-work-content')?.scrollTop || 0;
+    const previousTimelineMonths = [...overlay.querySelectorAll('.rpcm-inline-story-month[data-month-key]')];
+    if (previousTimelineMonths.length) state.timelineMonthOpenByRoom.set(String(room.chatId), new Map(previousTimelineMonths.map(node => [String(node.dataset.monthKey), node.open])));
+    const previousSummaryOpen = !!overlay.querySelector('.rpcm-summary[open]');
+    const previousItemToolsOpen = !!overlay.querySelector('.rpcm-section-more[open]');
+    const previousItemBulkOpen = !!overlay.querySelector('.rpcm-item-bulkbar[open]');
+    const hadPreviousRender = !!previousBody;
+    const previouslyOpenKnowledge = new Set([...overlay.querySelectorAll('.rpcm-knowledge-card[open][data-knowledge-id]')].map(node => String(node.dataset.knowledgeId || '')));
+    const hadPersonProfiles = !!overlay.querySelector('.rpcm-profile');
+    const previouslyOpenProfiles = new Set([...overlay.querySelectorAll('.rpcm-profile[open][data-person-name]')].map(node => String(node.dataset.personName || '')));
+    const previousPersonImportText = overlay.querySelector('#rpcm-person-import-text')?.value || state.personImportDraft || '';
+    const previousPersonImportOpen = overlay.querySelector('#rpcm-person-import')?.hidden === false || state.personImportOpen === true;
+    const previouslyRawOpen = new Set([...overlay.querySelectorAll('.rpcm-slot[data-slot-id] .rpcm-edit:not([hidden])')].map(node => String(node.closest('.rpcm-slot')?.dataset.slotId || '')));
+    const previouslyActiveDesktop = overlay.querySelector('.rpcm-work-nav .rpcm-jump.is-active')?.dataset.jump || 'rpcm-overview';
+    const previouslyOpenSlots = new Set([...overlay.querySelectorAll('.rpcm-slot[open][data-slot-id]')].map(el => String(el.dataset.slotId || '')));
+    const previouslyOpenItemSettings = new Set([...overlay.querySelectorAll('.rpcm-item-settings-panel:not([hidden])')].map(node => String(node.closest('.rpcm-slot')?.dataset.slotId || '')));
+    const previouslySelectedItems = new Set([...overlay.querySelectorAll('.rpcm-item-delete-select:checked')].map(el => String(el.closest('[data-slot-id]')?.dataset.slotId || '')));
+    const previouslyOpenItemFolders = new Set([...overlay.querySelectorAll('.rpcm-item-folder[open]')].map(el => String(el.dataset.itemFolder || '')));
+    const hadItemFolders = !!overlay.querySelector('.rpcm-item-folder');
+    const previouslyOpenExtraCategories = new Set([...overlay.querySelectorAll('.rpcm-extra-folder[open]')].map(el => el.dataset.extraCategory));
+    const hadExtraFolders = !!overlay.querySelector('.rpcm-extra-folder');
+
+    normalizeRoomSlots(room);
+    normalizePersonStateRecords(room);
+    const maxChars = Number(room.maxChars) || APP.defaultMaxChars;
+    const previewOriginalChars = carrierOriginalCharsForUi(room);
+    const previewContextBudget = previewOriginalChars === null ? contextBudgetForPreview(room) : contextBudgetForCarrier(room, previewOriginalChars);
+    let displayItems = room.pending ? activePendingItems(room.pending) : snapshotSelectedItems(room, null, previewContextBudget);
+    const previewOriginalText = carrierOriginalTextForUi(room);
+    if (previewOriginalText !== null) displayItems = fitItemsToCarrierLimits(room, previewOriginalText, displayItems);
+    const evidenceHydrated = hydrateRelatedLogEvidence(room, displayItems);
+    if (evidenceHydrated && room.pending) {
+      savePendingBackup(room.chatId, room.pending);
+      Promise.resolve(saveRoom(room)).catch(() => {});
+    }
+    const autoDisplayItems = sortAutoItemsForDisplay(displayItems.filter(i => i.autoType));
+    const stats = statsForItems(displayItems);
+    // Preserve warning evaluation order; reuse completed values in this paint.
+    const overviewMetrics = {};
+    const warnings = getDataWarnings(room, overviewMetrics);
+    const loreBudget = loreBudgetInfoFor(room);
+    const loreOmitted = Math.max(0, Number(loreBudget?.candidates || 0) - Number(loreBudget?.included || 0));
+    if (loreOmitted) warnings.push(`자료집 후보 ${loreOmitted}개가 전용 주입 상한 또는 남은 용량 때문에 제외됐습니다. 자료집 카드의 요약·상세와 주입 방식을 확인해 주세요.`);
+    const duplicateGroups = overviewMetrics.duplicateGroups ?? duplicateLogDateGroups(room);
+    const duplicateItemGroups = duplicateImportantItemGroups(room);
+    const knowledgeConflictCount = knowledgeConflicts(room).size;
+    Object.assign(overviewMetrics, {duplicateGroups,duplicateItemGroups,knowledgeConflictCount,loreBudget});
+    if (duplicateItemGroups.length) warnings.push(`중복 물품 ${duplicateItemGroups.length}개 그룹이 있습니다. 둘 다 유지하거나 남길 항목 하나를 선택하세요.`);
+    const duplicateBranchHint = duplicateGroups.map(timelineBranchHintForGroup).find(Boolean) || '';
+    const logBlocksForIssues = parseDatedLogBlocks((room.slots || []).find(s => s.id === 'logSummary')?.content || '');
+    const acceptedUnknownForUi = new Set((room.acceptedUnknownLogKeys || []).map(String));
+    const hasLogDateIssues = logBlocksForIssues.some(b => (b.isUnknown && !acceptedUnknownForUi.has(String(b.key))) || (!b.isUnknown && !b.isSpecialDate && b.year == null));
+    const manualLogStats = manualLogSelectionStats(room);
+    const storyStats = storyTimelineSummary(room);
+    const aiReviewItems = normalizeAiReviewInbox(room);
+    const aiReviewPending = aiReviewPendingCount(room);
+    const aiReviewVisible = state.wishBridgeAvailable || aiReviewItems.length > 0;
+    const activeTimeline = activeLogTimelineLabel(room);
+    const storyUnreviewedCount = Math.max(0, Number(room.storyTimelineUnreviewedTurnCount || 0));
+    const storyReviewThreshold = Number(room.storyTimelineReviewSettings?.threshold || 50);
+    const aiContextReport = room.aiContextReviewReport && typeof room.aiContextReviewReport === 'object' ? room.aiContextReviewReport : null;
+    const relatedShown = autoDisplayItems.filter(item => item.autoType === 'related-log').length;
+    let aiContextCheckedLabel = '검토 기록 없음';
+    try { if (aiContextReport?.checkedAt) aiContextCheckedLabel = new Date(aiContextReport.checkedAt).toLocaleString('ko-KR'); } catch (_) {}
+    const aiContextRunMeta = `${aiContextCheckedLabel} · 실행 버전 ${aiContextReport?.managerVersion ? `v${aiContextReport.managerVersion}` : '기록 없음'}${aiContextReport?.finishReason ? ` · 종료 ${aiContextReport.finishReason}` : ''}`;
+    const aiContextSituationText = !room.aiContextLogRerankEnabled
+      ? 'AI 맥락 검토가 꺼져 있습니다.'
+      : aiContextReport?.state === 'fallback'
+        ? (semanticEnabled(room)?'AI 상황 파악 실패 · 하이브리드 검색 사용':'AI 상황 파악 실패 · 기본 키워드 방식 사용')
+        : aiContextReport?.situation
+          ? String(aiContextReport.situation)
+          : aiContextReport?.state === 'success'
+            ? '이전 검토 결과에는 상황 설명이 없습니다. AI 다시 검토를 눌러 갱신하세요.'
+            : aiContextReport?.note||'아직 AI가 현재 상황을 검토하지 않았습니다.';
+    const aiRecentCount=autoDisplayItems.filter(item=>item.autoType==='recent-log').length;
+    const aiContextReportHtml=renderAiContextReviewDetails(room,aiContextReport,aiRecentCount,relatedShown,logBlocksForIssues.length,aiContextRunMeta,aiContextSituationText);
+    const storyReviewDue = storyUnreviewedCount >= storyReviewThreshold;
+    const timelinePreviewCards = storyTimelineCardsFor(room).slice(-8).reverse();
+    const logTimelineLabels = normalizeRoomLogTimelines(room);
+    const hasMultipleLogTimelines = logTimelineLabels.length > 1;
+    const logTimelineOptions = logTimelineLabels.map(label => `<option value="${esc(label)}" ${normalizedLogTimelineKey(label) === normalizedLogTimelineKey(activeTimeline) ? 'selected' : ''}>${esc(label)}</option>`).join('');
+    const pending = room.pending;
+    const capacity = carrierCapacityForUi(room, stats.block, buildContextBlockFromItems(displayItems));
+    const st = statusForChars(capacity.total, maxChars, capacity.byteKnown ? capacity.payloadBytes : 0);
+    const maintenanceReport = maintenanceRecommendations(room, displayItems, capacity, overviewMetrics);
+    const maintenanceExtraImmediate = maintenanceReport.immediate.filter(entry => !['중복 로그', '중복 물품', '인지 카드 충돌', '타임라인 검토 필요', '자료집 용량 제외'].includes(entry.title));
+    const armDisabledReason = pending ? '' : !stats.count ? '주입할 항목 없음' : stats.block > capacity.availableContext ? '주입 용량 초과' : '';
+    const usage = renderUsageSummary(displayItems, stats.block, maxChars, capacity.known ? capacity.original : 0, capacity.known ? capacity.separator : 0);
+    const aiSettingsForView=loadAiSummarySettings();
+    const aiFeatureMeta=feature=>{
+      const cfg=aiFeatureSettings(aiSettingsForView,feature), model=cfg.models?.[cfg.provider]||'모델 미지정', status=aiFeatureCurrentStatus(aiSettingsForView,feature);
+      return {provider:AI_SUMMARY_PROVIDER_DEFAULTS[cfg.provider]?.label||cfg.provider,model,state:status?.state==='ok'?'정상':status?.state==='error'?'오류':'확인 전',stateClass:status?.state==='ok'?'is-ok':status?.state==='error'?'is-error':'is-idle',errorKind:status?.message||'',errorDetail:status?.detail||status?.message||''};
+    };
+    const aiSummaryMeta=aiFeatureMeta('summary'),aiTimelineMeta=aiFeatureMeta('timeline'),aiContextMeta=aiFeatureMeta('context'),aiItemFolderMeta=aiFeatureMeta('itemFolder'),aiUtilityMeta=aiFeatureMeta('utility');
+    const aiItemFolderStatus=aiFeatureCurrentStatus(aiSettingsForView,'itemFolder');
+    const aiItemFolderRun=String(aiItemFolderStatus?.lastRun?.roomId||'')===String(room.chatId)?aiItemFolderStatus.lastRun:null;
+    const aiStatusChips=meta=>`<span class="rpcm-ai-chip ${meta.stateClass}"${meta.state==='오류'?rpcmErrorHelpAttrs(meta.errorDetail||'AI 기능 오류',meta.errorKind):''}>● ${esc(meta.state)}</span><span class="rpcm-ai-chip">${esc(meta.provider)}</span><span class="rpcm-ai-chip">${esc(meta.model)}</span>`;
+    const aiCompactChips=meta=>`<span class="rpcm-ai-chip ${meta.stateClass}"${meta.state==='오류'?rpcmErrorHelpAttrs(meta.errorDetail||'AI 기능 오류',meta.errorKind):''}>● ${esc(meta.state)}</span>${meta.provider !== aiSummaryMeta.provider || meta.model !== aiSummaryMeta.model ? `<span class="rpcm-ai-chip">${esc(meta.provider)} · ${esc(meta.model)}</span>` : ''}`;
+    const aiHistoryCache=manualReviewHistoryCache.get(String(room.chatId)),aiCachedKeys=aiHistoryCache?.keys,aiCachedRows=aiHistoryCache?.keyRows;
+    const aiLastKey=String(room.aiSummaryLastAppliedTurnKey||'');
+    const aiTurnPosition=aiCachedRows?.findIndex(row=>row.key===aiLastKey||(row.aliases||[]).includes(aiLastKey))??aiCachedKeys?.lastIndexOf(aiLastKey)??-1;
+    const aiCachedLength=aiCachedRows?.length??aiCachedKeys?.length??0;
+    const aiFreshCount=(aiCachedRows||aiCachedKeys)&&aiLastKey&&aiTurnPosition>=0?`${aiCachedLength-aiTurnPosition-1}턴`:(aiCachedRows||aiCachedKeys)&&!aiLastKey?`${aiCachedLength}턴`: 'AI 요약에서 확인';
+
+    replaceManagerContents(overlay, `
+      <div id="rpcm-modal-wrap">
+        <div id="rpcm-modal">
+          <div class="rpcm-header">
+            <div><div class="rpcm-title">${esc(APP.name)}</div><div class="rpcm-sub">${esc(room.label || '현재 채팅방')} · v${esc(APP.version)}${APP.releaseStage ? ` (${esc(APP.releaseStage)})` : ''}</div></div>
+            <div class="rpcm-spacer"></div>
+            <button class="rpcm-iconbtn rpcm-header-search-button" type="button" id="rpcm-header-search-toggle" aria-label="통합 검색 열기" aria-expanded="false" title="통합 검색">${rpcmUiIcon('search')}</button>
+            <button class="rpcm-iconbtn rpcm-user-memo-open" type="button" id="rpcm-user-memo-open" aria-label="사용자 메모 열기 · 활성 ${activeUserCanonMemos(room).length}개" title="사용자 메모">${rpcmUiIcon('doc')}<span class="rpcm-user-memo-badge" id="rpcm-user-memo-badge" ${activeUserCanonMemos(room).length?'':'hidden'}>${activeUserCanonMemos(room).length>99?'99+':activeUserCanonMemos(room).length}</span></button>
+            <button class="rpcm-iconbtn" type="button" id="rpcm-notice-open" aria-label="알림 센터 열기" title="알림 센터">${rpcmUiIcon('bell')}<span id="rpcm-notice-badge" ${noticeUnreadCount(room)?'':'hidden'}>${noticeUnreadCount(room)}</span></button>
+            <details class="rpcm-header-menu"><summary aria-label="추가 메뉴" title="추가 메뉴">⋯</summary><div class="rpcm-header-menu-list">
+              <div class="rpcm-mobile-header-nav" aria-label="모바일 전체 메뉴">
+                <button type="button" class="rpcm-jump" data-workview="overview" data-jump="rpcm-section-overview"><span aria-hidden="true">✅</span><span>확인</span></button>
+                <span class="rpcm-header-menu-group">기억</span>
+                <button type="button" class="rpcm-jump" data-workview="memory" data-jump="rpcm-section-basic"><span aria-hidden="true">🧠</span><span>현재상태</span></button>
+                <button type="button" class="rpcm-jump" data-workview="logs" data-jump="rpcm-section-basic"><span aria-hidden="true">📅</span><span>날짜로그</span></button>
+                <button type="button" class="rpcm-jump" data-workview="timeline" data-jump="rpcm-section-timeline"><span aria-hidden="true">🕰️</span><span>타임라인</span></button>
+                <button type="button" class="rpcm-jump" data-workview="items" data-jump="rpcm-section-item"><span aria-hidden="true">📦</span><span>중요 물품</span></button>
+                <button type="button" class="rpcm-jump" data-workview="characters" data-jump="rpcm-section-character"><span aria-hidden="true">👤</span><span>캐릭터</span></button>
+                <button type="button" class="rpcm-jump" data-workview="extra" data-jump="rpcm-section-extra"><span aria-hidden="true">🧩</span><span>기타·OOC</span></button>
+                <button type="button" class="rpcm-jump" data-workview="lore" data-jump="rpcm-section-lore"><span aria-hidden="true">📚</span><span>자료집</span></button>
+                <button type="button" class="rpcm-jump" data-workview="people" data-jump="rpcm-section-people"><span aria-hidden="true">🫂</span><span>인물정보</span></button>
+                <span class="rpcm-header-menu-group">자료 관리</span>
+                <button type="button" class="rpcm-jump" data-workview="update" data-jump="rpcm-section-update"><span aria-hidden="true">📝</span><span>수동 업데이트</span></button>
+                <button type="button" class="rpcm-jump" data-workview="compression" data-jump="rpcm-section-compression"><span>압축</span></button><button type="button" class="rpcm-jump" data-workview="longterm" data-jump="rpcm-section-longterm"><span aria-hidden="true">🧷</span><span>장기기억</span></button>
+                <button type="button" class="rpcm-jump" data-workview="tools" data-jump="rpcm-section-tools"><span aria-hidden="true">🛠️</span><span>복사 · 백업 · 복원</span></button>
+                <span class="rpcm-header-menu-group">설정 · AI</span>
+                <button type="button" class="rpcm-jump" data-workview="preferences" data-jump="rpcm-section-preferences"><span aria-hidden="true">⚙️</span><span>일반·UI</span></button>
+                <button type="button" class="rpcm-jump" data-workview="ai" data-jump="rpcm-section-ai"><span aria-hidden="true">✨</span><span>AI</span></button>
+              </div>
+              <div class="rpcm-header-menu-utilities">
+                <button class="rpcm-header-quick-toggle" type="button" id="rpcm-header-quick-toggle">Quick Monitor 열기</button>
+                <button class="rpcm-main-help-button" type="button" id="rpcm-main-help-open">사용 방법</button>
+                <button class="rpcm-main-api-button" type="button" id="rpcm-main-api-open">AI · API 설정</button>
+              </div>
+            </div></details>
+            <button class="rpcm-iconbtn" id="rpcm-close" aria-label="닫기" title="닫기" data-rpcm-close="icon">${rpcmUiIcon('close')}</button>
+              <div class="rpcm-header-search-pop" id="rpcm-header-search-pop" hidden><label for="rpcm-search-input">저장 항목 검색 <small>기억·날짜로그·인물정보·타임라인·물품·자료집·캐릭터·기타</small></label><div class="rpcm-search-box"><input class="rpcm-search-input" id="rpcm-search-input" type="search" placeholder="저장된 제목과 내용 검색"><button type="button" class="rpcm-search-nav" id="rpcm-search-prev" aria-label="이전 검색 결과">↑</button><button type="button" class="rpcm-search-nav" id="rpcm-search-next" aria-label="다음 검색 결과">↓</button><span class="rpcm-search-count" id="rpcm-search-count">0 / 0</span><div class="rpcm-search-results" id="rpcm-search-results" hidden></div></div></div>
+          </div>
+          <aside class="rpcm-main-help-panel" id="rpcm-main-help-panel" hidden><header><h3>RP Manager 사용 방법</h3><button type="button" id="rpcm-main-help-close" aria-label="도움말 닫기" data-rpcm-close="icon">${rpcmUiIcon('close')}</button></header><div class="rpcm-main-help-row"><strong>기억 관리</strong><span>현재상태는 계속 유지하고, 날짜로그는 최신·관련·직접 주입·항상 주입 날짜만 골라 주입합니다.</span></div><div class="rpcm-main-help-row"><strong>로그 관리</strong><span>날짜별 내용을 보고 직접 주입하거나 ★ 즐겨찾기·📌 항상 주입·자동 선택 제외를 정할 수 있습니다.</span></div><div class="rpcm-main-help-row"><strong>AI 맥락 검토</strong><span>키워드 후보를 저장된 API가 현재 RP 흐름으로 한 번 더 고릅니다. API가 실패하면 키워드 방식으로 돌아가며, ‘+ 관련로그 추가’로 사용자가 직접 보강할 수 있습니다.</span></div><div class="rpcm-main-help-row"><strong>인지 현황</strong><span>기억 관리에서 인물별 인지 카드를 직접 확인하고 선택해 주입합니다. 자동 추출은 아직 적용하지 않았습니다.</span></div><div class="rpcm-main-help-row"><strong>연속성 타임라인</strong><span>중요 사건과 관계 변화가 현재까지 이어진 흐름입니다. 메인 스위치로 카드별 설정은 보존한 채 전체 주입만 ON/OFF할 수 있습니다.</span></div><div class="rpcm-main-help-row"><strong>캐릭터·기타</strong><span>자주 쓰는 설정을 저장하고 현재 주입 여부를 체크합니다. RP 등장 캐릭터 자동 선택을 켜면 선택한 설정집의 캐릭터가 최근 실제 RP에서 감지될 때 현재 주입이 자동으로 켜집니다. ‘체크 해제 캐릭터도 자동 선택’을 켜면 평소 OFF 카드도 등장 시 자동선택하며, 캐릭터별 🚫 자동 선택 제외가 우선합니다.</span></div><div class="rpcm-main-help-row"><strong>중요 물품</strong><span>물품을 자유 폴더로 나누고, 같은 물품명은 경고에서 전체 유지 또는 하나만 남기기를 선택합니다. 실제 RP에서 감지어가 언급되면 해당 항목만 자동으로 주입됩니다.</span></div><div class="rpcm-main-help-row"><strong>주입 시작</strong><span>체크한 항목을 다음 AI 답변용 carrier에 넣습니다. 주입 중에는 위 목록의 로그를 펼쳐 보고 빼거나 관련로그를 교체할 수 있습니다.</span></div><div class="rpcm-main-help-row"><strong>AI 요약</strong><span>저장한 API로 새 RP를 읽어 날짜요약과 현재상태를 만들며, 결과는 확인·수정한 뒤에만 적용됩니다.</span></div><div class="rpcm-main-help-row"><strong>백업</strong><span>현재 방 복사용 JSON을 원본 방에서 저장한 뒤 분기방에서 불러오면, RP Manager 전체 데이터를 현재 방으로 복사할 수 있습니다.</span></div></aside>
+          <div class="rpcm-global-status">${pending ? '' : '<div class="rpcm-status-idle" role="status">대기 중 · 주입할 항목을 선택해 주세요.</div>'}</div>
+          <div class="rpcm-mobile-editbar"><button type="button" id="rpcm-mobile-edit-done">완료</button><strong id="rpcm-mobile-edit-title">내용 편집</strong><span id="rpcm-mobile-edit-count">0자</span></div>
+          <div class="rpcm-body">
+            ${!pending&&room.carrierCleanup?.length?`<div class="rpcm-pending needs-check" role="status"><div><strong>주입 OFF · 서버 잔여 주입 정리 대기 ${room.carrierCleanup.length}건</strong> <button type="button" class="rpcm-btn" id="rpcm-cleanup-retry">정리 다시 시도</button></div></div>`:''}${pending ? `<div class="rpcm-pending ${pending.reanchorRetry ? 'is-retrying' : pending.verified ? 'is-verified' : 'needs-check'}" role="status"><div class="rpcm-pending-main"><span class="rpcm-pending-dot" aria-hidden="true"></span><strong>${pending.reanchorRetry ? '복구 대기' : pending.verified ? '주입 확인됨' : '서버 확인 필요'}</strong><span class="rpcm-pending-summary">${stats.count}개 항목 · 숨김 맥락 ${formatCount(pending.injectedChars)}자</span></div><div class="rpcm-pending-controls"><div class="rpcm-pending-overview"><button type="button" class="rpcm-btn secondary" id="rpcm-current-injected-rooms">현재 주입중인 방</button></div><div class="rpcm-pending-actions">${pending.reanchorRetry ? '<button class="rpcm-btn secondary" id="rpcm-retry-reanchor">다시 시도</button>' : '<button class="rpcm-btn secondary" id="rpcm-show-raw">주입 내용</button><button class="rpcm-btn secondary" id="rpcm-reverify">재검증</button>'}<button class="rpcm-btn warn" id="rpcm-restore-now">주입 해제</button></div></div></div>` : ''}
+            <div class="rpcm-quickbar">
+              <div class="rpcm-mobile-nav-strip" aria-label="RP 매니저 모바일 메뉴"><button type="button" class="rpcm-jump" data-jump="rpcm-section-overview">${rpcmUiIcon('home')}<span>확인</span></button><button type="button" class="rpcm-jump" data-jump="rpcm-section-basic">${rpcmUiIcon('memory')}<span>기억</span></button><button type="button" class="rpcm-jump" data-jump="rpcm-section-lore">${rpcmUiIcon('book')}<span>자료집</span></button><button type="button" class="rpcm-jump" data-jump="rpcm-section-people">${rpcmUiIcon('people')}<span>인물</span></button><button type="button" class="rpcm-jump" data-jump="rpcm-section-update">${rpcmUiIcon('database')}<span>자료 관리</span></button><button type="button" class="rpcm-jump" data-jump="rpcm-section-longterm"><span>🧷</span><span>장기기억</span></button><button type="button" class="rpcm-jump" data-jump="rpcm-section-preferences">${rpcmUiIcon('settings')}<span>설정</span></button><button type="button" class="rpcm-jump" data-jump="rpcm-section-ai">${rpcmUiIcon('sparkle')}<span>AI</span></button></div><span class="rpcm-mobile-nav-hint" aria-hidden="true">›</span>
+
+            </div>
+            <nav class="rpcm-work-nav" aria-label="RP 매니저 작업 화면">
+              <button type="button" class="rpcm-jump" data-workview="overview" data-jump="rpcm-overview"><span class="rpcm-nav-emoji" aria-hidden="true">✅</span><span>확인</span></button>
+              <span class="rpcm-nav-group">기억</span>
+              <button type="button" class="rpcm-jump" data-workview="memory" data-jump="rpcm-section-basic"><span class="rpcm-nav-emoji" aria-hidden="true">🧠</span><span>현재상태</span></button>
+              <button type="button" class="rpcm-jump" data-workview="logs" data-jump="rpcm-section-basic"><span class="rpcm-nav-emoji" aria-hidden="true">📅</span><span>날짜로그</span></button>
+              <button type="button" class="rpcm-jump" data-workview="timeline" data-jump="rpcm-section-timeline"><span class="rpcm-nav-emoji" aria-hidden="true">🕰️</span><span>타임라인</span></button>
+              <button type="button" class="rpcm-jump" data-workview="items" data-jump="rpcm-section-item"><span class="rpcm-nav-emoji" aria-hidden="true">📦</span><span>중요 물품</span></button>
+              <button type="button" class="rpcm-jump" data-workview="characters" data-jump="rpcm-section-character"><span class="rpcm-nav-emoji" aria-hidden="true">👤</span><span>캐릭터</span></button>
+              <button type="button" class="rpcm-jump" data-workview="extra" data-jump="rpcm-section-extra"><span class="rpcm-nav-emoji" aria-hidden="true">🧩</span><span>기타·OOC</span></button>
+              <button type="button" class="rpcm-jump" data-workview="lore" data-jump="rpcm-section-lore"><span class="rpcm-nav-emoji" aria-hidden="true">📚</span><span>자료집</span></button>
+              <button type="button" class="rpcm-jump" data-workview="people" data-jump="rpcm-section-people"><span class="rpcm-nav-emoji" aria-hidden="true">🫂</span><span>인물정보</span></button>
+              <span class="rpcm-nav-group">자료 관리</span>
+              <button type="button" class="rpcm-jump" data-workview="update" data-jump="rpcm-section-update"><span class="rpcm-nav-emoji" aria-hidden="true">📝</span><span>업데이트</span></button>
+              <button type="button" class="rpcm-jump" data-workview="compression" data-jump="rpcm-section-compression"><span>압축</span></button><button type="button" class="rpcm-jump" data-workview="longterm" data-jump="rpcm-section-longterm"><span class="rpcm-nav-emoji" aria-hidden="true">🧷</span><span>장기기억</span></button>
+              <button type="button" class="rpcm-jump" data-workview="tools" data-jump="rpcm-section-tools"><span class="rpcm-nav-emoji" aria-hidden="true">🛠️</span><span>도구 · 복사 · 백업·복원</span></button>
+              <span class="rpcm-nav-group">설정</span>
+              <button type="button" class="rpcm-jump" data-workview="preferences" data-jump="rpcm-section-preferences"><span class="rpcm-nav-emoji" aria-hidden="true">⚙️</span><span>일반·UI</span></button>
+            </nav>
+            <div class="rpcm-overview" id="rpcm-overview" aria-label="현재 방 요약">
+              <div class="rpcm-overview-card"><small>주입 상태</small><strong>${pending ? '주입 중' : '대기 중'}</strong><span>${pending ? '현재 ' + stats.count + '개 항목 유지 중' : '항목 ' + stats.count + '개 준비됨'}</span></div>
+              <div class="rpcm-overview-card"><small>용량 · ${formatCount(maxChars)}자 / 요청 ${formatCount(APP.safeCarrierPayloadBytes)}B</small><strong>${formatCount(capacity.total)}자</strong><span>${esc(st.label)} · ${esc(carrierCapacityDetailText(room, capacity))}</span><div class="rpcm-overview-progress" role="progressbar" aria-label="carrier 글자 용량" aria-valuenow="${Math.max(0, Math.min(maxChars, capacity.total))}" aria-valuemin="0" aria-valuemax="${maxChars}"><i style="width:${Math.max(0, Math.min(100, capacity.total / maxChars * 100))}%"></i></div>${rpcmCarrierEncodingControl(room)}</div>
+              <div class="rpcm-overview-card" data-lore-omitted="${loreOmitted}"><small>확인할 일</small><strong>${duplicateItemGroups.length + duplicateGroups.length + (storyReviewDue ? 1 : 0) + knowledgeConflictCount + (loreOmitted ? 1 : 0) + maintenanceExtraImmediate.length}건</strong><span>${[duplicateItemGroups.length ? '중복 물품 ' + duplicateItemGroups.length : '', duplicateGroups.length ? '중복 로그 ' + duplicateGroups.length : '', storyReviewDue ? '타임라인 검토' : '', knowledgeConflictCount ? '인지 카드 충돌' : '', loreOmitted ? '자료집 용량 제외' : '', ...maintenanceExtraImmediate.map(entry => entry.title)].filter(Boolean).join(' · ') || '현재 표시할 검토 알림 없음'}</span>${duplicateItemGroups.length || duplicateGroups.length || storyReviewDue || knowledgeConflictCount || loreOmitted || maintenanceExtraImmediate.length ? `<div class="rpcm-overview-issues">${duplicateGroups.length ? `<button type="button" data-overview-issue="logs">중복 로그 ${duplicateGroups.length}건</button>` : ''}${duplicateItemGroups.length ? `<button type="button" data-overview-issue="items">중복 물품 ${duplicateItemGroups.length}건</button>` : ''}${storyReviewDue ? '<button type="button" data-overview-issue="timeline">타임라인 검토</button>' : ''}${knowledgeConflictCount ? `<button type="button" data-overview-issue="knowledge">인지 충돌 ${knowledgeConflictCount}건</button>` : ''}${loreOmitted ? `<button type="button" data-overview-issue="lore">자료집 용량 제외 ${loreOmitted}개</button>` : ''}${maintenanceExtraImmediate.map((entry, index) => `<button type="button" data-overview-maintenance="${index}">${esc(entry.title)}</button>`).join('')}</div>` : ''}<div class="rpcm-maintenance-actions"><em data-maintenance-count>정리 추천 ${maintenanceReport.updates.length + maintenanceReport.capacityItems.length}건</em><button type="button" class="rpcm-btn secondary" id="rpcm-maintenance-open">정리 점검</button></div></div>
+            </div>
+            <div class="rpcm-context-refresh-shortcut" role="group" aria-label="최신 RP 기준 주입 재검사"><span><b>↻ 최신 RP 기준 주입 재검사</b><small>최근 3회 USER↔AI 흐름을 다시 읽고 인물·물품·자료집·인물정보·날짜로그 선택을 최신화합니다.</small></span><button type="button" class="rpcm-btn secondary" id="rpcm-context-refresh">주입 내용 새로고침</button></div>
+            <div class="rpcm-log-count-shortcut" role="group" aria-label="날짜로그 주입 바로가기"><span>📅 날짜로그 자동 주입 <strong>최근 ${recentLogInjectionCount(room)}개 · 관련 최대 ${relatedLogInjectionCount(room)}개</strong></span><button type="button" class="rpcm-btn secondary" id="rpcm-log-count-quick">개수 조절 ↗</button></div>
+            ${renderManualUpdateOverviewHtml(room)}
+            ${renderManualUpdateCenterHtml(room)}
+            <details class="rpcm-summary" open>
+              <summary class="rpcm-summary-head"><span><strong class="rpcm-summary-label">구성별 사용량</strong><span class="rpcm-summary-count">${stats.count}개 항목</span></span><span class="rpcm-summary-side"><span class="rpcm-summary-status ${st.cls || 'ok'}" style="color:${st.color}">${st.label}</span><span class="rpcm-summary-chevron" aria-hidden="true">▾</span></span></summary>
+              <div class="rpcm-summary-detail"><input id="rpcm-maxchars" type="hidden" value="${maxChars}"><div class="rpcm-summary-capacity-detail">${capacity.known ? (pending ? '현재 carrier 총길이' : '예상 carrier 총길이') : (pending ? '현재 주입 중인 컨텍스트' : '다음 주입 컨텍스트')} · ${formatCount(capacity.total)} / ${formatCount(maxChars)}자 · ${esc(carrierCapacityDetailText(room, capacity))}</div><div class="rpcm-usage-bar" aria-label="섹션별 주입 용량">${usage.bar}</div><div class="rpcm-breakdown">${usage.chips}</div></div>
+            </details>
+            ${warnings.length ? `<div class="rpcm-warnings"><div>⚠ ${warnings.map(esc).join('<br>')}</div>${duplicateGroups.length ? `<button type="button" class="rpcm-warning-action" id="rpcm-resolve-duplicate-logs">${duplicateBranchHint ? '↩ 시간선 분기 확인' : '중복 날짜 바로 정리'}</button>` : ''}${duplicateItemGroups.length ? '<button type="button" class="rpcm-warning-action" id="rpcm-resolve-duplicate-items">중복 물품 선택 정리</button>' : ''}${hasLogDateIssues ? `<button type="button" class="rpcm-warning-action" id="rpcm-normalize-log-dates">날짜 / 연도 바로 수정</button>` : ''}</div>` : ''}
+            ${(autoDisplayItems.length || logBlocksForIssues.length) ? `<div class="rpcm-auto-active"><div class="rpcm-auto-active-title"><span>현재 주입 항목 · 선정 이유</span>${logBlocksForIssues.length ? '<button type="button" class="rpcm-related-add" id="rpcm-related-add">+ 관련로그 추가</button>' : ''}</div>${autoDisplayItems.map(i => { const isLogItem = i.group === 'log-auto' || i.sourceSlotId === 'logSummary' || /-log$/.test(String(i.autoType || '')); const category = itemCategory(i); const evidence = relatedLogEvidence(i); const itemKey = pendingItemIdentity(i); return `<div class="rpcm-auto-active-row" data-pending-key="${esc(itemKey)}" data-source-key="${esc(String(i.sourceKey || '').replace(/^auto-log:/, ''))}" data-auto-type="${esc(i.autoType || '')}"><span class="rpcm-auto-badge tone-${categoryTone(category)}">${esc(category)}</span><div class="rpcm-auto-active-copy"><strong>${esc(i.title)}</strong><span class="rpcm-auto-reason">${esc(itemReason(i) || '자동 선택')}</span>${evidence ? `<span class="rpcm-auto-evidence">선정 근거 · ${esc(evidence)}</span>` : ''}</div><div class="rpcm-auto-active-meta"><span>${formatCount(String(i.content || '').length)}자 · ${esc(remainingLabelForItem(i))}</span>${isLogItem ? `<button type="button" class="rpcm-auto-inline-toggle" title="로그 내용 펼치기" aria-label="로그 내용 펼치기">▾</button>${i.autoType === 'related-log' ? '<button type="button" class="rpcm-auto-reroll" title="내용을 확인하고 다른 로그로 교체">다른 로그</button>' : ''}` : ''}${isLogItem || !!room.pending ? '<button type="button" class="rpcm-auto-remove" title="현재 주입에서 제외">제외</button>' : ''}</div>${isLogItem ? `<pre class="rpcm-auto-inline-content" hidden>${esc(String(i.content || '').trim())}</pre>` : ''}</div>`; }).join('')}</div>` : ''}
+
+            <div class="rpcm-ai-launchbar">
+              <div><strong>✨ AI 요약</strong><span>새 RP 로그로 날짜요약과 현재상태를 만들고, 결과를 확인·수정한 뒤 적용합니다.</span></div>
+              <button class="rpcm-mini" id="rpcm-ai-summary">AI 요약 열기</button>
+            </div>
+
+            ${aiReviewVisible ? `<div class="rpcm-ai-launchbar rpcm-ai-review-launchbar${aiReviewPending ? ' has-pending' : ''}">
+              <div><strong>📥 AI 검토함${aiReviewPending ? ` · 새 결과 ${aiReviewPending}건` : ''}</strong><span>${aiReviewItems.length ? `이 방에 보관된 AI Manager 결과 ${aiReviewItems.length}건` : 'Wish AI Manager에서 보낸 결과가 여기에 표시됩니다.'}</span></div>
+              <button class="rpcm-mini" id="rpcm-ai-review-open">검토함 열기${aiReviewPending ? ` (${aiReviewPending})` : ''}</button>
+            </div>` : ''}
+
+            <section class="rpcm-section rpcm-preferences" id="rpcm-section-preferences" aria-label="일반 UI 설정">
+              <div class="rpcm-settings-card"><h2>일반·UI</h2><p>Manager 동작 설정 · 각 행의 적용 범위를 확인하세요.</p>${renderRpcmPreferences(room)}</div>
+              ${renderNotificationPreferences(room)}
+            </section>
+            <section class="rpcm-section rpcm-ai-workview" id="rpcm-section-ai">
+              <h2>✨ AI</h2>
+              <div class="rpcm-ai-top-summary">
+                <div class="rpcm-ai-statusbar"><div><strong>API 연결</strong><div class="rpcm-ai-chip-row" id="rpcm-ai-api-summary">${aiStatusChips(aiSummaryMeta)}<span class="rpcm-ai-chip ${readAiSecret(aiFeatureSettings(aiSettingsForView,'summary').provider)?'is-ok':'is-error'}"${readAiSecret(aiFeatureSettings(aiSettingsForView,'summary').provider)?'':rpcmErrorHelpAttrs('현재 선택한 AI 제공자의 인증 정보가 저장되어 있지 않습니다.','API 인증 정보 없음','AI → API · 모델 설정을 열어 현재 제공자의 API 키·Firebase 설정 코드·Vertex 서비스 계정 정보를 저장한 뒤 연결 테스트를 실행하세요.')}>${readAiSecret(aiFeatureSettings(aiSettingsForView,'summary').provider)?'인증 저장됨':'인증 필요'}</span></div></div><button type="button" class="rpcm-btn secondary" id="rpcm-ai-inline-settings">API · 모델 설정</button></div>
+                ${renderAiRoomUsageCompact(room)}
+              </div>
+              <div id="rpcm-ai-inline-host" hidden></div>
+              <div class="rpcm-ai-work-tabs" role="tablist" aria-label="AI 작업공간">
+                <button type="button" role="tab" data-ai-work-tab="assistant" aria-controls="rpcm-ai-pane-assistant" aria-selected="true">AI 어시스턴트</button>
+                <button type="button" role="tab" data-ai-work-tab="tasks" aria-controls="rpcm-ai-pane-tasks" aria-selected="false">AI 작업</button>
+                <button type="button" role="tab" data-ai-work-tab="context" aria-controls="rpcm-ai-pane-context" aria-selected="false">맥락 검토</button>
+                <button type="button" role="tab" data-ai-work-tab="folder" aria-controls="rpcm-ai-pane-folder" aria-selected="false">폴더 정리</button>
+              </div>
+              <section class="rpcm-ai-work-pane" id="rpcm-ai-pane-assistant" data-ai-work-pane="assistant" role="tabpanel">
+                <div class="rpcm-ai-assistant-intro"><strong>AI 어시스턴트</strong><span>저장 기억과 RP 원문을 바탕으로 질문하고 감상·해석·전개를 상담하세요.</span>${aiCompactChips(aiUtilityMeta)}</div>
+                <div id="rpcm-ai-assistant-host"></div>
+                <button type="button" class="rpcm-btn secondary rpcm-ai-mobile-assistant-open" id="rpcm-ai-utility-open">AI 어시스턴트 열기</button>
+              </section>
+              <section class="rpcm-ai-work-pane" id="rpcm-ai-pane-tasks" data-ai-work-pane="tasks" role="tabpanel" hidden>
+                <div class="rpcm-ai-control-grid">
+                <article><div class="rpcm-ai-card-head"><h3>AI 요약</h3><p>새 RP → 날짜로그·현재상태 생성</p></div><div class="rpcm-ai-chip-row">${aiCompactChips(aiSummaryMeta)}</div><div class="rpcm-ai-card-result" id="rpcm-ai-summary-status"><span>최근 결과</span><strong>${room.aiSummaryDraft?.createdAt?esc(new Date(room.aiSummaryDraft.createdAt).toLocaleString('ko-KR')):'없음'}</strong><small>새 RP 범위 ${esc(aiFreshCount)} · 설정 ${Number(aiSettingsForView.turnCount||30)}턴</small></div><div class="rpcm-ai-card-actions"><button type="button" class="rpcm-btn secondary" id="rpcm-ai-summary-card-open">AI 요약 열기</button></div></article>
+                <article><div class="rpcm-ai-card-head"><h3>AI 타임라인</h3><p>${storyStats.count}개 카드 · 마지막 검토 이후 RP ${storyUnreviewedCount}턴</p></div><div class="rpcm-ai-chip-row">${aiCompactChips(aiTimelineMeta)}</div><div class="rpcm-ai-card-result" id="rpcm-ai-timeline-status"><span>최근 변경</span><strong>+${(room.storyTimelineLastDiff||[]).filter(x=>x.type==='new').length} / 수정 ${(room.storyTimelineLastDiff||[]).filter(x=>x.type==='updated').length} / 제거 ${(room.storyTimelineLastDiff||[]).filter(x=>x.type==='removed').length}</strong></div><div class="rpcm-ai-card-actions"><button type="button" class="rpcm-btn secondary" id="rpcm-ai-timeline-update">AI 갱신</button><button type="button" class="rpcm-btn secondary" id="rpcm-ai-timeline-audit">AI 점검</button></div></article>
+                </div><div class="rpcm-pref-card rpcm-ai-memory-shortcut"><strong>AI 응답 교정</strong><p>최근 AI 응답을 현재 방 기억·자료팩·인물정보·최근 대화와 대조합니다. 변경은 확인 후 적용할 수 있습니다.</p><span>공용 AI 연결 사용 · 자동 검수/수동 재검수 선택</span><button type="button" class="rpcm-btn secondary" id="rpcm-ai-refiner-open">응답 교정 설정</button></div><div class="rpcm-pref-card rpcm-ai-memory-shortcut"><strong>AI 기억정리</strong><p>6개 항목별 자동 생성 · 결과 검토 후 적용 · 현재 방</p><span>${aiMemoryConfig(room).enabled?'자동 생성 ON':'자동 생성 OFF'} · 검토 대기 ${Object.values(aiMemoryConfig(room).areas).filter(row=>row.draft).length}개</span><button type="button" class="rpcm-btn secondary" id="rpcm-ai-memory-open-settings">항목별 설정·검토</button></div><div id="rpcm-ai-extras"></div>
+              </section>
+              <section class="rpcm-ai-work-pane" id="rpcm-ai-pane-context" data-ai-work-pane="context" role="tabpanel" hidden>
+                <div class="rpcm-ai-control-grid">
+                <article><div class="rpcm-ai-card-head"><h3>AI 맥락 검토</h3><p>관련 날짜로그 후보 재검토</p></div><div class="rpcm-ai-chip-row"><span class="rpcm-ai-chip ${room.aiContextLogRerankEnabled?'is-ok':'is-idle'}">${room.aiContextLogRerankEnabled?'ON':'OFF'}</span>${aiCompactChips(aiContextMeta)}</div><div class="rpcm-ai-card-result" id="rpcm-ai-context-status"><span>최근 검토</span><strong>${esc(({success:'검토 완료',fallback:'실패 · 검색 대체',skipped:'자동 검토 대기'})[aiContextReport?.state]||'기록 없음')}${aiContextReport?.failureCategory?' · '+esc(aiContextReport.failureCategory):''}</strong><label><input type="checkbox" id="rpcm-ai-context-toggle" ${room.aiContextLogRerankEnabled?'checked':''}> AI 맥락 검토 사용</label></div>${aiContextReport?.state==='skipped'?`<p class="rpcm-context-note">${esc(aiContextReport.note||'관련 후보가 없어 자동 API 호출을 건너뛰었습니다.')}</p>`:''}<p class="rpcm-context-note">자동 검토는 관련 후보가 있을 때 실행합니다. 지금 검토는 더 넓게 후보를 확인합니다.</p><div class="rpcm-ai-card-actions"><button type="button" class="rpcm-btn primary" id="rpcm-ai-context-run" ${room._rpcmContextReviewBusy?'disabled':''}>${room._rpcmContextReviewBusy?'검토 중…':'지금 검토'}</button><button type="button" class="rpcm-btn secondary" id="rpcm-ai-context-settings">설정</button></div></article>
+                </div><details class="rpcm-ai-context-results"><summary><strong>날짜로그 선택</strong><span class="rpcm-badge-row">${wishStatusBadge("최근 "+aiRecentCount+"개")}${wishStatusBadge("관련 "+relatedShown+"개","accent")}${aiContextReport?wishStatusBadge("미선택 "+Math.max(0,Number(aiContextReport.candidateCount||0)-Number(aiContextReport.selectedCount||0))+"개"):""}</span></summary><div class="rpcm-ai-context-inline">${aiContextReportHtml}</div></details>${renderRecallExecutionHistory(room)}
+              </section>
+              <section class="rpcm-ai-work-pane" id="rpcm-ai-pane-folder" data-ai-work-pane="folder" role="tabpanel" hidden>
+                <div class="rpcm-ai-control-grid">
+                <article><div class="rpcm-ai-card-head"><h3>AI 폴더 정리</h3><p>중요 물품을 분석해 폴더 분류를 제안합니다. 확인 후 선택 적용합니다.</p></div><div class="rpcm-ai-chip-row">${aiCompactChips(aiItemFolderMeta)}</div><div class="rpcm-ai-card-result"><span>최근 결과</span><strong>${aiItemFolderRun?`변경 제안 ${Number(aiItemFolderRun.proposed)||0}개 · 적용 ${Number(aiItemFolderRun.applied)||0}개`:'기록 없음'}</strong>${aiItemFolderRun?.at?`<small>최근 실행 ${esc(new Date(aiItemFolderRun.at).toLocaleString('ko-KR'))}</small>`:''}</div><div class="rpcm-ai-card-actions"><button type="button" class="rpcm-btn secondary" id="rpcm-ai-folder-open">AI로 분류하기</button></div></article>
+                </div>
+              </section>
+            </section>
+            <div class="rpcm-section" id="rpcm-section-basic">
+              <div class="rpcm-section-head"><div><div class="rpcm-section-title">🧠 기억 관리</div><details class="rpcm-section-details"><summary>현재상태 · 인지 카드 · 날짜로그를 관리합니다. <b>자세히</b></summary><div class="rpcm-section-desc">현재상태는 다음 업데이트 전까지 유효한 지속 상태로 통째 유지합니다. ${hasMultipleLogTimelines ? '로그요약 원문은 시간선별 날짜 블록 저장소로 보관하고, 현재 회차와 이전 모든 회차에서' : '로그요약 원문은 날짜 블록 저장소로 보관하고,'} 직접 주입·최근·관련·항상 주입 날짜 블록을 50,000자·요청 ${formatCount(APP.safeCarrierPayloadBytes)}B 안전선 안에서 골라 주입합니다.</div></details></div></div>
+              <div class="rpcm-memory-tabs" role="tablist" aria-label="기억 관리 항목">
+                <button type="button" role="tab" data-memory-pane="state" aria-controls="rpcm-memory-state">현재상태 <small>${formatCount(String(room.slots.find(s => s.id === 'currentState')?.content || '').length)}자</small></button>
+                <button type="button" role="tab" data-memory-pane="logs" aria-controls="rpcm-memory-logs">날짜로그 <small>${logBlocksForIssues.length}개</small></button>
+              </div>
+              <section id="rpcm-memory-state" class="rpcm-memory-pane" data-memory-content="state" role="tabpanel"><div class="rpcm-memory-pane-head"><div><strong>현재상태</strong><span>인물별 세부 정보와 분리해 방 전체의 지속 상태를 관리합니다.</span></div><button type="button" class="rpcm-btn secondary rpcm-guide-entry" data-rpcm-guide="currentState">${esc(commonGuideButtonLabel(room, 'currentState'))}</button></div>${isGuideTextModified('currentState') ? '<div class="rpcm-guide-migration-note">기존에 직접 수정한 현재상태 지침을 유지하고 있습니다. 기본 지침 v8.4.1을 사용하려면 현재상태의 지침에서 기본값 복원을 눌러 주세요.</div>' : ''}<div id="rpcm-current-state-slot"></div></section>
+              <section id="rpcm-section-timeline" class="rpcm-timeline-section"><div class="rpcm-story-launchbar${storyReviewDue ? ' is-review-due' : ''}${storyStats.enabled ? '' : ' is-injection-off'}"><div><strong>🕰️ 연속성 타임라인${room.storyTimelineReviewSettings?.menuBadge !== false && storyUnreviewedCount ? ` · ${storyUnreviewedCount}턴` : ''}${storyReviewDue ? ' · 검토 권장' : ''}</strong><span>${storyStats.count ? (storyStats.enabled ? `${storyStats.count}개 카드 · 주입 ${storyStats.injectCount}개 · 상세 원문 약 ${formatCount(storyStats.chars)}자` : `${storyStats.count}개 카드 · 전체 주입 OFF · 카드별 포함 ${storyStats.eligibleCount}개 유지`) : '아직 카드 없음'} · 모든 세계선 통합 관리</span></div><label class="rpcm-story-injection-toggle" title="카드별 주입 설정은 유지하고 타임라인 전체 주입만 켜거나 끅니다."><input type="checkbox" id="rpcm-story-injection-enabled" ${storyStats.enabled ? 'checked' : ''}><span>주입 ${storyStats.enabled ? 'ON' : 'OFF'}</span></label><button type="button" class="rpcm-mini" id="rpcm-story-direct-replace">원문 붙여넣기</button><button type="button" class="rpcm-mini" id="rpcm-story-manage">카드로 이동</button></div>
+              ${renderInlineTimelineHtml(room)}</section>
+              <section id="rpcm-memory-logs" class="rpcm-memory-pane" data-memory-content="logs" role="tabpanel"><div class="rpcm-memory-pane-head"><div><strong>날짜로그</strong><span>최신 기록과 관련 기록을 골라 주입합니다.</span></div><button type="button" class="rpcm-btn secondary rpcm-guide-entry" data-rpcm-guide="logSummary">${esc(commonGuideButtonLabel(room, 'logSummary'))}</button></div>
+              <div class="rpcm-auto-panel rpcm-log-auto-panel">${hasMultipleLogTimelines ? `<label class="rpcm-active-timeline-picker"><span class="rpcm-active-timeline-label">🗂️ 다음 저장</span><select id="rpcm-active-log-timeline-main" aria-label="다음 로그 저장 시간선">${logTimelineOptions}</select></label>` : ''}<label><input type="checkbox" id="rpcm-auto-log" ${room.autoLogRecallEnabled ? 'checked' : ''}> 최근·관련 로그 자동 선택 ${rpcmHelpButton('recall')}</label><label class="rpcm-log-count-label">최근 로그 <select id="rpcm-log-recent-count" aria-label="자동 주입할 최근 날짜로그 개수">${logCountOptionsHtml(recentLogInjectionCount(room))}</select></label><label class="rpcm-log-count-label">관련 로그 최대 <select id="rpcm-log-related-count" aria-label="자동 주입할 관련 날짜로그 최대 개수">${logCountOptionsHtml(relatedLogInjectionCount(room))}</select></label><label>관련도 기준 <select id="rpcm-auto-log-relevance"><option value="strict" ${logRelevanceSetting(room)==='strict'?'selected':''}>엄격</option><option value="balanced" ${logRelevanceSetting(room)==='balanced'?'selected':''}>균형</option><option value="broad" ${logRelevanceSetting(room)==='broad'?'selected':''}>넓게</option></select></label><button type="button" class="rpcm-lib-small" id="rpcm-log-date-fix">🛠 날짜 수정</button><button type="button" class="rpcm-lib-small" id="rpcm-log-calendar-open">🗓️ 날짜 달력</button><button type="button" class="rpcm-lib-small" id="rpcm-log-manage">✍️ 로그 관리${manualLogStats.count ? ` (직접 ${manualLogStats.count})` : ''}</button></div>${manualLogStats.count ? `<div class="rpcm-log-help"><b>직접 주입 중</b> ${manualLogStats.count}개 · ${formatCount(manualLogStats.chars)}자 · 즐겨찾기·항상 주입·직접 주입 로그에서 빠르게 넣고 뺄 수 있습니다.</div>` : ''}
+              <div id="rpcm-log-summary-slot"></div></section>
+            </div>
+
+            <div class="rpcm-section" id="rpcm-section-people">
+              <div class="rpcm-section-head"><div><div class="rpcm-section-title">🫂 인물정보</div><details class="rpcm-section-details"><summary>인지 · 호칭 · 관계 관리 <b>자세히</b></summary><div class="rpcm-section-desc">[인물정보] 방의 결과를 복사해 붙여넣으면 각 카드에 분류합니다. 기존 카드는 침묵만으로 지우지 않고 적용 전에 변경사항을 검토합니다.</div></details></div><div class="rpcm-charlib-actions"><button type="button" class="rpcm-add-btn rpcm-guide-entry" data-rpcm-guide="person">${esc(commonGuideButtonLabel(room, 'person'))}</button><button class="rpcm-add-btn" id="rpcm-person-export">기존 정보 복사</button><button class="rpcm-add-btn" id="rpcm-person-import-toggle">결과 붙여넣기</button><button type="button" class="rpcm-add-btn" data-utility-shortcut="conflict">AI 충돌 후보</button><button type="button" id="rpcm-person-guide-copy" hidden></button><button type="button" id="rpcm-person-guide-toggle" hidden></button></div></div>
+              <section class="rpcm-person-guide-panel" id="rpcm-person-guide-panel" hidden><div><strong>인물정보 지침 <span id="rpcm-person-guide-modified"></span></strong><button type="button" class="rpcm-btn secondary" id="rpcm-person-guide-reset">기본값 복원</button><button type="button" class="rpcm-btn secondary" id="rpcm-person-guide-save">저장</button></div><textarea id="rpcm-person-guide-text" spellcheck="false"></textarea></section>
+              <div class="rpcm-person-import" id="rpcm-person-import" hidden><div class="rpcm-person-paste-head"><label for="rpcm-person-import-text">인물 결과 TXT</label><button type="button" class="rpcm-btn secondary" data-person-import-close aria-label="닫기" data-rpcm-close="icon">${rpcmUiIcon('close')}</button></div><textarea id="rpcm-person-import-text" spellcheck="false" placeholder="[[WISH_PERSON_V1]]&#10;{...}&#10;[[/WISH_PERSON_V1]]"></textarea><div><input id="rpcm-person-import-file" type="file" accept=".txt,text/plain" hidden><button type="button" class="rpcm-btn secondary" id="rpcm-person-import-file-button">TXT 파일 선택</button><button type="button" class="rpcm-btn secondary" data-person-import-close>닫기</button><button type="button" class="rpcm-btn primary" id="rpcm-person-preview">분류 미리보기</button></div></div>
+              <div id="rpcm-person-core" class="rpcm-person-core" aria-label="인물·인지"></div>
+              <details class="rpcm-person-advanced" ${state.personAdvancedOpen ? 'open' : 'hidden'}><summary>카드 편집 <button type="button" class="rpcm-person-core-editor-close">읽기 화면으로</button></summary><div class="rpcm-person-advanced-content">
+              <div class="rpcm-person-edit-context" id="rpcm-person-edit-context" hidden><strong></strong><button type="button" class="rpcm-btn secondary">편집 마치고 인물 카드로</button></div>
+              <div class="rpcm-person-tabs" role="tablist" aria-label="인물정보 종류"><button type="button" data-person-pane="knowledge" role="tab">인물·인지</button><button type="button" data-person-pane="speech" role="tab">호칭·말투</button><button type="button" data-person-pane="relationship" role="tab">관계·감정선</button><button type="button" data-person-pane="review" role="tab">이전 검토</button></div>
+              <section class="rpcm-person-pane" data-person-content="knowledge" role="tabpanel"><section id="rpcm-knowledge-panel" class="rpcm-knowledge-panel" aria-label="인물별 인지 현황"></section></section>
+              <section class="rpcm-person-pane" data-person-content="speech" role="tabpanel"><div id="rpcm-person-speech"></div></section>
+              <section class="rpcm-person-pane" data-person-content="relationship" role="tabpanel"><div id="rpcm-person-relationship"></div></section>
+              <section class="rpcm-person-pane" data-person-content="review" role="tabpanel"><div id="rpcm-person-review"></div></section>
+              </div></details>
+            </div>
+
+            <section class="rpcm-section rpcm-lore-section" id="rpcm-section-lore" data-rpcm-lazy="true"></section>
+
+            <div class="rpcm-section" id="rpcm-section-character">
+              <div class="rpcm-section-head rpcm-character-head"><div><div class="rpcm-section-title">👤 캐릭터 설정</div><details class="rpcm-section-details"><summary>캐릭터 설정과 자동 선택을 관리합니다. <b>자세히</b></summary><div class="rpcm-section-desc">캐릭터별로 저장하고 이름 앞 체크로 현재 주입 여부를 정합니다. 인물마다 연속 유지 주기도 따로 설정할 수 있습니다.<br>RP 등장 캐릭터 자동 선택은 감지 대상 설정집의 캐릭터가 최근 실제 RP 본문에 정식 이름·성·영문명·등록 별칭으로 등장하면 이름 앞의 현재 주입 체크를 자동으로 켭니다. Manager가 숨겨 주입한 현재상태·날짜로그·캐릭터·기타/OOC와 자료집 참고 블록은 감지 대상에서 제외합니다.<br>‘자동 선택용 별칭’은 설정집에 없는 애칭·약칭·호칭을 감지할 때만 사용하며, 별칭 자체는 주입 내용에 포함되지 않습니다. AI도 알아야 하는 별칭은 캐릭터 설정 본문에 적어주세요.</div></details></div><div class="rpcm-charlib-actions"><button class="rpcm-add-btn" id="rpcm-charlib-save">설정집 저장</button><button class="rpcm-add-btn" id="rpcm-charlib-load">설정집 불러오기</button><button class="rpcm-add-btn" id="rpcm-add-character">＋ 캐릭터 추가</button></div></div>
+              <div class="rpcm-auto-panel"><label><input type="checkbox" id="rpcm-auto-char" ${room.autoCharacterDetection ? 'checked' : ''}> RP 등장 캐릭터 자동 선택</label><label title="켜면 메인에서 현재 주입 체크를 꺼둔 캐릭터도 실제 RP에 등장할 때 자동으로 선택할 수 있습니다. 캐릭터별 🚫 자동 선택 제외가 우선합니다."><input type="checkbox" id="rpcm-auto-char-include-unchecked" ${room.autoCharacterIncludeUnchecked ? 'checked' : ''} ${room.autoCharacterDetection ? '' : 'disabled'}> 체크 해제 캐릭터도 자동 선택</label><label>감지 대상 설정집 (필수) <select id="rpcm-auto-char-library"><option value="">선택 안 함</option></select></label><label><input type="checkbox" id="rpcm-auto-char-reset" ${room.autoCharacterResetOnReappear ? 'checked' : ''}> 다시 등장하면 유지턴 리셋</label><div class="rpcm-auto-note">선택한 설정집의 캐릭터가 최근 RP에 등장하면 이름 앞의 <b>현재 주입</b> 체크가 자동으로 켜집니다. <b>체크 해제 캐릭터도 자동 선택</b>을 켜면 평소 체크를 꺼둔 캐릭터도 등장 시 자동 선택하며, 특정 캐릭터를 자동선택에서 완전히 빼려면 카드의 <b>🚫 자동 선택 제외</b>를 사용합니다. 자동 선택·관련 로그 자동 선택은 주입 전에도 <b>다음 주입 준비</b>를 위해 갱신되며, 실제 서버 숨김 주입은 <b>주입 시작</b>을 누른 뒤에만 동작합니다.</div></div>
+              <div id="rpcm-character-slots"></div>
+            </div>
+
+            <div class="rpcm-section" id="rpcm-section-item">
+              <div class="rpcm-section-head rpcm-item-head"><div><div class="rpcm-section-title">📦 중요 물품</div><details class="rpcm-section-details"><summary>물품 정리 · 사용 방법</summary><div class="rpcm-section-desc">폴더로 물품을 정리하고, RP에서 제목이나 감지어가 등장한 물품만 자동 선택할 수 있습니다. 중복 물품은 확인 후 정리합니다. 삭제 선택은 주입 체크와 별개입니다.</div></details></div><div class="rpcm-charlib-actions"><button class="rpcm-add-btn rpcm-add-primary" id="rpcm-add-item">＋ 물품 추가</button><button type="button" class="rpcm-add-btn" id="rpcm-items-direct-replace">전체 원문 붙여넣기</button><button type="button" class="rpcm-add-btn" id="rpcm-item-ai-folder">AI 폴더 정리</button><details class="rpcm-section-more"><summary>물품 도구</summary><div><button class="rpcm-add-btn" id="rpcm-import-items">목록 붙여넣기</button><button class="rpcm-add-btn" id="rpcm-item-collapse-all">모두 접기</button><button class="rpcm-add-btn" id="rpcm-items-raw-preview">전체 원문 보기</button><button class="rpcm-add-btn" id="rpcm-items-copy-all">전체 원문 복사</button></div></details></div></div>
+              <details class="rpcm-item-bulkbar"><summary>삭제 선택 관리 <span id="rpcm-item-selected-count" role="status">0개</span></summary><div><button type="button" class="rpcm-add-btn" id="rpcm-items-select-all">전체 선택</button><button type="button" class="rpcm-add-btn" id="rpcm-items-clear-selection">선택 해제</button><button type="button" class="rpcm-add-btn rpcm-item-bulk-delete" id="rpcm-items-delete-selected" disabled>선택 삭제</button></div></details>
+              <div class="rpcm-auto-panel"><label><input type="checkbox" id="rpcm-auto-item" ${room.autoItemDetection !== false ? 'checked' : ''}> 물품 언급 자동 주입</label><label><input type="checkbox" id="rpcm-auto-item-reset" ${room.autoItemResetOnReappear !== false ? 'checked' : ''}> 다시 언급되면 유지턴 리셋</label><details class="rpcm-item-import-help"><summary>감지어·붙여넣기 형식 보기</summary><div class="rpcm-auto-note">물품의 정확한 이름 또는 직접 등록한 고유 별칭이 최근 RP에서 언급될 때만 자동 선택합니다. 제목의 일반 단어 조각으로는 선택하지 않습니다. 📌 고정이나 직접 체크는 우선합니다. 감지어는 AI 주입 내용에서 제외됩니다.</div><div class="rpcm-item-format-guide"><strong>목록 형식</strong><code>- **물품 이름｜날짜/시점**</code><span>다음 줄에 설명을 적으면 항목별로 나뉩니다.</span></div></details></div>
+              ${duplicateItemGroups.length ? '<div class="rpcm-item-duplicate-notice" role="alert"><div><strong>⚠ 중복 물품 ' + duplicateItemGroups.length + '개 그룹</strong><span>같은 이름의 물품을 확인하고 모두 유지하거나 하나를 남길 수 있습니다.</span></div><button type="button" class="rpcm-btn secondary" id="rpcm-item-review-duplicates">선택 정리</button></div>' : ''}
+              <div id="rpcm-item-slots"></div>
+            </div>
+
+            <div class="rpcm-section" id="rpcm-section-extra">
+              <div class="rpcm-section-head rpcm-extra-head"><div><div class="rpcm-section-title">🧩 기타</div><details class="rpcm-section-details"><summary>OOC와 기타 설정집을 관리합니다. <b>자세히</b></summary><div class="rpcm-section-desc">OOC, 출력 규칙, 사칭방지 프롬 등을 카테고리별로 묶어 보관합니다. 항목의 카테고리는 주입 문구에 포함되지 않습니다.</div></details></div><div class="rpcm-charlib-actions"><button class="rpcm-add-btn" id="rpcm-extralib-save">기타 설정집 저장</button><button class="rpcm-add-btn" id="rpcm-extralib-load">기타 설정집 불러오기</button><button class="rpcm-add-btn" id="rpcm-add-extra-category">＋ 카테고리</button><button class="rpcm-add-btn" id="rpcm-add-extra">＋ 기타 추가</button></div></div>
+              <div id="rpcm-extra-slots"></div>
+            </div>
+
+            <div class="rpcm-tools" id="rpcm-section-tools">
+              <div style="flex:1 1 100%">${aiMemorySummary(room)}</div>
+              <button class="rpcm-mini" id="rpcm-preview-btn">주입 구성 미리보기</button>
+              <button class="rpcm-mini" id="rpcm-room-transfer-backup">현재 방 복사용 JSON</button>
+              <button class="rpcm-mini" id="rpcm-backup">전체 백업 JSON</button>
+              <button class="rpcm-mini" id="rpcm-storage-recovery" title="사용량 확인, 전체 백업과 선택 복구, 용량 관리를 한곳에서 합니다.">저장소 점검·복구</button><button class="rpcm-mini" id="rpcm-full-diagnostics" title="${esc(rpcmStorageDiagnosticHelp())}">저장 상태 확인</button><button class="rpcm-mini" id="rpcm-full-verify" title="${esc(rpcmBackupFileHelp())}">백업 파일 확인</button>
+              <button class="rpcm-mini" id="rpcm-import">백업 불러오기</button>
+              <button class="rpcm-mini" id="rpcm-reset-area">영역별 초기화</button>
+              <button class="rpcm-mini" id="rpcm-reset">현재 RP 데이터 초기화</button>
+              <input id="rpcm-import-file" type="file" accept=".json" style="display:none">
+              <div class="rpcm-shortcuts">단축키 · Ctrl+Shift+F 통합 검색 · Ctrl+Enter 주입 시작 · 독립 편집창 Esc 닫기</div>
+            </div>
+          </div>
+        <div class="rpcm-footer">
+          <div class="rpcm-footer-actions"><button class="rpcm-btn rpcm-footer-arm${pending ? ' is-armed' : ''}" id="rpcm-arm" ${armDisabledReason ? `disabled title="${esc(armDisabledReason)}"` : pending ? 'title="현재 주입 해제"' : 'title="주입 시작 · Ctrl+Enter"'}><span class="rpcm-footer-dot" aria-hidden="true"></span><span class="rpcm-footer-arm-label">${pending ? pending.reanchorRetry ? '복구 대기' : pending.verified ? '주입 중' : '서버 확인 필요' : '주입 시작'}</span></button><button type="button" class="rpcm-btn secondary rpcm-footer-preview" id="rpcm-footer-preview">${rpcmUiIcon('eye')}<span>미리보기</span></button></div>
+          <div class="rpcm-footer-status"><span class="rpcm-arm-reason" id="rpcm-arm-reason" ${armDisabledReason ? '' : 'hidden'}>${esc(armDisabledReason)}</span><span class="rpcm-save-status saved" id="rpcm-save-status">로컬 저장됨</span><button type="button" class="rpcm-mini" id="rpcm-save-retry" hidden>저장 다시 시도</button><span class="rpcm-carrier-status idle" id="rpcm-carrier-status" role="status" ${pending ? '' : 'hidden'}>현재 주입 유지 중</span>${pending ? '' : room.carrierCleanup?.length ? '<span class="rpcm-footer-off">주입 OFF · 서버 잔여 주입 정리 대기</span>' : '<span class="rpcm-footer-off">주입 OFF · 기억은 그대로</span>'}</div>
+        </div>
+        </div>
+      </div>`);
+
+    if (previousSummaryOpen) overlay.querySelector('.rpcm-summary').open = true;
+    if (previousItemToolsOpen) overlay.querySelector('.rpcm-section-more').open = true;
+    if (previousItemBulkOpen) overlay.querySelector('.rpcm-item-bulkbar').open = true;
+    if ((state.workView || 'overview') === 'people') {
+      renderPersonPanel(room, overlay);
+      overlay.querySelector('#rpcm-section-people')?.setAttribute('data-rpcm-ui-rendered-room',String(room.chatId));
+    }
+    if (hadPersonProfiles) overlay.querySelectorAll('.rpcm-profile[data-person-name]').forEach(node => { node.open = previouslyOpenProfiles.has(String(node.dataset.personName || '')); });
+    const personImportBox = overlay.querySelector('#rpcm-person-import');
+    if (personImportBox) {
+      personImportBox.hidden = !previousPersonImportOpen;
+      const textField = overlay.querySelector('#rpcm-person-import-text');
+      textField.value = previousPersonImportText;
+      textField.oninput = () => { state.personImportDraft = textField.value; };
+    }
+    overlay.querySelectorAll('.rpcm-knowledge-card[data-knowledge-id]').forEach(node => { if (previouslyOpenKnowledge.has(node.dataset.knowledgeId)) node.open = true; });
+    overlay.querySelectorAll('.rpcm-work-nav .rpcm-jump').forEach(button => {
+      const active = button.dataset.jump === previouslyActiveDesktop;
+      button.classList.toggle('is-active', active);
+      if (active) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
+    });
+    const currentStateWrap = overlay.querySelector('#rpcm-current-state-slot');
+    const logSummaryWrap = overlay.querySelector('#rpcm-log-summary-slot');
+    const charWrap = overlay.querySelector('#rpcm-character-slots');
+    const itemWrap = overlay.querySelector('#rpcm-item-slots');
+    const extraWrap = overlay.querySelector('#rpcm-extra-slots');
+    const memoryTabs = [...overlay.querySelectorAll('.rpcm-memory-tabs [data-memory-pane]')];
+    const activateMemoryPane = key => {
+      const pane = ['state', 'logs'].includes(key) ? key : 'state';
+      state.memoryPane = pane;
+      memoryTabs.forEach(button => {
+        const selected = button.dataset.memoryPane === pane;
+        button.setAttribute('aria-selected', String(selected));
+        button.tabIndex = selected ? 0 : -1;
+      });
+      overlay.querySelectorAll('.rpcm-memory-pane').forEach(node => { node.hidden = node.dataset.memoryContent !== pane; });
+      if (['memory','logs'].includes(overlay.querySelector('.rpcm-workspace')?.dataset.view)) showWorkView(overlay, pane === 'logs' ? 'logs' : 'memory');
+    };
+    memoryTabs.forEach((button, index) => {
+      button.onclick = () => activateMemoryPane(button.dataset.memoryPane);
+      button.onkeydown = event => {
+        const offset = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
+        if (!offset) return;
+        event.preventDefault();
+        const next = memoryTabs[(index + offset + memoryTabs.length) % memoryTabs.length];
+        activateMemoryPane(next.dataset.memoryPane); next.focus();
+      };
+    });
+    activateMemoryPane(state.memoryPane);
+
+    overlay.querySelectorAll('.rpcm-auto-inline-toggle').forEach(btn => {
+      btn.onclick = () => {
+        const row = btn.closest('.rpcm-auto-active-row');
+        const content = row?.querySelector('.rpcm-auto-inline-content');
+        if (!content) return;
+        content.hidden = !content.hidden;
+        btn.textContent = content.hidden ? '▾' : '▴';
+        btn.title = content.hidden ? '로그 내용 펼치기' : '로그 내용 접기';
+        btn.setAttribute('aria-label', btn.title);
+      };
+    });
+
+    overlay.querySelectorAll('.rpcm-auto-remove').forEach(btn => {
+      btn.onclick = async () => {
+        const row = btn.closest('.rpcm-auto-active-row');
+        const key = String(row?.dataset.pendingKey || '');
+        if (!key) return;
+        btn.disabled = true;
+        try {
+          await removePendingRecallItem(room, key, String(row?.dataset.sourceKey || ''), String(row?.dataset.autoType || ''));
+          notify(room.pending ? '이 항목을 현재 주입에서 제외했습니다.' : '이 로그를 다음 주입 목록에서 제외했습니다.', 'success', 3200);
+          renderModalIfOpen();
+        } catch (error) {
+          btn.disabled = false;
+          notify(`로그 빼기 실패: ${error.message}`, 'error', 6000);
+        }
+      };
+    });
+
+    overlay.querySelectorAll('.rpcm-auto-reroll').forEach(btn => {
+      btn.onclick = async () => {
+        const key = String(btn.closest('.rpcm-auto-active-row')?.dataset.pendingKey || '');
+        if (!key) return;
+        btn.disabled = true;
+        try {
+          const selectedKey = await openRelatedLogPickerDialog(room, { replaceIdentity:key });
+          if (!selectedKey) { btn.disabled = false; return; }
+          await applyManualRelatedLog(room, selectedKey, key);
+          notify('확인한 날짜로그로 교체했습니다. ‘직접 주입’으로 유지됩니다.', 'success', 4200);
+          renderModalIfOpen();
+        } catch (error) {
+          btn.disabled = false;
+          notify(`관련로그 교체 실패: ${error.message}`, 'warn', 6000);
+        }
+      };
+    });
+
+    const relatedAddBtn = overlay.querySelector('#rpcm-related-add');
+    if (relatedAddBtn) relatedAddBtn.onclick = async () => {
+      relatedAddBtn.disabled = true;
+      try {
+        const selectedKey = await openRelatedLogPickerDialog(room);
+        if (!selectedKey) { relatedAddBtn.disabled = false; return; }
+        await applyManualRelatedLog(room, selectedKey);
+        notify('관련로그를 직접 추가했습니다. AI 맥락 재검토 후에도 유지됩니다.', 'success', 4200);
+        renderModalIfOpen();
+      } catch (error) {
+        relatedAddBtn.disabled = false;
+        notify(`관련로그 추가 실패: ${error.message}`, 'warn', 6000);
+      }
+    };
+
+    const aiContextButtons = [...overlay.querySelectorAll('#rpcm-ai-context-run,#rpcm-ai-context-refresh')];
+    for (const button of aiContextButtons) button.onclick = async event => {
+      event.preventDefault(); event.stopPropagation();
+      if (room._rpcmContextReviewBusy) return;
+      Object.defineProperty(room,'_rpcmContextReviewBusy',{value:true,writable:true,configurable:true,enumerable:false});
+      const labels = aiContextButtons.map(node => node.textContent);
+      aiContextButtons.forEach(node => { node.disabled=true; node.textContent='검토 중…'; });
+      try {
+        readModalIntoRoom();
+        const report = await refreshAiContextReviewNow(room);
+        if (report?.state === 'success') {
+          notify(`AI 맥락 검토 완료 · API 검토 ${Number(report.inspectedCount||0)}개 · 과거로그 ${Number(report.selectedCount||0)}개 선정${room.pending?' · 현재 주입 확인':' · 다음 주입 후보'}${report.note?' · '+report.note:''}`, 'success', 6000);
+        } else if (report?.state === 'skipped') {
+          notify(`AI 맥락 검토 대기 · ${report.note||'설정을 확인해 주세요.'}`, 'warn', 6500);
+        } else if (report?.state === 'fallback') {
+          notify('대체 검색 완료 · 검색 결과를 유지합니다. AI 검토 원인은 상세 기록에서 확인할 수 있습니다.', 'info', 4500);
+        }
+      } catch (error) {
+        notify(`AI 맥락 검토 실패: ${error.message}`, 'warn', 6500);
+      } finally {
+        delete room._rpcmContextReviewBusy;
+        aiContextButtons.forEach((node,index) => { node.disabled=false; node.textContent=labels[index]; });
+        renderModalIfOpen();
+      }
+    };
+
+    const resolveDupBtn = overlay.querySelector('#rpcm-resolve-duplicate-logs');
+    if (resolveDupBtn) resolveDupBtn.onclick = async () => {
+      readModalIntoRoom();
+      const changed = await openDuplicateLogResolverDialog(room);
+      if (!changed) return;
+      let localSaved = false;
+      try {
+        const logSlot = (room.slots || []).find(s => s.id === 'logSummary');
+        const cleanedContent = String(logSlot?.content || '');
+        const remainingDuplicates = duplicateLogDateGroups(room);
+        if (remainingDuplicates.length) {
+          throw new Error(`정리 후에도 중복 날짜가 남아 있습니다: ${remainingDuplicates.map(g => `${g.label} (${g.blocks.length}개)`).join(', ')}`);
+        }
+
+        // 정리 창은 room 데이터를 직접 바꾸므로, 뒤쪽의 기존 textarea가 낡은 원문을
+        // 다시 저장하지 않게 화면 값도 즉시 같은 내용으로 맞춥니다.
+        const logTextarea = overlay.querySelector('.rpcm-slot[data-slot-id="logSummary"] .rpcm-textarea');
+        if (logTextarea) logTextarea.value = cleanedContent;
+        const queuedSave = state.autoSaveTimers.get(String(room.chatId || ''));
+        if (queuedSave) clearTimeout(queuedSave);
+        state.autoSaveTimers.delete(String(room.chatId || ''));
+
+        // 서버 carrier 갱신이 실패하더라도 정리한 로그 원문은 잃지 않도록 로컬에 먼저 저장합니다.
+        await saveRoom(room);
+        localSaved = true;
+        renderModalIfOpen();
+
+        if (room.pending) await rebuildPendingLogItems(room, 'duplicate-log-resolve');
+        await saveRoom(room);
+        notify('중복 날짜 로그 정리를 반영했습니다.', 'success', 4200);
+        renderModalIfOpen();
+      } catch (e) {
+        notify(localSaved
+          ? `중복 로그 원문은 저장했지만 현재 주입 갱신에 실패했습니다: ${e.message}`
+          : `중복 로그 정리 반영 실패: ${e.message}`, 'error', 7200);
+        renderModalIfOpen();
+      }
+    };
+
+    const resolveDuplicateItemsBtn = overlay.querySelector('#rpcm-resolve-duplicate-items');
+    if (resolveDuplicateItemsBtn) resolveDuplicateItemsBtn.onclick = async () => {
+      if (room.pending) { notify('중복 물품 정리는 현재 주입을 해제한 뒤 진행해 주세요.', 'warn', 4800); return; }
+      readModalIntoRoom();
+      const decisions = await openImportantItemDuplicateResolverDialog(room);
+      if (!decisions) return;
+      let removed;
+      try{removed=await applyImportantItemDuplicateDecisionsSaved(room,decisions);}
+      catch(error){notify(`중복 물품 정리 저장 실패: ${error.message}`,'error',6500);renderModalIfOpen();return;}
+      notify(removed ? `중복 물품을 정리했습니다. ${removed}개 제거 · 선택한 항목 유지` : '중복 물품을 전체 유지했습니다.', 'success', 4300);
+      renderModalIfOpen();
+    };
+
+    const normalizeDatesWarningBtn = overlay.querySelector('#rpcm-normalize-log-dates');
+    if (normalizeDatesWarningBtn) normalizeDatesWarningBtn.onclick = async () => {
+      readModalIntoRoom();
+      const before=rpcmRoomClone(room);
+      const changed = await openLogDateNormalizerDialog(room);
+      if (!changed) return;
+      try { await saveRoom(room); }
+      catch (e) { rpcmReplaceRoomObject(room,before); notify(`날짜 수정 저장 실패 · 원래 상태 유지: ${e.message}`, 'error', 6500); renderModalIfOpen(); return; }
+      try {
+        if (room.pending) await rebuildPendingLogItems(room, 'log-date-normalize');
+        notify('로그 제목의 날짜/연도 수정을 반영했습니다.', 'success', 4200);
+        renderModalIfOpen();
+      } catch (e) { notify(`로그 날짜는 저장했지만 현재 주입 반영에 실패했습니다: ${e.message}`, 'error', 7000); renderModalIfOpen(); }
+    };
+
+    // Moving a card between folders only changes that card and its two folder
+    // containers. Rebuilding the whole Manager here caused the visible flash.
+    function moveSlotFolderInPlace(card, slot) {
+      const isItem=slot.group==='item';
+      const wrap=isItem?itemWrap:extraWrap;
+      const folderClass=isItem?'rpcm-item-folder':'rpcm-extra-folder';
+      const bodyClass=isItem?'rpcm-item-folder-body':'rpcm-extra-folder-body';
+      const dataKey=isItem?'itemFolder':'extraCategory';
+      const name=String(isItem?slot.itemFolder:slot.extraCategory||'').trim()||'미분류';
+      const dataName=isItem&&name==='미분류'&&!String(slot.itemFolder||'').trim()?'':name;
+      const old=card.closest('.'+folderClass);
+      let target=[...wrap.querySelectorAll('.'+folderClass)].find(node=>node.dataset[dataKey]===dataName);
+      if(!target){
+        target=document.createElement('details');
+        target.className=folderClass;
+        target.dataset[dataKey]=dataName;
+        target.open=true;
+        target.innerHTML=`<summary><strong>${!dataName?'🗂️':'📁'} ${esc(name)}</strong><span>0개</span></summary><div class="${bodyClass}"></div>`;
+        const drop=wrap.querySelector('.rpcm-unclassified-drop');
+        if(drop)wrap.insertBefore(target,drop);else wrap.appendChild(target);
+      }
+      target.querySelector('.'+bodyClass).appendChild(card);
+      for(const node of [old,target]){
+        if(!node)continue;
+        const count=node.querySelectorAll(':scope > .'+bodyClass+' > .rpcm-slot').length;
+        if(!count){node.remove();continue;}
+        const label=node.querySelector(':scope > summary > span');
+        if(label)label.textContent=`${count}개`;
+      }
+      if(isItem){
+        const actors=personCoreViewModel(room).actors;
+        const actorFor=folder=>actors.find(actor=>actor.name===folder)||actors.find(actor=>(actor.aliases||[]).includes(folder));
+        const rank=folder=>!folder?-1:actorFor(folder)?actors.indexOf(actorFor(folder)):actors.length;
+        [...wrap.querySelectorAll('.rpcm-item-folder')].sort((a,b)=>rank(a.dataset.itemFolder)-rank(b.dataset.itemFolder)).forEach(node=>wrap.insertBefore(node,wrap.querySelector('.rpcm-unclassified-drop')));
+        wrap.querySelectorAll('.rpcm-item-folder').forEach(node=>{const folder=node.dataset.itemFolder;node.hidden=!(state.itemFolderFilter==='all'||(state.itemFolderFilter==='unclassified'&&!folder)||(state.itemFolderFilter==='other'&&!!folder&&!actorFor(folder))||(state.itemFolderFilter.startsWith('person:')&&actorFor(folder)?.name===state.itemFolderFilter.slice(7)));});
+        const counts={all:room.slots.filter(row=>row.group==='item').length,unclassified:room.slots.filter(row=>row.group==='item'&&!String(row.itemFolder||'').trim()).length,other:room.slots.filter(row=>row.group==='item'&&String(row.itemFolder||'').trim()&&!actorFor(String(row.itemFolder||'').trim())).length};
+        wrap.previousElementSibling?.querySelectorAll('[data-item-filter]').forEach(tab=>{const key=tab.dataset.itemFilter;const n=key.startsWith('person:')?room.slots.filter(row=>row.group==='item'&&actorFor(String(row.itemFolder||'').trim())?.name===key.slice(7)).length:counts[key]||0;const badge=tab.querySelector('small');if(badge)badge.textContent=String(n);});
+      }
+    }
+    state.syncItemFolderCard=slot=>{
+      if(state.currentRoom!==room||!state.modal)return;
+      const card=[...state.modal.querySelectorAll('#rpcm-item-slots .rpcm-slot[data-slot-id]')].find(node=>node.dataset.slotId===String(slot.id));
+      if(card)moveSlotFolderInPlace(card,slot);
+    };
+
+    function createSlotCard(slot, openDefault = false) {
+      const d = document.createElement('details');
+      const inlineRetention = slot.group === 'character' || slot.group === 'item' || slot.group === 'extra' || slot.id === 'currentState';
+      const fallbackTitle = slot.group === 'character' ? '새 캐릭터' : slot.group === 'item' ? '중요 물품' : '기타';
+      const automaticTerms = slot.group === 'character' ? characterAutomaticTerms(slot) : slot.group === 'item' ? importantItemAutomaticTerms(slot) : [];
+      const initialGuideVariant = slot.id === 'logSummary' ? getLogSummaryGuideVariant(false) : '';
+      const initialGuideModified = !!BASE_GUIDES[slot.id] && isGuideTextModified(slot.id, initialGuideVariant);
+      const itemFolderOptions = slot.group === 'item' ? importantItemFolderNames(room) : [];
+      const itemHeader = slot.group === 'item' ? importantItemHeaderParts(slot.title) : null;
+      const itemChildCount = slot.group === 'item' ? parseImportantItemReadBody(slot.content).children.length : 0;
+      const itemFolderListId = `rpcm-item-folder-options-${String(slot.id).replace(/[^A-Za-z0-9_-]/g, '')}`;
+      const itemSettingsPanelId = `rpcm-item-settings-${String(slot.id).replace(/[^A-Za-z0-9_-]/g, '')}`;
+      const extraCategoryListId = `rpcm-extra-category-options-${String(slot.id).replace(/[^A-Za-z0-9_-]/g, '')}`;
+      const extraCategoryNames = [...new Set(room.slots.filter(s => s.group === 'extra').map(s => String(s.extraCategory || '').trim()).filter(Boolean))];
+      d.className = `rpcm-slot${inlineRetention ? ' rpcm-slot-inline-retention' : ''}`;
+      d.dataset.slotId = slot.id;
+      d.open = hadPreviousRender ? previouslyOpenSlots.has(String(slot.id)) : openDefault;
+      const deletable = slot.group === 'character' || slot.group === 'item' || slot.group === 'extra';
+      const titleEditable = deletable;
+      const pendingItem = pending?.items?.find(i => i.slotId === slot.id && (Number(i.totalTurns || 0) === 0 || Number(i.usedTurns || 0) < Number(i.totalTurns || 0)));
+      d.innerHTML = `
+        <summary>
+          ${['character', 'item', 'extra'].includes(slot.group) ? '<span class="rpcm-drag-handle" draggable="true" role="button" tabindex="0" aria-label="드래그하여 항목 순서 또는 폴더 이동" title="드래그하여 이동">⋮⋮</span>' : ''}
+          <input class="rpcm-enable" type="checkbox" ${slot.enabled ? 'checked' : ''} title="${slot.group === 'character' || slot.group === 'item' ? '현재 주입 여부 · 자동 감지 대상 지정이 아닙니다.' : '현재 주입 여부'}" aria-label="${esc(slot.title)} 현재 주입 여부">
+          ${slot.group === 'item' ? `<label class="rpcm-item-delete-label" title="삭제할 물품 선택 · 주입 여부에는 영향 없음"><input class="rpcm-item-delete-select" type="checkbox" ${previouslySelectedItems.has(String(slot.id)) ? 'checked' : ''} aria-label="${esc(slot.title)} 삭제 선택"><span>삭제 선택</span></label>` : ''}

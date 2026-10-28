@@ -1,0 +1,707 @@
+  async function primeBaseline(){
+    if(!settings.enabled){autoPrimeEpoch++;autoBaselineReady=true;autoCheckQueued=false;clearTimeout(debounceTimer);debounceTimer=null;return;}
+    if(rpcmRefinerReadGate()){autoBaselineReady=false;autoBaselineReadSucceeded=false;return;}
+    const epoch=++autoPrimeEpoch,readScope=rpcmRefinerReadContext();
+    autoBaselineReady=false;autoBaselineReadSucceeded=false;autoGenerationEvidence=null;autoReviewRetryPermit=false;
+    let authMissing=false;
+    try{
+      if(!getAuthToken()){authMissing=true;setStatus('Crack 인증정보 대기');return;}
+      const last=await findLastAssistant();
+      if(epoch!==autoPrimeEpoch)return;
+      autoBaselineReadSucceeded=true;
+      const pending=!!last&&isPendingResponse(last);
+      baselineFingerprint=pending?'':messageFingerprint(last);
+      autoObservedStableId=messageStableId(last);
+      if(last)rememberAutoObservedId(last);
+      lastAutoAssistantKey=messageAutoKey(last);
+      // An in-flight generation is the one exception: wait for its completion.
+      // Pre-existing unreviewed responses are not billed merely due to refresh/navigation.
+      if(pending){signalAutoGeneration('server-pending',autoObservedStableId);autoCheckQueued=true;}
+      else autoCheckQueued=false;
+      autoCheckWaits=0;
+      if(last&&!pending&&!isProcessed(last))setReviewGate(last,'skipped');
+    }catch(error){
+      if(!rpcmRefinerReadCurrent(readScope))return;
+      baselineFingerprint='';lastAutoAssistantKey='';autoObservedStableId='';autoBaselineReadSucceeded=false;
+      const policy=rpcmRefinerReadPolicy(error);rpcmRefinerHoldRead(policy,readScope);
+      if(policy.kind==='auth'){
+        authMissing=true;setStatus('Crack 인증정보 대기');
+      }else{
+        setStatus('응답 조회 실패 · 수동 검수에서 확인','error');
+        showReviewNotice('응답 조회 실패',String(error.message||error)+' · 수동 검수 버튼으로 다시 확인해 주세요.','error',6000);
+      }
+    }finally{
+      if(epoch===autoPrimeEpoch){autoBaselineReady=rpcmRefinerReadCurrent(readScope)&&!authMissing;if(autoCheckQueued&&autoBaselineReady)scheduleAutoCheck(250);}
+    }
+  }
+
+  function handleRouteBaselineChange() {
+    lastKnownPath = location.href;
+    if(rpcmAutoReadHolds.get(chatStateKey())?.kind==='stop')rpcmAutoReadHolds.delete(chatStateKey());
+    if(deferredRefinerReload&&deferredRefinerReload.scope!==chatStateKey())clearDeferredRefinerReload();
+    clearTimeout(debounceTimer);autoCheckQueued=false;autoCheckWaits=0;lastAutoHeartbeatAt=0;autoGenerationEvidence=null;autoReviewRetryPermit=false;
+    autoBaselineReady = false;
+    void primeBaseline();
+  }
+
+  function startObserver() {
+    document.addEventListener('click',observeCrackGenerationAction,true);
+    mutationObserver?.disconnect();
+    mutationObserver = new MutationObserver(mutations => {
+      if(document.hidden)return;
+      if (location.href !== lastKnownPath) {
+        handleRouteBaselineChange();
+        return;
+      }
+      const own=node=>{const el=node?.nodeType===Node.ELEMENT_NODE?node:node?.parentElement;return !!el?.closest?.('[id^="rpcm-"],[id^="wish-rpcore-"],.wish-rpcore-refiner-ui,.rpcm-ltm-backdrop,script,style');};
+      if(mutations.every(m=>own(m.target)||(m.type==='childList'&&[...m.addedNodes,...m.removedNodes].every(own))))return;
+      scheduleAutoCheck();
+    });
+    mutationObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+    setInterval(() => {
+      if (location.href !== lastKnownPath) { handleRouteBaselineChange(); return; }
+      if(document.hidden||!settings.enabled)return;
+      // TEMP25: a missing cookie is recoverable. Poll locally, without an API
+      // request, then establish a fresh baseline (never auto-bill older turns).
+      if(!autoBaselineReady){
+        if(getAuthToken()&&!autoBaselineRecovering){
+          autoBaselineRecovering=true;
+          void primeBaseline().finally(()=>{autoBaselineRecovering=false;});
+        }
+        return;
+      }
+      if(!getAuthToken()){autoBaselineReady=false;autoBaselineReadSucceeded=false;return;}
+      // Mutation-driven completion checks; idle heartbeat only recovers missed SPA events.
+      if(workerBusy||confirmOverlay)return;
+      const heartbeatDue=Date.now()-lastAutoHeartbeatAt>=(autoCheckQueued?6000:30000);
+      if((autoCheckQueued||heartbeatDue)&&!debounceTimer&&!autoScanBusy){lastAutoHeartbeatAt=Date.now();scheduleAutoCheck(autoCheckQueued?0:120);}
+    }, 3000);
+    // 백그라운드 탭에서 응답 생성이 끝나면 MutationObserver 콜백이 의도적으로 건너뛰어집니다.
+    // 다시 탭을 열 때 큐 플래그가 없더라도 최신 응답을 한 번 확인해 누락을 복구합니다.
+    document.addEventListener('visibilitychange',()=>{
+      if(document.hidden||!settings.enabled)return;
+      if(!autoBaselineReady){
+        if(getAuthToken()&&!autoBaselineRecovering){autoBaselineRecovering=true;void primeBaseline().finally(()=>{autoBaselineRecovering=false;});}
+      }else if(getAuthToken()){lastAutoHeartbeatAt=Date.now();scheduleAutoCheck(0);}
+    });
+  }
+
+  function makeToggle(label, desc, value, onChange) {
+    const row = document.createElement('label');
+    row.className='rr-settings-toggle';
+    row.style.cssText = 'display:flex;gap:16px;align-items:center;padding:14px 0;border-bottom:1px solid var(--rr-line2);cursor:pointer;';
+    const text = document.createElement('div');
+    text.style.flex = '1';
+    text.innerHTML = `<div style="font-size:13px;font-weight:600;color:var(--rr-fg);"></div><div style="font-size:11px;color:var(--rr-muted);margin-top:2px;line-height:1.4;"></div>`;
+    text.children[0].textContent = label;
+    text.children[1].textContent = desc;
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = !!value;
+    input.style.cssText = 'width:18px;height:18px;accent-color:var(--rr-accent);';
+    input.onchange = () => onChange(input.checked);
+    row.append(text, input);
+    return row;
+  }
+
+  function formLabel(text) {
+    const l = document.createElement('div');
+    l.textContent = text;
+    l.className='rr-settings-label';
+    l.style.cssText = 'font-size:12px;color:var(--rr-fg2);font-weight:600;margin:12px 0 5px;';
+    return l;
+  }
+
+  function openSettings() {
+    ensureThemeStyles();
+    modal?.remove();
+    const overlay = document.createElement('div');
+    modal = overlay;
+    overlay.id = 'wish-rpcore-refiner-modal';
+    overlay.className = 'wish-rpcore-refiner-ui';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483645;background:var(--rr-scrim);display:flex;align-items:center;justify-content:center;padding:16px;';
+    overlay.onclick = (e) => { if (e.target === overlay) closeSettings(); };
+
+    const box = document.createElement('div');
+    box.className='rr-settings-sheet';
+    box.style.cssText = 'width:min(720px,96vw);max-height:90vh;display:flex;flex-direction:column;overflow:hidden;background:var(--rr-sheet);color:var(--rr-fg);border:1px solid var(--rr-line);border-radius:16px;font-family:inherit;box-shadow:var(--rr-shadow);';
+    box.innerHTML = `
+      <header class="rr-settings-head"><div class="rr-settings-title"><h2>🪽 응답 교정</h2><small>RP Manager · 응답 검수 설정</small></div><div class="rr-settings-badges"><div data-connection-badge>미연결</div><div data-model-badge></div></div><button type="button" data-close aria-label="닫기" data-rpcm-close="icon">×</button></header>
+      <div data-model-line></div>
+      <div class="rr-settings-status" data-crr-status-wrap><span>현재 상태</span><span data-crr-memory-status></span><span data-crr-status></span></div>
+      <details class="rr-settings-reference"><summary>최근 검토 결과</summary><p data-last-review-result style="white-space:pre-wrap"></p></details>
+      <details class="rr-settings-reference"><summary>검수에 사용하는 참고자료</summary><p>최근 대화 · 현재상태 · 날짜로그 · 캐릭터 · 기타·OOC · 자료집 · 인물·인지 · 관계 · 호칭·말투</p></details>
+    `;
+    box.querySelector('[data-crr-status]').textContent = currentStatus;
+    const memoryStatus=window.__WISH_RP_MANAGER_AI_BRIDGE__?.refinerMemoryStatus?.()||{text:'장기기억 미확인',title:''},memoryStatusNode=box.querySelector('[data-crr-memory-status]');
+    memoryStatusNode.textContent=String(memoryStatus.text||'장기기억 미확인');memoryStatusNode.title=String(memoryStatus.title||'');
+    const receiptPanel=box.querySelector('[data-last-review-result]'),receipt=loadReviewReceipt();
+    receiptPanel.textContent=receipt?`${formatHistoryTime(receipt.at)} · ${receipt.title}\n${receipt.detail}`:'아직 검토 결과가 없습니다.';
+    box.querySelector('[data-model-badge]').textContent = window.__WISH_RP_MANAGER_AI_BRIDGE__?.status().model||'AI 미설정';
+    updateConnectionBadge();
+    box.querySelector('[data-model-line]').textContent = '최근 대화와 저장 기억을 참고해 응답의 모순을 검토합니다.';
+    box.querySelector('[data-close]').onclick = closeSettings;
+
+    const buttonRow = document.createElement('div');
+    buttonRow.className='rr-settings-actions';
+    buttonRow.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px;margin:12px 0;';
+    const actionButtonStyle = 'min-width:0;padding:10px 6px;border:1px solid var(--rr-line);border-radius:7px;background:var(--rr-card2);color:var(--rr-fg);font-size:11.5px;line-height:1.25;font-weight:700;cursor:pointer;white-space:normal;';
+
+    const manualBtn = document.createElement('button');
+    manualBtn.className='rr-primary';
+    manualBtn.textContent = '최근 AI 응답 재검수';
+    manualBtn.style.cssText = actionButtonStyle + 'background:var(--rr-accent);color:var(--rr-accent-ink);border-color:var(--rr-accent);';
+    manualBtn.onclick = async () => {
+      manualBtn.disabled = true;
+      const old = manualBtn.textContent;
+      manualBtn.textContent = '검수 실행 중...';
+      try { await runRefiner({ force:true }); }
+      finally { manualBtn.disabled = false; manualBtn.textContent = old; }
+    };
+
+    const coreBtn = document.createElement('button');
+    coreBtn.textContent = 'RP Manager 데이터 확인';
+    coreBtn.style.cssText = actionButtonStyle;
+    coreBtn.onclick = async () => {
+      coreBtn.disabled = true;
+      const old = coreBtn.textContent;
+      coreBtn.textContent = '확인 중...';
+      try {
+        const [recent, roomTitle] = await Promise.all([
+          fetchRecentMessages(8).catch(() => []),
+          fetchCurrentRoomTitle(),
+        ]);
+        const snap = await readWishCoreSnapshot('', recent);
+        const ref = buildWishCoreReference(snap, '', recent);
+        if (ref.stats.available) {
+          toast(`RP Manager 증강자료 사용 가능\n현재 방: ${roomTitle}\n자료집 ${ref.stats.activePacks}팩/${ref.stats.loreEntries}개 · 인물 ${ref.stats.actors}명 · 인지 ${ref.stats.facts}개 · 관계 ${ref.stats.relationships} · 호칭 ${ref.stats.speech}`, 'ok', 4600);
+        } else {
+          toast(`현재 방 RP Manager 자료 없음\n현재 방: ${roomTitle}\n${ref.stats.reason || '자료 없음'}\n응답교정은 최근 대화만으로 정상 동작해.`, 'ok', 5000);
+        }
+      } catch (e) { toast(`RP Manager 읽기 오류: ${e.message || e}\n이 경우에도 다음 검수에서는 최근 대화 단독 검수를 시도해.`, 'error', 5000); }
+      finally { coreBtn.disabled = false; coreBtn.textContent = old; }
+    };
+
+    const historyBtn = document.createElement('button');
+    historyBtn.textContent = '처리기록';
+    historyBtn.style.cssText = actionButtonStyle;
+    const logBtn = document.createElement('button');
+    logBtn.textContent = '처리기록 로그다운';
+    logBtn.style.cssText = actionButtonStyle;
+    logBtn.onclick = async () => { logBtn.disabled=true;try { await downloadRefinerProcessLog(); } catch (error) { toast('처리기록 로그다운 실패: '+String(error?.message||error),'error',5000); } finally { logBtn.disabled=false; } };
+
+    const historyPanel = document.createElement('div');
+    historyPanel.dataset.processHistoryPanel = 'true';
+    historyPanel.hidden = true;
+    historyPanel.style.cssText = 'margin:0 0 10px;padding:3px 0 1px;max-height:310px;overflow:auto;';
+
+    historyBtn.onclick = () => {
+      historyPanel.hidden = !historyPanel.hidden;
+      if (!historyPanel.hidden) refreshProcessHistoryPanel();
+    };
+
+    buttonRow.append(manualBtn, coreBtn, historyBtn, logBtn);
+    box.appendChild(buttonRow);
+    box.appendChild(historyPanel);
+    const past=document.createElement('details');past.className='rr-review-topics';past.dataset.pastReview='true';
+    past.innerHTML='<summary>과거 AI 응답 검수</summary><p class="rr-review-setting-hint">최근 50개 메시지 안에서 AI 응답을 선택합니다. 선택한 응답 이전 대화로 검사하며, 이후 저장 상태를 과거에 소급 적용하지 않습니다.</p><select aria-label="검수할 과거 응답" style="width:100%;box-sizing:border-box"><option>목록을 불러오세요.</option></select><textarea readonly aria-label="선택한 과거 응답" style="width:100%;box-sizing:border-box;height:140px;margin-top:8px"></textarea><button type="button" data-load-past>목록 새로고침</button><button type="button" data-run-past>선택한 응답 검수</button>';
+    const pastSelect=past.querySelector('select'),pastText=past.querySelector('textarea'),pastRun=past.querySelector('[data-run-past]');let pastRows=[];pastRun.disabled=true;
+    const choosePast=()=>{pastText.value=pastRows.find(row=>row.id===pastSelect.value)?.content||'';pastRun.disabled=!pastText.value;};
+    pastSelect.onchange=choosePast;
+    const loadPast=async()=>{try{pastRows=(await fetchRecentMessages(50)).filter(row=>row.role==='assistant'&&!isPendingResponse(row)&&row.content.trim()).reverse();pastSelect.replaceChildren();pastRows.forEach((row,index)=>{const option=document.createElement('option');option.value=row.id;option.textContent=(index===0?'최신 응답':'이전 응답 '+index)+' · '+String(row.content).replace(/\s+/g,' ').slice(0,70);pastSelect.append(option);});choosePast();}catch(error){pastRun.disabled=true;showReviewNotice('응답 목록을 불러오지 못했어요',error.message,'error',6000);}};
+    past.querySelector('[data-load-past]').onclick=loadPast;past.ontoggle=()=>{if(past.open&&!pastRows.length)loadPast();};pastRun.onclick=async()=>{const chosen=pastRows.find(row=>row.id===pastSelect.value);if(!chosen)return;pastRun.disabled=true;try{await runRefiner({force:true,targetOverride:chosen});}finally{choosePast();}};box.append(past);
+
+
+    box.appendChild(makeToggle('자동 응답교정', '신규 AI 응답과 확인된 재생성을 최초 1회 검수합니다. 직접 수정·새로고침·방 복귀는 자동 검수하지 않습니다.', settings.enabled, async v => {
+      settings.enabled = v; saveSettings();
+      if (v) { await primeBaseline(); toast('자동 응답 교정을 켰어.', 'ok'); }
+      else toast('자동 응답 교정을 껐어.');
+    }));
+    box.appendChild(makeToggle('자동 반영 (팝업 없음)', '근거가 확정된 최소 오류만 바로 반영합니다. 연속성 이탈·불확실한 제안은 검토창에 남깁니다.', settings.autoApply, v => {
+      settings.autoApply = v; saveSettings();
+    }));
+    box.appendChild(makeToggle('검토 알림 표시', '채팅창 상단에 검토 진행 상황과 결과를 표시합니다. 이상 여부와 원본을 유지한 이유를 보여준 뒤 자동으로 닫습니다.', settings.showBadge, v => {
+      setDisplayPreference('showBadge',v);
+    }));
+    box.appendChild(makeToggle('이동식 수동 검수 버튼', '플로팅 뱃지를 클릭해 최신 AI 응답을 바로 검수합니다. 드래그한 위치는 새로고침 후에도 유지됩니다.', settings.showQuickReview, v=>{
+      setDisplayPreference('showQuickReview',v);
+    }));
+
+    const managerAi=window.__WISH_RP_MANAGER_AI_BRIDGE__?.status()||{};
+    const connectionTitle=formLabel('AI 연결');connectionTitle.classList.add('rr-connection-title');
+    const help=document.createElement('details');help.className='rr-connection-help';
+    const helpIcon=document.createElement('summary');helpIcon.textContent='?';helpIcon.setAttribute('aria-label','AI 연결 도움말');
+    const helpText=document.createElement('div');
+    helpText.textContent=`RP Manager AI 탭의 ${managerAi.provider||'미설정'} / ${managerAi.model||'모델 미설정'}을 함께 사용합니다. 인증 정보는 여기서 다시 입력하지 않습니다.`;
+    helpIcon.title=helpText.textContent;help.append(helpIcon,helpText);connectionTitle.appendChild(help);box.appendChild(connectionTitle);
+    const provider=document.createElement('select');
+    provider.style.cssText='width:100%;background:var(--rr-control);color:var(--rr-fg);border:1px solid var(--rr-line);border-radius:7px;padding:9px;';
+    const connectionButtons = document.createElement('div');
+    connectionButtons.style.cssText = 'display:flex;gap:8px;margin-top:9px;';
+
+    const testBtn = document.createElement('button');
+    testBtn.textContent = '현재 연결 방식 테스트';
+    testBtn.style.cssText = 'flex:1;min-width:0;padding:9px 10px;border:1px solid var(--rr-line);border-radius:7px;background:var(--rr-card2);color:var(--rr-fg);font-weight:700;cursor:pointer;';
+    testBtn.onclick = async () => {
+      testBtn.disabled = true;
+      const old = testBtn.textContent;
+      testBtn.textContent = '확인 중...';
+      try {
+        if (!providerReady()) throw new Error('RP Manager AI 탭에서 연결을 설정해 주세요.');
+        const r = await callModel('다른 설명 없이 OK 두 글자만 출력하십시오.', { test:true });
+        if (!String(r.text || '').includes('OK')) throw new Error('예상하지 못한 응답');
+        setConnectionState(true);
+        if(settings.enabled)await primeBaseline();
+        toast(`${providerLabel()} · ${window.__WISH_RP_MANAGER_AI_BRIDGE__?.status().model||'응답교정 모델'} 연결 성공`, 'ok');
+      } catch (e) {
+        // 기존 연결 상태는 유지합니다. 연결 종료는 아래 버튼으로만 수행합니다.
+        toast(`API 연결 테스트 실패: ${e.message || e}`, 'error', 4600);
+      } finally {
+        testBtn.disabled = false;
+        testBtn.textContent = old;
+        updateConnectionBadge();
+      }
+    };
+
+    const disconnectBtn = document.createElement('button');
+    disconnectBtn.textContent = '연결 종료';
+    disconnectBtn.style.cssText = 'flex:0 0 auto;padding:9px 12px;border:1px solid var(--rr-line);border-radius:7px;background:var(--rr-card2);color:var(--rr-danger);font-weight:700;cursor:pointer;white-space:nowrap;';
+    disconnectBtn.onclick = () => {
+      endConnection();
+      toast('AI 연결 상태를 종료했어.', 'ok', 2600);
+    };
+
+    connectionButtons.append(testBtn, disconnectBtn);
+    box.appendChild(connectionButtons);
+    const speedField=document.createElement('label');speedField.className='rr-review-field';speedField.append(formLabel('검토 방식'));
+    const speed=document.createElement('select');speed.dataset.reviewMode='true';speed.style.cssText=provider.style.cssText;
+    speed.innerHTML='<option value="fast">빠른 검토 · 참고자료 압축</option><option value="normal">정밀 검토 · 저장한 추론 수준</option>';speed.value=settings.reviewMode==='normal'?'normal':'fast';speed.onchange=()=>{settings.reviewMode=speed.value;saveSettings();updateThinking();};speedField.append(speed);box.append(speedField);
+    const api=window.__WISH_RP_MANAGER_AI_BRIDGE__,shared=api?.status()||{};
+    const modelControls=document.createElement('div');modelControls.className='rr-review-model-controls';
+    const modelField=document.createElement('div');modelField.className='rr-review-field';modelField.appendChild(formLabel('응답교정 모델'));
+    const modelSelect=document.createElement('select');modelSelect.dataset.refinerModel='true';modelSelect.setAttribute('aria-label','응답교정 모델');modelSelect.style.cssText=provider.style.cssText;
+    const googleRefinerProvider=['gemini','firebase','vertex'].includes(shared.provider);
+    let modelChoices=shared.models?.length?[...shared.models]:googleRefinerProvider?MODEL_OPTIONS.map(row=>({value:row.id,label:row.label})):[];
+    if(shared.models?.length&&googleRefinerProvider){const argonModel=MODEL_OPTIONS.find(row=>row.id==='gemini-4-argon');modelChoices.unshift({value:argonModel.id,label:argonModel.label});}
+    for(const choice of modelChoices){const opt=document.createElement('option');opt.value=choice.value;opt.textContent=choice.label;modelSelect.appendChild(opt);}
+    const selectedModel=settings.responseRefinerModels[shared.provider]||shared.model||'';
+    if(selectedModel&&![...modelSelect.options].some(opt=>opt.value===selectedModel)){const opt=document.createElement('option');opt.value=selectedModel;opt.textContent=selectedModel;modelSelect.appendChild(opt);}
+    modelSelect.value=selectedModel;modelField.appendChild(modelSelect);
+    const thinkingField=document.createElement('div');thinkingField.className='rr-review-field';thinkingField.appendChild(formLabel('추론 수준'));
+    const thinkingSelect=document.createElement('select');thinkingSelect.dataset.refinerThinking='true';thinkingSelect.setAttribute('aria-label','응답교정 추론 수준');thinkingSelect.style.cssText=provider.style.cssText;
+    const thinkingHint=document.createElement('small');thinkingHint.className='rr-review-setting-hint';
+    const updateThinking=()=>{
+      const model=modelSelect.value||shared.model||'',allowed=api?.thinkingLevels?.(shared.provider,model)||[];
+      thinkingSelect.replaceChildren();
+      for(const level of ['low','medium','high']){const opt=document.createElement('option');opt.value=level;opt.textContent=level[0].toUpperCase()+level.slice(1);opt.disabled=!allowed.includes(level);thinkingSelect.appendChild(opt);}
+      thinkingSelect.value=settings.responseRefinerThinkingLevel;thinkingSelect.disabled=!allowed.includes(settings.responseRefinerThinkingLevel)&&allowed.length===0;
+      thinkingHint.textContent=fastReview()?'선택한 추론 수준을 사용합니다. 빠른 검토는 장면과 관련된 참고자료와 출력 설명을 압축합니다. 사용자 고정 규칙·현재상태·검사 항목은 유지합니다. 30초 내 완료를 목표로 하지만 서버와 선택한 추론 수준에 따라 더 걸릴 수 있습니다.':allowed.length?(allowed.includes(settings.responseRefinerThinkingLevel)?'응답교정에만 적용됩니다. 검토가 느리거나 출력 한도에 도달하면 Low를 선택하면 도움이 됩니다. 출력 예산은 선택한 추론 수준에 맞춰 자동 계산합니다.':'이 모델은 선택한 수준을 지원하지 않습니다. 지원되는 수준을 선택하면 적용됩니다.'):'현재 모델·연결에서는 추론 수준을 별도로 지정하지 않습니다. 저장한 선택값은 유지됩니다.';
+      box.querySelector('[data-model-badge]').textContent=model||'AI 미설정';
+    };
+    modelSelect.onchange=()=>{settings.responseRefinerModels[shared.provider]=modelSelect.value;saveSettings();updateThinking();};
+    thinkingSelect.onchange=()=>{settings.responseRefinerThinkingLevel=thinkingSelect.value;saveSettings();updateThinking();};
+    thinkingField.append(thinkingSelect,thinkingHint);modelControls.append(modelField,thinkingField);box.appendChild(modelControls);updateThinking();
+
+
+    box.appendChild(formLabel('사용자 승인 교정 예외'));
+    const policyList=document.createElement('div');
+    const renderPolicies=()=>{
+      policyList.replaceChildren();
+      for(const row of settings.exceptions||[]){
+        const item=document.createElement('div');item.style.cssText='display:flex;gap:8px;margin:6px 0';
+        const editor=document.createElement('textarea');editor.value=row.text;editor.style.cssText='flex:1;min-width:0;background:var(--rr-control);color:var(--rr-fg);border:1px solid var(--rr-line);padding:8px';
+        editor.onchange=()=>{row.text=editor.value.trim();saveSettings();};
+        const remove=document.createElement('button');remove.textContent='삭제';remove.onclick=()=>{settings.exceptions=settings.exceptions.filter(item=>item.id!==row.id);saveSettings();renderPolicies();};
+        item.append(editor,remove);policyList.append(item);
+      }
+      if(!(settings.exceptions||[]).length)policyList.textContent='승인한 검사 예외가 없습니다. 사실 정정 메모와 별도로 관리됩니다.';
+    };
+    renderPolicies();box.append(policyList);
+    box.appendChild(formLabel('검수 템플릿'));
+    const select = document.createElement('select');
+    select.style.cssText = provider.style.cssText;
+    Object.entries(TEMPLATES).forEach(([key,t]) => {
+      const opt = document.createElement('option'); opt.value = key; opt.textContent = t.name; select.appendChild(opt);
+    });
+    select.value = settings.template;
+    const desc = document.createElement('div');
+    desc.style.cssText = 'font-size:11px;color:var(--rr-muted);margin-top:5px;line-height:1.4;';
+
+    const topicsWrap=document.createElement('section');topicsWrap.className='rr-review-topics';
+    const topicsHead=document.createElement('header');topicsHead.appendChild(formLabel('검사 항목'));
+    const topicActions=document.createElement('div');topicActions.className='rr-review-topic-actions';
+    const topicChecks=new Map();
+    const setTopics=value=>{settings.reviewTopics=Object.fromEntries(Object.keys(REVIEW_TOPICS).map(key=>[key,value]));settings.checkUserImpersonation=value;saveSettings();for(const [key,check] of topicChecks)check.checked=settings.reviewTopics[key];renderPromptEditor();renderTopicMode();};
+    for(const [text,value] of [['전체 선택',true],['전체 해제',false],['기본값 복원',true]]){const button=document.createElement('button');button.type='button';button.textContent=text;button.onclick=()=>setTopics(value);topicActions.appendChild(button);}
+    topicsHead.appendChild(topicActions);topicsWrap.appendChild(topicsHead);
+    const topicGrid=document.createElement('div');topicGrid.className='rr-review-topic-grid';
+    for(const [key,topic] of Object.entries(REVIEW_TOPICS)){
+      const label=document.createElement('label'),check=document.createElement('input'),text=document.createElement('span');check.type='checkbox';check.dataset.refinerTopic=key;check.checked=settings.reviewTopics[key]!==false;text.textContent=topic.label;
+      check.onchange=()=>{settings.reviewTopics[key]=check.checked;if(key==='userProtection')settings.checkUserImpersonation=check.checked;saveSettings();renderPromptEditor();renderTopicMode();};
+      label.append(check,text);topicGrid.appendChild(label);topicChecks.set(key,check);
+    }
+    const topicMode=document.createElement('p');topicMode.className='rr-review-setting-hint';topicMode.dataset.refinerMode='true';
+    function renderTopicMode(){topicMode.textContent=!enabledReviewTopics().length?'검사 항목 OFF · AI 호출 없이 원본을 유지합니다.':truncationOnly()?'문장 끊김 전용 · 전체 기억 조회를 생략하고 마지막 문장을 검사합니다.':'선택한 항목만 검사합니다. 연속성 이탈은 자동반영하지 않습니다.';}
+    topicsWrap.append(topicGrid,topicMode);renderTopicMode();
+
+    const promptWrap = document.createElement('div');
+    promptWrap.appendChild(formLabel('지침 내용'));
+    const promptEditor = document.createElement('textarea');
+    promptEditor.placeholder = '사용 가능 치환자: {core}, {currentState}, {dateLogs}, {characters}, {extras}, {lore}, {actors}, {relationships}, {speech}, {timeline}, {longTerm}, {structuralHints}, {formatReference}, {context}, {message}, {passWord}';
+    promptEditor.style.cssText = 'width:100%;min-height:320px;background:var(--rr-control);color:var(--rr-fg);border:1px solid var(--rr-line);border-radius:7px;padding:9px;box-sizing:border-box;resize:vertical;font:11px/1.5 ui-monospace,monospace;';
+    promptWrap.appendChild(promptEditor);
+
+    const promptHint = document.createElement('div');
+    promptHint.style.cssText = 'font-size:10px;color:var(--rr-muted);margin-top:5px;line-height:1.45;';
+    promptHint.textContent = '기본지침도 여기서 그대로 볼 수 있어요. 기본지침을 한 글자라도 수정하면 자동으로 커스텀지침으로 전환되어 수정본을 저장합니다.';
+    promptWrap.appendChild(promptHint);
+
+    const renderPromptEditor = ({ preserveEditor = false } = {}) => {
+      desc.textContent = TEMPLATES[select.value]?.desc || '';
+      if (!preserveEditor) {
+        promptEditor.value = select.value === 'basic'
+          ? currentBasicPrompt()
+          : (String(settings.customPrompt || '') || currentBasicPrompt());
+      }
+    };
+
+    select.onchange = () => {
+      settings.template = select.value;
+      if (select.value === 'custom' && !String(settings.customPrompt || '')) settings.customPrompt = currentBasicPrompt();
+      saveSettings();
+      renderPromptEditor();
+    };
+
+    promptEditor.oninput = () => {
+      const value = promptEditor.value;
+      if (select.value === 'basic' && value !== currentBasicPrompt()) {
+        select.value = 'custom';
+        settings.template = 'custom';
+      }
+      if (select.value === 'custom') settings.customPrompt = value;
+      saveSettings();
+      renderPromptEditor({ preserveEditor:true });
+    };
+
+
+    renderPromptEditor();
+    box.append(select,desc,topicsWrap,promptWrap);
+
+    const formatDetails=document.createElement('details');formatDetails.className='rr-review-topics';formatDetails.dataset.refinerFormat='true';
+    const formatSummary=document.createElement('summary');formatSummary.textContent='출력 형식 규칙 · 필수 블록 · 지문 · 대화';formatSummary.style.cssText='cursor:pointer;font-weight:600;color:var(--rr-fg2)';formatDetails.appendChild(formatSummary);
+    const formatHint=document.createElement('p');formatHint.className='rr-review-setting-hint';formatHint.textContent='설정한 참고 턴 안에서 최근 AI 응답 3개 이상에 반복된 형식을 참고합니다. INFO/HUD와 [속마음]처럼 제목이 있는 코드블록을 검사하며, 3턴 미만이면 직접 규칙만 사용합니다. 필수 블록·출력 형식 검사 ON일 때 적용됩니다.';formatDetails.appendChild(formatHint);
+    const outputFormat=settings.outputFormat;
+    const formatSelect=(title,key,choices)=>{
+      const field=document.createElement('div');field.className='rr-review-field';field.appendChild(formLabel(title));
+      const control=document.createElement('select');control.dataset.refinerFormatField=key;control.setAttribute('aria-label',title);control.style.cssText=provider.style.cssText;
+      for(const [value,label] of choices){const option=document.createElement('option');option.value=value;option.textContent=label;control.appendChild(option);}control.value=outputFormat[key];
+      control.onchange=()=>{outputFormat[key]=control.value;saveSettings();};field.appendChild(control);formatDetails.appendChild(field);
+    };
+    formatSelect('필수 블록 기준','blocksMode',[['auto','반복된 필수 블록 + 직접 규칙'],['explicit','직접 규칙만 사용'],['off','자동 추정 안 함']]);
+    formatSelect('지문 표기','narration',[['auto','최근 반복 형식 참고'],['asterisks','지문은 *…*로 감싸기'],['off','자동 추정 안 함']]);
+    for(const [title,key,placeholder] of [
+      ['필수 블록 규칙','requiredBlocks','예: 모든 응답 맨 위에 [INFO] 날짜·시간·장소, 맨 아래에 [HUD] 상태를 표시. 기존 필드 순서를 유지.'],
+      ['대화 출력 규칙','dialogueRule','예: 인물명 | "원문 대사" *(한국어 번역)*. 지문은 *…*로 감싸며 대사 내용은 바꾸지 않음.']
+    ]){
+      formatDetails.appendChild(formLabel(title));const editor=document.createElement('textarea');editor.dataset.refinerFormatField=key;editor.setAttribute('aria-label',title);editor.placeholder=placeholder;editor.maxLength=3000;editor.value=outputFormat[key];editor.style.cssText='width:100%;min-height:70px;padding:9px;box-sizing:border-box;resize:vertical;border:1px solid var(--rr-line);border-radius:8px;background:var(--rr-control);color:var(--rr-fg);font:12px/1.6 system-ui';
+      editor.oninput=()=>{outputFormat[key]=editor.value;saveSettings();};formatDetails.appendChild(editor);
+    }
+    box.appendChild(formatDetails);
+
+    box.appendChild(formLabel('최근 대화 참고 턴'));
+    const turns = document.createElement('input');
+    turns.type = 'number'; turns.min = '0'; turns.max = '12'; turns.value = String(settings.contextTurns);
+    turns.style.cssText = 'width:100%;background:var(--rr-control);color:var(--rr-fg);border:1px solid var(--rr-line);border-radius:7px;padding:9px;box-sizing:border-box;';
+    turns.onchange = () => { settings.contextTurns = Math.max(0, Math.min(12, Number(turns.value) || 0)); turns.value = String(settings.contextTurns); saveSettings(); };
+    box.appendChild(turns);
+    box.appendChild(formLabel('장기기억 재조회 주기 (완료 RP 턴)'));
+    const memoryTurns=document.createElement('input');memoryTurns.type='number';memoryTurns.min='1';memoryTurns.max='100';memoryTurns.step='1';memoryTurns.value=String(settings.longTermRefreshTurns);memoryTurns.setAttribute('aria-label','장기기억 재조회 주기');memoryTurns.style.cssText=turns.style.cssText;
+    memoryTurns.onchange=()=>{settings.longTermRefreshTurns=Math.max(1,Math.min(100,Math.floor(Number(memoryTurns.value)||30)));memoryTurns.value=String(settings.longTermRefreshTurns);saveSettings();};box.appendChild(memoryTurns);
+    const memoryNote=document.createElement('p');memoryNote.style.cssText='font-size:11px;color:var(--rr-muted);line-height:1.55';memoryNote.textContent='첫 전체 조회 후 장기기억 목록을 제한된 로컬 캐시에 보관해 새로고침 후나 다른 방에서 돌아왔을 때 재사용할 수 있습니다. 주기가 2턴 이상이면 목표 시점 최대 3턴 전부터 백그라운드로 새 목록을 읽고, 완료될 때까지 기존 캐시로 응답교정을 계속합니다. 방·인증별로 캐시를 구분하며 오래되거나 저장 한계를 넘은 캐시는 자동 정리됩니다. 외부 수정·새 기억은 다음 갱신까지 늦게 반영될 수 있습니다. 1은 매 새 턴 동기 조회입니다.';box.appendChild(memoryNote);
+
+    const note = document.createElement('div');
+    note.style.cssText = 'font-size:11px;color:var(--rr-muted);line-height:1.55;margin-top:12px;padding-top:10px;border-top:1px solid var(--rr-line2);';
+    note.textContent='설정은 이 기기에 저장됩니다. AI 연결은 공용 설정을 사용하며, 응답교정 모델·추론 수준·검사 항목은 별도로 저장됩니다.';
+    box.appendChild(note);
+    const body=document.createElement('main');body.className='rr-settings-body';
+    const header=box.querySelector('.rr-settings-head');
+    [...box.children].filter(node=>node!==header).forEach(node=>body.appendChild(node));
+    box.appendChild(body);
+    const footer=document.createElement('footer');footer.className='rr-settings-foot';
+    footer.innerHTML='<small>변경한 설정은 자동 저장됩니다.</small><button type="button">완료</button>';
+    footer.querySelector('button').onclick=closeSettings;box.appendChild(footer);
+
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    updateConnectionBadge();
+  }
+
+  function closeSettings() {
+    modal?.remove();
+    modal = null;
+  }
+
+  let refinerHeaderRecoveryLocked=false;
+  let refinerPlacementRoute='';
+  let refinerHeaderPlacementFrame=null;
+  function scheduleRefinerHeaderPlacement(){
+    if(document.hidden||refinerHeaderPlacementFrame!=null)return;
+    refinerHeaderPlacementFrame=requestAnimationFrame(()=>{refinerHeaderPlacementFrame=null;if(!document.hidden)injectHeaderButton();});
+  }
+
+  function mountRefinerHeaderButton(button, header) {
+    button.style.setProperty('flex-shrink', '0');
+    if (header) {
+      for (const key of ['position','top','right','z-index']) button.style.removeProperty(key);
+      button.style.setProperty('background', 'transparent');
+      button.style.setProperty('border', 'none');
+      const manager = header.querySelector('#rpcm-fab');
+      const before = manager || header.firstChild;
+      if (before !== button && (button.parentElement !== header || button.nextSibling !== before)) header.insertBefore(button, before);
+      button.dataset.wishPlacement = 'header';
+    } else {
+      button.style.setProperty('position', 'fixed', 'important');
+      button.style.setProperty('right', '18px', 'important');
+      button.style.setProperty('top', '156px', 'important');
+      button.style.setProperty('z-index', '2147483645', 'important');
+      button.style.setProperty('background', 'var(--wish-card,#fff)', 'important');
+      button.style.setProperty('border', '1px solid var(--wish-line,#ddd)', 'important');
+      if (button.parentElement !== document.body) document.body.appendChild(button);
+      button.dataset.wishPlacement = 'fallback';
+    }
+  }
+
+  function injectHeaderButton() {
+    const route = location.pathname + location.search;
+    if (route !== refinerPlacementRoute) { refinerPlacementRoute = route; refinerHeaderRecoveryLocked = false; }
+    if (floatingButton?.dataset.wishPlacement === 'header' && !floatingButton.isConnected) refinerHeaderRecoveryLocked = true;
+    if (settings.showButton === false) {
+      document.getElementById('wish-rpcore-refiner-button')?.remove();
+      floatingButton = null;
+      return false;
+    }
+    // '크랙 요약 메모리 텍스트 편집기'와 같은 상단 헤더 슬롯을 사용합니다.
+    const ui = window.__WISH_RP_MANAGER_UI_BRIDGE__;
+    const candidate = refinerHeaderRecoveryLocked ? null : ui?.headerActionRow?.();
+    const headerContainer = ui?.canMountHeader?.(candidate, floatingButton, 52) ? candidate : null;
+    if (!headerContainer && !document.body) return false;
+
+    const existing = document.getElementById('wish-rpcore-refiner-button');
+    if (existing) {
+      floatingButton = existing;
+      mountRefinerHeaderButton(existing, headerContainer);
+      return true;
+    }
+
+    floatingButton = document.createElement('button');
+    floatingButton.id = 'wish-rpcore-refiner-button';
+    floatingButton.type = 'button';
+    floatingButton.textContent = '🪽';
+    floatingButton.title = 'Wish 응답교정 설정';
+    floatingButton.setAttribute('aria-label', 'Wish 응답교정 설정');
+    floatingButton.style.cssText = [
+      'display:inline-flex',
+      'align-items:center',
+      'justify-content:center',
+      'padding:0 12px',
+      'height:36px',
+      'border-radius:6px',
+      'background:transparent',
+      'color:inherit',
+      'font-weight:600',
+      'font-size:20px',
+      'border:none',
+      'cursor:pointer',
+      'margin-right:8px',
+      'transition:background 0.2s',
+      'box-shadow:none',
+      'appearance:none',
+      '-webkit-appearance:none'
+    ].join(';');
+    floatingButton.addEventListener('mouseenter', () => { floatingButton.style.background = 'transparent'; });
+    floatingButton.addEventListener('mouseleave', () => { floatingButton.style.background = 'transparent'; });
+    floatingButton.onclick = (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      openSettings();
+    };
+
+    mountRefinerHeaderButton(floatingButton, headerContainer);
+    return true;
+  }
+
+  function ensureReviewBadge() {
+    ensureThemeStyles();
+    if (!document.getElementById('wish-rpcore-refiner-badge')) {
+      badge = document.createElement('div');
+      badge.id = 'wish-rpcore-refiner-badge';
+      badge.innerHTML = '<span class="rr-review-spinner" aria-hidden="true"></span><div><strong>위시 RP 매니저가 응답 검토 중</strong><small data-review-detail></small></div><button type="button" data-dismiss-result aria-label="검토 결과 안내 닫기">×</button>';
+      badge.querySelector('[data-dismiss-result]').onclick=dismissReviewReceipt;
+      badge.setAttribute('role','status');
+      badge.setAttribute('aria-live','polite');
+      badge.setAttribute('aria-atomic','true');
+      badge.className = 'wish-rpcore-refiner-ui';
+      badge.style.display = 'none';
+      document.body.appendChild(badge);
+    } else {
+      badge = document.getElementById('wish-rpcore-refiner-badge');
+    }
+  }
+
+  // A permanently available manual-review shortcut, not the transient result notice.
+  // Position is saved per browser and reused across rooms and page reloads.
+  function quickReviewPositionKey(){return 'wish-rp-response-quick-button-position-v1';}
+  function quickReviewClampPosition(x,y){
+    if(!quickReviewButton)return {x:0,y:0};
+    const vv=window.visualViewport,left=vv?.offsetLeft||0,top=vv?.offsetTop||0;
+    const w=vv?.width||innerWidth,h=vv?.height||innerHeight;
+    const rect=quickReviewButton.getBoundingClientRect();
+    return {x:Math.max(left+8,Math.min(Number(x)||0,left+w-rect.width-8)),y:Math.max(top+8,Math.min(Number(y)||0,top+h-rect.height-8))};
+  }
+  function quickReviewPosition(x,y,save=false){
+    if(!quickReviewButton)return;
+    const p=quickReviewClampPosition(x,y);
+    quickReviewButton.style.left=p.x+'px';quickReviewButton.style.top=p.y+'px';
+    if(save)try{localStorage.setItem(quickReviewPositionKey(),JSON.stringify(p));}catch(_){}
+  }
+  function refreshQuickReviewPosition(){
+    if(!quickReviewButton)return;
+    let p=null;
+    try{p=JSON.parse(localStorage.getItem(quickReviewPositionKey())||'null');}catch(_){}
+    if(!p||!Number.isFinite(p.x)||!Number.isFinite(p.y)){
+      const rect=quickReviewButton.getBoundingClientRect();
+      p={x:innerWidth-rect.width-18,y:innerHeight-rect.height-120};
+    }
+    quickReviewPosition(p.x,p.y);
+  }
+  function syncQuickReviewButton(){
+    if(!quickReviewButton)return;
+    quickReviewButton.style.display=settings.showQuickReview===false?'none':'inline-flex';
+    quickReviewButton.setAttribute('aria-busy',workerBusy?'true':'false');
+    quickReviewButton.querySelector('[data-quick-label]').textContent=workerBusy?'검수 중':'수동 검수';
+  }
+  function ensureQuickReviewButton(){
+    if(quickReviewButton?.isConnected){syncQuickReviewButton();return;}
+    quickReviewButton=document.getElementById('wish-rpcore-manual-review-float');
+    if(quickReviewButton){syncQuickReviewButton();return;}
+    ensureThemeStyles();
+    const b=document.createElement('button');b.type='button';b.id='wish-rpcore-manual-review-float';
+    b.className='wish-rpcore-refiner-ui';
+    b.innerHTML='<span aria-hidden="true">🪽</span><span data-quick-label>수동 검수</span>';
+    b.setAttribute('aria-label','최신 AI 응답 수동 재검수 · 드래그로 이동');
+    b.title='클릭: 최신 AI 응답 즉시 재검수 · 드래그: 위치 이동';
+    b.style.cssText='position:fixed!important;z-index:2147483643!important;display:inline-flex;align-items:center;justify-content:center;gap:7px;left:12px;top:12px;min-height:36px;min-width:106px;padding:7px 13px;border:1px solid var(--rr-accent-line);border-radius:999px;background:var(--rr-sheet);color:var(--rr-accent);box-shadow:0 5px 22px rgba(0,0,0,.20);font-size:12px;font-weight:700;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;white-space:nowrap;box-sizing:border-box;';
+    let drag=null;
+    b.addEventListener('pointerdown',e=>{
+      if(e.button!==0||!e.isPrimary)return;
+      drag={id:e.pointerId,x:e.clientX,y:e.clientY,left:b.getBoundingClientRect().left,top:b.getBoundingClientRect().top,moved:false};
+      try{b.setPointerCapture(e.pointerId);}catch(_){}
+    });
+    b.addEventListener('pointermove',e=>{
+      if(!drag||e.pointerId!==drag.id)return;
+      const dx=e.clientX-drag.x,dy=e.clientY-drag.y;
+      if(!drag.moved&&Math.hypot(dx,dy)<5)return;
+      drag.moved=true;b.style.cursor='grabbing';
+      quickReviewPosition(drag.left+dx,drag.top+dy);
+      e.preventDefault();
+    });
+    const stop=e=>{
+      if(!drag||e.pointerId!==drag.id)return;
+      if(drag.moved){quickReviewSuppressClickUntil=Date.now()+500;
+        quickReviewPosition(parseFloat(b.style.left),parseFloat(b.style.top),true);
+      }
+      drag=null;b.style.cursor='grab';
+      try{if(b.hasPointerCapture(e.pointerId))b.releasePointerCapture(e.pointerId);}catch(_){}
+    };
+    b.addEventListener('pointerup',stop);b.addEventListener('pointercancel',stop);
+    b.addEventListener('click',e=>{
+      e.preventDefault();e.stopPropagation();
+      if(Date.now()<quickReviewSuppressClickUntil)return;
+      if(workerBusy||confirmOverlay){toast('이미 검수 또는 교정 확인이 진행 중입니다.','normal');return;}
+      void runRefiner({force:true});
+    });
+    quickReviewButton=b;
+    document.body.appendChild(b);
+    refreshQuickReviewPosition();syncQuickReviewButton();
+  }
+
+  function createUi() {
+    ensureReviewBadge();
+    ensureQuickReviewButton();
+
+    injectHeaderButton();
+
+    // Crack SPA가 헤더를 다시 그렸을 때 🪽 버튼도 같은 자리에 복구합니다.
+    let refinerRecoveryTimer=null;
+    const observer = new MutationObserver(mutations => {
+      if(!settings.showButton||document.hidden)return;
+      const own=node=>node?.closest?.('[id^="rpcm-"],[id^="wish-rpcore-"],.wish-rpcore-refiner-ui');
+      if(mutations.every(m=>own(m.target)||[...m.addedNodes,...m.removedNodes].every(own)))return;
+      if(!document.getElementById('wish-rpcore-refiner-button')&&refinerRecoveryTimer===null){refinerRecoveryTimer=setTimeout(()=>{refinerRecoveryTimer=null;if(settings.showButton&&!document.hidden)injectHeaderButton();},180);}
+    });
+    observer.observe(document.body, { childList:true, subtree:true });
+    setInterval(() => {
+      injectHeaderButton();
+      if (badge?.dataset.room && badge.dataset.room !== chatStateKey()) hideReviewNotice();
+    }, 15000);
+    document.addEventListener('visibilitychange',()=>{if(!document.hidden)injectHeaderButton();});
+    window.addEventListener('resize',scheduleRefinerHeaderPlacement,{passive:true});
+    window.addEventListener('resize', positionReviewBadge, { passive:true });
+    window.addEventListener('resize', refreshQuickReviewPosition, {passive:true});
+    window.visualViewport?.addEventListener('resize',refreshQuickReviewPosition,{passive:true});
+    window.addEventListener('scroll', event => {
+      if(event.target?.closest?.('[id^="rpcm-"],.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui'))return;
+      positionReviewBadge();
+    }, { passive:true, capture:true });
+    window.visualViewport?.addEventListener('resize', positionReviewBadge, { passive:true });
+    window.visualViewport?.addEventListener('scroll', positionReviewBadge, { passive:true });
+  }
+
+  function openFromNotice(messageId=''){
+    openSettings();const panel=modal?.querySelector('[data-process-history-panel]');
+    if(panel){panel.hidden=false;refreshProcessHistoryPanel();}
+    const card=[...(panel?.querySelectorAll('[data-correction-archive]')||[])].find(node=>node.dataset.correctionArchive===String(messageId));
+    if(card){card.open=true;card.scrollIntoView({block:'center'});}return !!card;
+  }
+  function setDisplayPreference(field,value) {
+    if(!['showButton','showBadge','showQuickReview'].includes(field))return false;
+    settings[field]=!!value;saveSettings();
+    if(field==='showButton') {
+      if(settings.showButton) injectHeaderButton();
+      else {document.getElementById('wish-rpcore-refiner-button')?.remove();floatingButton=null;}
+    } else if(field==='showQuickReview') {
+      ensureQuickReviewButton();syncQuickReviewButton();
+    } else if(field==='showBadge') {
+      if(!settings.showBadge) hideReviewNotice();
+      else if(isReviewStatus(currentStatus)){ensureReviewBadge();badge.style.display='flex';badge.dataset.active='true';positionReviewBadge();}
+      else {const row=loadReviewReceipt();if(row&&!row.dismissedAt)displayReviewReceipt(row);}
+    }
+    return true;
+  }
+  function displayPreferences(){return {showButton:settings.showButton!==false,showBadge:settings.showBadge!==false,showQuickReview:settings.showQuickReview!==false};}
+  window.__WISH_RP_MANAGER_REFINER__ = { isGenerating:refinerKnownGeneration, connectionInfo:()=>({model:currentModelId(),thinkingLevel:selectedThinkingLevel(),enabled:settings.enabled,refreshAfterCorrection:true}), openSettings, openFromNotice, canUseTurn:canUseReviewTurn, reviewGateSnapshot, reviewLatest: () => runRefiner({ force:true }), setDisplayPreference, displayPreferences };
+
+  try {
+    GM_registerMenuCommand('🪽 응답교정 설정 열기', openSettings);
+    GM_registerMenuCommand('최근 AI 응답 재검수', () => runRefiner({ force: true }));
+  } catch (_) {}
+
+  async function init() {
+    ensureThemeStyles();
+    restoreConnectionState();
+    createUi();
+    await primeBaseline();
+    startObserver();
+    if(currentStatus==='대기'){setStatus(settings.enabled ? '대기' : '꺼짐');const row=loadReviewReceipt();if(row&&!row.dismissedAt)displayReviewReceipt(row);}
+    if (badge && !badge.dataset.result) badge.style.display = 'none';
+    console.log(`[Wish Response Refiner RP Manager OPTIONAL v1.3.11] loaded · DB=${WISH_DB_NAME} · model=${currentModelId()} · provider=${settings.provider}`);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init, { once: true });
+  } else {
+    init();
+  }
+})();
+// END integrated response refiner v1.3.11 · TEMP32 strict live-store verification + deferred reload safety
+})();

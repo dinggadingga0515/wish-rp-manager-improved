@@ -1,0 +1,1000 @@
+      #rpcm-modal .rpcm-summary-head {
+        display:flex;align-items:center;gap:10px;min-height:38px;box-sizing:border-box;
+        padding:7px 12px;list-style:none;cursor:pointer;
+      }
+      #rpcm-modal .rpcm-summary-head::-webkit-details-marker {display:none}
+      #rpcm-modal .rpcm-summary-head:hover {background:var(--wish-deep-2)}
+      #rpcm-modal .rpcm-summary-head>span:first-child {display:flex;align-items:center;gap:10px;min-width:0}
+      #rpcm-modal .rpcm-summary-label {font-size:12px!important;color:var(--rpcm-text)!important;letter-spacing:0}
+      #rpcm-modal .rpcm-summary-count {font-size:11px!important;color:var(--rpcm-muted)}
+      #rpcm-modal .rpcm-summary-side {margin-left:auto;flex-wrap:nowrap}
+      #rpcm-modal .rpcm-summary-status {font-size:11px;padding:2px 7px;background:var(--wish-deep-2)}
+      #rpcm-modal .rpcm-summary-chevron {color:var(--rpcm-muted);transition:transform .16s ease}
+      #rpcm-modal .rpcm-summary[open] .rpcm-summary-chevron {transform:rotate(180deg)}
+      #rpcm-modal .rpcm-summary-detail {padding:0 12px 11px;border-top:1px solid #453f45}
+      #rpcm-modal .rpcm-summary-capacity-detail {margin-top:9px;font-size:11px!important;color:var(--rpcm-muted)}
+      #rpcm-modal .rpcm-summary-detail .rpcm-usage-bar {margin-top:9px}
+      #rpcm-modal .rpcm-summary-detail .rpcm-breakdown {margin-top:6px}
+      #rpcm-modal :is(.rpcm-section,.rpcm-person-profiles,.rpcm-inline-story-list) {min-width:0}
+      #rpcm-modal .rpcm-section-head {align-items:flex-start;margin-bottom:9px}
+      #rpcm-modal .rpcm-charlib-actions {align-items:center;gap:6px}
+      #rpcm-modal :is(.rpcm-slot,.rpcm-item-folder,.rpcm-extra-folder,.rpcm-knowledge-panel,.rpcm-profile,.rpcm-tool-card,.rpcm-inline-story-card) {
+        border-color:var(--rpcm-border);background:var(--rpcm-surface);box-shadow:none;
+      }
+      #rpcm-modal :is(.rpcm-slot>summary,.rpcm-item-folder>summary,.rpcm-extra-folder>summary,.rpcm-read-card>summary,.rpcm-knowledge-card>summary,.rpcm-profile>summary) {gap:8px}
+      #rpcm-modal :is(.rpcm-slot>summary,.rpcm-item-folder>summary,.rpcm-extra-folder>summary,.rpcm-read-card>summary,.rpcm-knowledge-card>summary,.rpcm-profile>summary):hover {background:var(--wish-deep-2)}
+      #rpcm-modal .rpcm-read-card-list {gap:7px}
+      #rpcm-modal .rpcm-read-card>summary {padding:9px 11px}
+      #rpcm-modal .rpcm-read-card-body {padding:11px 12px}
+      #rpcm-modal .rpcm-read-text {font-size:14px;line-height:1.65}
+      #rpcm-modal .rpcm-slot-readview {padding:10px 11px}
+      #rpcm-modal .rpcm-read-toolbar {margin-bottom:8px}
+      #rpcm-modal .rpcm-person-profiles {gap:9px;margin:10px 0 14px}
+      #rpcm-modal .rpcm-profile>summary {min-height:54px;padding:10px 12px;gap:8px}
+      #rpcm-modal .rpcm-profile-body {padding:11px 12px}
+      #rpcm-modal .rpcm-profile-headline {line-height:1.45}
+      #rpcm-modal .rpcm-inline-story-card {padding:10px 11px;margin:7px 0}
+      #rpcm-modal .rpcm-inline-story-read p {font-size:14px;line-height:1.62;margin:7px 0}
+      #rpcm-modal .rpcm-inline-story-toolbar {gap:6px;margin:10px 0}
+      #rpcm-modal #rpcm-section-item .rpcm-slot>summary {min-height:44px;padding:8px 10px;flex-wrap:wrap;align-items:center}
+      #rpcm-modal #rpcm-section-item .rpcm-slot>summary .rpcm-slot-name {
+        flex:1 1 220px;min-width:0;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere;line-height:1.4;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-slot>summary .rpcm-item-head-meta {flex:0 1 auto;white-space:normal}
+      #rpcm-modal .rpcm-slot-quick-edit {flex:none;min-height:30px;padding:4px 9px;border:1px solid #746273;border-radius:var(--rpcm-radius-control);background:var(--wish-deep-2);color:#eed4e2;font-size:12px;cursor:pointer}
+      #rpcm-modal .rpcm-slot-quick-edit:hover {border-color:#bb88a7;background:#4a3947;color:#fff0f8}
+      #rpcm-modal .rpcm-item-readview {padding:9px 11px 12px}
+      #rpcm-modal .rpcm-item-view-actions {position:static;justify-content:flex-start;gap:5px;margin:0 0 8px}
+      #rpcm-modal .rpcm-item-settings-body {position:static;min-width:0;box-shadow:none}
+      #rpcm-modal .rpcm-item-child {padding:10px;margin:7px 0}
+      #rpcm-modal .rpcm-item-readable {font-size:14px!important;line-height:1.62}
+      #rpcm-modal .rpcm-add-primary {background:#765067;border-color:#b984a4;color:#fff4fb}
+      #rpcm-modal .rpcm-add-primary:hover {background:#895a77;border-color:#d59abc}
+      #rpcm-modal :is(#rpcm-log-manage,#rpcm-add-character,#rpcm-add-extra,#rpcm-person-import-toggle,#rpcm-inline-story-add) {background:#493542;border-color:#88657b;color:#f3dce9}
+      #rpcm-modal :is(#rpcm-log-manage,#rpcm-add-character,#rpcm-add-extra,#rpcm-person-import-toggle,#rpcm-inline-story-add):hover {background:#5b4053;border-color:#bb88a7;color:#fff0f8}
+      #rpcm-modal :is(#rpcm-charlib-save,#rpcm-charlib-load,#rpcm-extralib-save,#rpcm-extralib-load,#rpcm-log-date-fix) {background:transparent;border-color:#5b535b;color:#d5cbd3}
+      #rpcm-modal .rpcm-section-more {position:relative;min-width:0}
+      #rpcm-modal .rpcm-section-more>summary {
+        box-sizing:border-box;min-height:32px;padding:6px 10px;border:1px solid #665a65;
+        border-radius:var(--rpcm-radius-control);background:var(--wish-deep-2);color:#e2d4de;
+        font-size:12px;font-weight:600;list-style:none;cursor:pointer;white-space:nowrap;
+      }
+      #rpcm-modal .rpcm-section-more>summary::-webkit-details-marker {display:none}
+      #rpcm-modal .rpcm-section-more>summary:after {content:' ▾';color:#bca8b7}
+      #rpcm-modal .rpcm-section-more[open]>summary {border-color:#ae7f9e;background:#443642}
+      #rpcm-modal .rpcm-section-more>div {
+        position:absolute;z-index:24;top:calc(100% + 6px);right:0;display:grid;gap:4px;
+        width:180px;box-sizing:border-box;padding:6px;border:1px solid #665764;
+        border-radius:9px;background:var(--wish-deep);box-shadow:0 16px 36px #0008;
+      }
+      #rpcm-modal .rpcm-section-more>div .rpcm-add-btn {width:100%;min-height:34px;margin:0;text-align:left;background:transparent;border-color:transparent}
+      #rpcm-modal .rpcm-section-more>div .rpcm-add-btn:hover {background:var(--wish-deep-2)}
+      #rpcm-modal .rpcm-item-bulkbar {display:block;padding:0;margin:7px 0 9px;overflow:hidden}
+      #rpcm-modal .rpcm-item-bulkbar>summary {display:flex;align-items:center;gap:8px;padding:7px 10px;list-style:none;cursor:pointer;color:var(--rpcm-muted);font-size:12px;font-weight:600}
+      #rpcm-modal .rpcm-item-bulkbar>summary::-webkit-details-marker {display:none}
+      #rpcm-modal .rpcm-item-bulkbar>summary:before {content:'▸';color:#d7a4c0}
+      #rpcm-modal .rpcm-item-bulkbar[open]>summary:before {content:'▾'}
+      #rpcm-modal .rpcm-item-bulkbar #rpcm-item-selected-count {margin-left:auto;margin-right:0;color:#e7c5d7;font-size:11px}
+      #rpcm-modal .rpcm-item-bulkbar>div {display:flex;align-items:center;justify-content:flex-start;flex-wrap:wrap;gap:6px;padding:8px 10px;border-top:1px solid #484148}
+      #rpcm-modal .rpcm-item-bulkbar>div .rpcm-add-btn {flex:0 0 auto;margin-left:0}
+      #rpcm-modal .rpcm-item-bulkbar .rpcm-item-bulk-delete:disabled {opacity:.42}
+      #rpcm-modal :is(.rpcm-btn,.rpcm-mini,.rpcm-add-btn,.rpcm-lib-small,.rpcm-editor-action):disabled {opacity:.45;cursor:not-allowed;transform:none}
+      #rpcm-modal :is(button,summary,input,select,textarea):focus-visible {outline:2px solid var(--rpcm-accent);outline-offset:2px}
+      #rpcm-modal .rpcm-btn.secondary:hover,#rpcm-modal .rpcm-mini:hover,#rpcm-modal .rpcm-add-btn:hover {border-color:#9b788e;background:#42363f;color:#f8eaf3}
+      #rpcm-modal .rpcm-add-btn.rpcm-add-primary:hover {background:#895a77;border-color:#d59abc;color:#fff4fb}
+      #rpcm-modal .rpcm-btn.ghost:hover {background:var(--wish-deep-2)}
+      html:not(.rpcm-mobile-layout) .rpcm-detached-editor {width:min(1240px,calc(100vw - 48px));height:min(860px,calc(100vh - 48px));min-height:0}
+      .rpcm-detached-card {max-width:920px;margin-left:auto;margin-right:auto}
+      html:not(.rpcm-mobile-layout) :is(.rpcm-log-dialog,.rpcm-preview-dialog,.rpcm-lib-dialog,.rpcm-import-dialog) {width:min(920px,calc(100vw - 48px));max-height:min(850px,calc(100vh - 48px))}
+      html:not(.rpcm-mobile-layout) .rpcm-related-picker {width:min(980px,calc(100vw - 48px));height:min(820px,calc(100vh - 48px))}
+      :is(.rpcm-log-row,.rpcm-preview-card,.rpcm-detached-card,.rpcm-related-picker-card) pre {font-size:13px;line-height:1.65;overflow-wrap:anywhere}
+      :is(.rpcm-log-dialog,.rpcm-preview-dialog,.rpcm-detached-editor,.rpcm-related-picker) :is(button,input,select,textarea):focus-visible {outline:2px solid var(--rpcm-accent);outline-offset:2px}
+      @media(max-width:1050px) and (min-width:761px) {
+        html:not(.rpcm-mobile-layout) #rpcm-modal-wrap {width:calc(100vw - 30px)!important}
+        html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-work-content {padding:14px 16px 20px}
+      }
+      #rpcm-modal .rpcm-mobile-nav-hint {display:none}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-header {gap:6px;padding-left:10px;padding-right:10px}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-title {font-size:15px!important}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-header-menu>summary {width:44px;height:44px}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-header-menu-list {width:min(230px,calc(100vw - 20px))}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-header-menu-list button {min-height:44px!important;height:44px!important;font-size:14px!important}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-overview {grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-overview-card {min-height:72px;padding:9px 10px}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-overview-card:nth-child(2) {grid-column:1/-1;grid-row:2}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-overview-card:last-child {grid-column:auto;grid-row:1}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-summary {margin-bottom:9px}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-summary-head {min-height:44px}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-summary-detail .rpcm-usage-bar {display:flex}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-summary-detail .rpcm-breakdown {display:grid;grid-template-columns:1fr}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-mobile-nav-hint {display:inline-flex;align-items:center;justify-content:center;flex:0 0 12px;color:#c9adc0;font-size:22px;line-height:1}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-mobile-nav-strip .rpcm-jump.is-active {box-shadow:inset 0 -2px 0 #dea2c1}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-section-head {gap:8px}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-charlib-actions {display:flex;flex-wrap:wrap;width:100%}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-charlib-actions .rpcm-add-btn {flex:1 1 auto;min-height:42px}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-section-more {flex:1 1 auto}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-section-more>summary {display:flex;align-items:center;justify-content:center;min-height:42px;font-size:13px}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-section-more>div {width:min(220px,calc(100vw - 36px))}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-item-bulkbar>summary {min-height:42px}
+      html.rpcm-mobile-layout #rpcm-modal #rpcm-section-item .rpcm-slot>summary .rpcm-slot-name {flex-basis:calc(100% - 72px)}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-item-head-meta {width:100%;margin-left:28px}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-slot-quick-edit {min-height:40px;padding:7px 11px;font-size:13px}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-read-card>summary {flex-wrap:wrap}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-read-card>summary strong {flex:1 1 calc(100% - 95px)}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-read-card>summary .rpcm-read-copy {margin-left:auto}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-footer #rpcm-save {flex:.8 1 0;background:transparent;border-color:transparent}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-footer #rpcm-arm {flex:1.3 1 0}
+      /* AI dashboard: show the three existing tools as compact, scannable rows. */
+      #rpcm-modal #rpcm-section-ai>h2 {margin-bottom:3px}
+      #rpcm-modal #rpcm-section-ai>p {margin:0 0 12px;color:var(--rpcm-muted)}
+      #rpcm-modal #rpcm-section-ai .rpcm-ai-statusbar {align-items:center;margin-bottom:10px;padding:10px 12px}
+      #rpcm-modal #rpcm-section-ai .rpcm-ai-statusbar>div {flex-wrap:wrap;gap:6px 12px}
+      #rpcm-modal #rpcm-section-ai .rpcm-ai-statusbar .rpcm-btn {flex:none;margin:0}
+      #rpcm-modal #rpcm-section-ai .rpcm-ai-chip {min-height:24px;padding:3px 7px;font-size:11px}
+      #rpcm-modal #rpcm-section-ai .rpcm-ai-control-grid {grid-template-columns:minmax(0,1fr);gap:8px}
+      #rpcm-modal #rpcm-section-ai .rpcm-ai-control-grid article,
+      #rpcm-modal #rpcm-section-ai .rpcm-ai-control-grid article:first-child {
+        display:grid;grid-column:auto;grid-template-columns:minmax(160px,1fr) minmax(180px,1.15fr) auto;
+        grid-template-rows:auto auto;align-items:center;gap:6px 12px;min-height:0;padding:12px 14px;
+      }
+      #rpcm-modal #rpcm-section-ai .rpcm-ai-card-head {grid-column:1;grid-row:1;gap:2px}
+      #rpcm-modal #rpcm-section-ai .rpcm-ai-card-head p {font-size:12px;line-height:1.4}
+      #rpcm-modal #rpcm-section-ai .rpcm-ai-control-grid article>.rpcm-ai-chip-row {grid-column:1;grid-row:2}
+      #rpcm-modal #rpcm-section-ai .rpcm-ai-card-result {grid-column:2;grid-row:1/3;align-self:stretch;align-content:center;gap:3px;padding:8px 10px}
+      #rpcm-modal #rpcm-section-ai .rpcm-ai-card-result>span,
+      #rpcm-modal #rpcm-section-ai .rpcm-ai-card-result>small,
+      #rpcm-modal #rpcm-section-ai .rpcm-ai-card-result>label {font-size:11px;line-height:1.4}
+      #rpcm-modal #rpcm-section-ai .rpcm-ai-card-result>strong {font-size:13px;line-height:1.4}
+      #rpcm-modal #rpcm-section-ai .rpcm-ai-card-actions {grid-column:3;grid-row:1/3;align-self:center;flex-direction:column;align-items:stretch;margin:0}
+      #rpcm-modal #rpcm-section-ai .rpcm-ai-card-actions .rpcm-btn {min-height:36px;margin:0;white-space:nowrap}
+      #rpcm-modal #rpcm-section-ai .rpcm-api-room-usage {margin-top:10px;padding:12px}
+      #rpcm-modal #rpcm-section-ai .rpcm-api-usage-list {margin-top:0}
+      #rpcm-modal #rpcm-section-ai .rpcm-api-usage-row {grid-template-columns:minmax(105px,.6fr) minmax(0,1.5fr) auto;gap:8px;padding:9px 10px}
+      #rpcm-modal #rpcm-section-ai .rpcm-api-usage-row span {font-size:11px;line-height:1.4}
+      #rpcm-modal #rpcm-section-ai .rpcm-api-usage-row b {font-size:12px}
+      #rpcm-modal #rpcm-section-ai .rpcm-api-usage-total {gap:4px 10px;padding:10px 11px}
+      #rpcm-modal #rpcm-section-ai .rpcm-api-usage-total span,
+      #rpcm-modal #rpcm-section-ai .rpcm-api-usage-total small {font-size:11px}
+      #rpcm-modal #rpcm-section-ai .rpcm-api-usage-details>summary {min-height:36px;font-size:12px}
+      #rpcm-modal #rpcm-ai-inline-host .rpcm-unified-api-dialog {border-radius:var(--rpcm-radius-card);overflow:hidden}
+      #rpcm-modal #rpcm-ai-inline-host .rpcm-ai-body {max-height:min(65vh,640px);padding:14px;gap:12px}
+      #rpcm-modal #rpcm-ai-inline-host .rpcm-api-feature-row {gap:10px;padding:10px 12px}
+      #rpcm-modal #rpcm-ai-inline-host .rpcm-api-feature-row strong {font-size:13px}
+      #rpcm-modal #rpcm-ai-inline-host .rpcm-api-feature-row small {font-size:11px}
+      #rpcm-modal #rpcm-ai-inline-host :is(button,input,select):focus-visible {outline:2px solid #dd94b9;outline-offset:2px}
+      #rpcm-modal #rpcm-ai-inline-host .rpcm-ai-foot {flex-wrap:wrap}
+      #rpcm-ai-backdrop .rpcm-ai-dialog {width:min(960px,calc(100vw - 32px));max-height:min(900px,calc(100dvh - 32px))}
+      #rpcm-ai-backdrop .rpcm-ai-body {padding:14px 16px;gap:12px}
+      #rpcm-ai-backdrop .rpcm-ai-card {padding:12px 14px}
+      #rpcm-ai-backdrop .rpcm-ai-card h3 {font-size:15px}
+      #rpcm-ai-backdrop .rpcm-ai-field>span,
+      #rpcm-ai-backdrop .rpcm-ai-help,
+      #rpcm-ai-backdrop .rpcm-ai-checks label,
+      #rpcm-ai-backdrop .rpcm-ai-note,
+      #rpcm-ai-backdrop .rpcm-ai-progress {font-size:12px;line-height:1.5}
+      #rpcm-ai-backdrop .rpcm-ai-result textarea {min-height:340px;font:14px/1.65 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace!important}
+      #rpcm-ai-backdrop .rpcm-ai-history-text,
+      #rpcm-ai-backdrop .rpcm-ai-guide-body textarea {font-size:13px;line-height:1.6}
+      #rpcm-ai-backdrop .rpcm-ai-btn:focus-visible,
+      #rpcm-ai-backdrop :is(button,input,select,textarea):focus-visible {outline:2px solid #dd94b9;outline-offset:2px}
+      #rpcm-ai-backdrop .rpcm-ai-btn:disabled {opacity:.45;cursor:not-allowed}
+      .rpcm-ai-review-dialog {width:min(980px,calc(100vw - 32px))}
+      .rpcm-ai-review-row strong {font-size:13px}
+      .rpcm-ai-review-row small,.rpcm-ai-review-meta div span {font-size:11px}
+      .rpcm-ai-review-layout textarea {font-size:13px;line-height:1.6}
+      .rpcm-ai-review-actions button,.rpcm-ai-review-summary button {min-height:36px;font-size:12px}
+      .rpcm-ai-review-dialog :is(button,textarea):focus-visible {outline:2px solid #dd94b9;outline-offset:2px}
+      @media(max-width:850px) {
+        #rpcm-modal #rpcm-section-ai .rpcm-ai-control-grid article,
+        #rpcm-modal #rpcm-section-ai .rpcm-ai-control-grid article:first-child {grid-template-columns:minmax(0,1fr) auto}
+        #rpcm-modal #rpcm-section-ai .rpcm-ai-card-result {grid-column:1;grid-row:3}
+        #rpcm-modal #rpcm-section-ai .rpcm-ai-card-actions {grid-column:2;grid-row:1/4}
+      }
+      @media(max-width:680px),(pointer:coarse) and (max-width:1024px) {
+        #rpcm-modal #rpcm-section-ai .rpcm-ai-statusbar {align-items:stretch;flex-direction:column}
+        #rpcm-modal #rpcm-section-ai .rpcm-ai-statusbar .rpcm-btn {width:100%;min-height:42px}
+        #rpcm-modal #rpcm-section-ai .rpcm-ai-control-grid article,
+        #rpcm-modal #rpcm-section-ai .rpcm-ai-control-grid article:first-child {grid-template-columns:minmax(0,1fr);gap:8px;padding:12px}
+        #rpcm-modal #rpcm-section-ai .rpcm-ai-card-head,
+        #rpcm-modal #rpcm-section-ai .rpcm-ai-control-grid article>.rpcm-ai-chip-row,
+        #rpcm-modal #rpcm-section-ai .rpcm-ai-card-result,
+        #rpcm-modal #rpcm-section-ai .rpcm-ai-card-actions {grid-column:1;grid-row:auto}
+        #rpcm-modal #rpcm-section-ai .rpcm-ai-card-actions {flex-direction:row;flex-wrap:wrap}
+        #rpcm-modal #rpcm-section-ai .rpcm-ai-card-actions .rpcm-btn {min-height:42px}
+        #rpcm-modal #rpcm-section-ai .rpcm-api-usage-row {grid-template-columns:minmax(0,1fr) auto}
+        #rpcm-modal #rpcm-section-ai .rpcm-api-usage-row span {grid-column:1/-1;grid-row:2}
+        #rpcm-ai-backdrop .rpcm-ai-dialog {width:100vw;max-height:none;height:100%;border-radius:0}
+        #rpcm-ai-backdrop .rpcm-ai-body {padding:10px;gap:9px}
+        #rpcm-ai-backdrop .rpcm-ai-result textarea {min-height:45vh;font-size:14px!important}
+        #rpcm-ai-backdrop .rpcm-ai-foot .rpcm-ai-btn {min-height:42px}
+        #rpcm-ai-backdrop .rpcm-ai-foot #rpcm-ai-apply {flex-basis:100%}
+      }
+      @media(max-width:720px) {
+        .rpcm-ai-review-dialog {width:100vw}
+        .rpcm-ai-review-layout {grid-template-rows:minmax(120px,30%) minmax(0,1fr)}
+      }
+      html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-carrier-status {font-size:11px;white-space:nowrap;color:#b9aeb8}
+      html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-carrier-status.queued,
+      html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-carrier-status.syncing {color:#f0cf9b}
+      html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-carrier-status.applied {color:#acd9bd}
+      html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-carrier-status.error {color:#ffadb8;font-weight:600}
+      #rpcm-modal .rpcm-carrier-status[hidden],#rpcm-modal .rpcm-arm-reason[hidden] {display:none!important}
+      html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-arm-reason {font-size:11px;color:#e9b9c6;white-space:nowrap}
+      html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-overview-issues {display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+      html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-overview-issues button {min-height:30px;padding:4px 8px;border:1px solid #765469;border-radius:7px;background:var(--wish-deep-2);color:#f4d6e4;font-family:inherit;font-size:11px;font-weight:600;line-height:1.2;cursor:pointer}
+      html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-overview-issues button:hover {border-color:#d394b8;background:#523848}
+      html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-search-result-store {display:block;margin-top:2px;color:#d3afc3;font-size:11px}
+      html:not(.rpcm-mobile-layout) #rpcm-modal :is(.rpcm-inline-story-card,.rpcm-knowledge-card,.rpcm-person-record).is-search-hit {outline:2px solid #d991b6;outline-offset:2px}
+      html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-person-edit-context {position:sticky;top:0;z-index:4;display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:9px;padding:8px 10px;border:1px solid #77566b;border-radius:9px;background:#3b2d38;box-shadow:0 7px 18px rgba(0,0,0,.22)}
+      html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-person-edit-context[hidden] {display:none}
+      html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-person-edit-context strong {font-size:13px;color:#f5ddeb}
+      html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-person-edit-context button {min-height:34px;white-space:nowrap}
+      html:not(.rpcm-mobile-layout) .rpcm-log-filterbar {display:flex;align-items:end;gap:9px;flex-wrap:wrap;padding:9px 12px;border-top:1px solid #494149;border-bottom:1px solid #494149;background:var(--wish-deep)}
+      html:not(.rpcm-mobile-layout) .rpcm-log-filterbar label {display:grid;gap:4px;color:#d8cbd4;font-size:11px}
+      html:not(.rpcm-mobile-layout) .rpcm-log-filterbar label:first-child {flex:1 1 220px}
+      html:not(.rpcm-mobile-layout) .rpcm-log-filterbar input,
+      html:not(.rpcm-mobile-layout) .rpcm-log-filterbar select {box-sizing:border-box;min-height:36px;padding:6px 9px;border:1px solid #635562;border-radius:8px;background:var(--wish-deep);color:#f0eaf0;font-size:13px}
+      html:not(.rpcm-mobile-layout) .rpcm-log-filterbar span {margin-left:auto;padding-bottom:7px;color:#c5b7c1;font-size:11px}
+      html:not(.rpcm-mobile-layout) .rpcm-log-filter-empty {padding:16px;text-align:center;color:#b9abb4;font-size:13px}
+      .rpcm-log-filter-empty[hidden],.rpcm-log-list :is(.rpcm-log-row,.rpcm-log-year,.rpcm-log-month,.rpcm-log-timeline-folder)[hidden] {display:none!important}
+      html:not(.rpcm-mobile-layout) .rpcm-log-help-details {padding:7px 12px;border-bottom:1px solid #403a40;color:#c4b5bf;font-size:12px}
+      html:not(.rpcm-mobile-layout) .rpcm-log-help-details>summary {cursor:pointer}
+      html:not(.rpcm-mobile-layout) .rpcm-log-help-details .rpcm-log-help {margin-top:7px}
+      html.rpcm-mobile-layout #rpcm-modal :is(.rpcm-carrier-status,.rpcm-arm-reason,.rpcm-overview-issues,.rpcm-search-result-store,.rpcm-person-edit-context),
+      html.rpcm-mobile-layout .rpcm-log-filterbar {display:none!important}
+      @media(max-width:850px) {
+        html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-footer {flex-wrap:wrap}
+      }
+      @media(max-width:390px) {
+        html.rpcm-mobile-layout #rpcm-modal .rpcm-overview-card {min-height:68px}
+        html.rpcm-mobile-layout #rpcm-modal .rpcm-overview-card strong {font-size:15px!important}
+        html.rpcm-mobile-layout #rpcm-modal .rpcm-footer .rpcm-btn {font-size:12px}
+      }
+    `);
+  }
+
+  function addManualUpdateDesignStyles() {
+    GM_addStyle("html body .rpcm-notice-guidance{position:relative;box-sizing:border-box;display:block;flex:none;grid-column:1/-1;width:100%;margin:0 0 16px;padding:16px 42px 16px 18px;border:1px solid var(--wish-accent-line);border-radius:12px;background:var(--wish-accent-soft);color:var(--wish-fg);font-size:13px;line-height:1.7;overflow-wrap:anywhere}\nhtml body .rpcm-notice-guidance small{display:block;font-size:11px;color:var(--wish-accent-strong)}\nhtml body .rpcm-notice-guidance strong{display:block;margin:4px 0;font-size:15px;font-weight:500;color:var(--wish-fg)}\nhtml body .rpcm-notice-guidance p{margin:6px 0!important;color:var(--wish-fg-2)!important}\nhtml body .rpcm-notice-guidance details{border:0!important;background:transparent!important;padding:0!important;margin:10px 0 0!important;box-shadow:none!important}\nhtml body .rpcm-notice-guidance summary{font-size:12px;color:var(--wish-muted)!important;cursor:pointer}\nhtml body .rpcm-notice-guidance button{color:var(--wish-fg)!important;background:var(--wish-card)!important;border:0!important;box-shadow:none!important;font-weight:400!important}\nhtml body .rpcm-notice-guidance [data-notice-guide-close]{position:absolute;right:8px;top:8px;width:30px;min-width:30px;height:30px;padding:6px!important;border-radius:8px}\nhtml body .rpcm-notice-guidance svg{width:16px;height:16px}\nhtml body .rpcm-notice-task-choices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:12px}\nhtml body .rpcm-notice-task-choices button{text-align:left;padding:12px!important;border-radius:8px;white-space:normal}\nhtml body .rpcm-notice-next-action{outline:2px solid var(--wish-accent-strong)!important;outline-offset:3px!important}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-pin{display:inline-flex;align-items:center;justify-content:center;gap:5px;min-width:30px;min-height:30px;padding:5px 8px!important;border:0!important;background:transparent!important;box-shadow:none!important;color:var(--wish-muted)!important;border-radius:8px;font-size:11px;font-weight:400!important;cursor:pointer}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-pin svg{width:14px;height:14px}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-pin.is-pinned{background:var(--wish-accent-soft)!important;color:var(--wish-accent-strong)!important}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .m3-who>.rpcm-person-pin{position:absolute;top:5px;left:5px;padding:5px!important;z-index:2}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .m3-who>.rpcm-person-pin span{display:none}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-partner>summary>.rpcm-person-pin{float:right;margin:-4px 18px 0 8px;position:relative;z-index:2}\n@media(max-width:600px){html body .rpcm-notice-task-choices{grid-template-columns:1fr}html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-tabs{padding:10px 12px;gap:6px}html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-tabs button{min-width:48px;padding:7px 10px!important}}\n");
+    GM_addStyle("html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader{border:1px solid var(--wish-line);border-radius:16px;background:var(--wish-card);color:var(--wish-fg);overflow:hidden;box-shadow:var(--wish-shadow);margin-top:8px;font-size:13px;line-height:1.7}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader :is(p,h3,h4){margin:0;overflow-wrap:anywhere}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader :is(details,section){min-width:0}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-head{display:flex;align-items:center;gap:14px;padding:24px 26px;border-bottom:1px solid var(--wish-line-2)}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-head h3{font-size:21px;font-weight:550;line-height:1.4}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-head p{font-size:12px;color:var(--wish-muted);margin-top:5px}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-avatar{display:grid;place-items:center;flex:none;width:48px;height:48px;border-radius:15px;background:var(--wish-accent-soft);color:var(--wish-accent-strong);font-size:20px;font-weight:500}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-tabs{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 24px;border-bottom:1px solid var(--wish-line-2);background:var(--wish-card);margin:0}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-tabs>[role=tablist]{display:flex;gap:5px;border-radius:10px;padding:4px;background:var(--wish-hi)}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-tabs button{min-width:72px;min-height:36px;padding:7px 16px!important;border:0!important;box-shadow:none!important;border-radius:8px;background:transparent!important;color:var(--wish-fg-2)!important;font-weight:400!important;font-size:13px}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-tabs button[aria-selected=true]{background:var(--wish-card)!important;color:var(--wish-accent-strong)!important;font-weight:500!important;box-shadow:var(--wish-shadow)!important}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core :is(.rpcm-person-reader-tools,.rpcm-person-reader-settings){display:block;width:auto;flex:none;padding:0;border:0;background:transparent;box-shadow:none;margin:0}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core :is(.rpcm-person-reader-tools,.rpcm-person-reader-settings)>summary{display:block;cursor:pointer;color:var(--wish-fg-2);font-size:12px;list-style:none;white-space:nowrap;padding:8px 10px;border-radius:8px;font-weight:400}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-settings{margin-left:auto!important}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-settings>div{display:grid;gap:12px;padding:12px;max-width:250px}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-settings label{display:flex;align-items:center;gap:8px;color:var(--wish-fg-2);font-size:12px;flex-wrap:wrap}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-settings input:not([type=checkbox]){width:170px;min-height:36px;box-sizing:border-box;border:1px solid var(--wish-line);background:var(--wish-card-2);color:var(--wish-fg);border-radius:8px;padding:7px;font-size:13px}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-tools>div{display:flex;gap:4px}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-tools button{min-width:0;font-size:12px;padding:7px 9px!important}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-tools button[aria-pressed=true]{color:var(--wish-accent-strong)!important;background:var(--wish-accent-soft)!important}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-body{padding:24px;display:grid;gap:16px;min-width:0}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core :is(.rpcm-person-reader-partner,.rpcm-person-reader-fact){border:1px solid var(--wish-line);border-radius:14px;background:var(--wish-card);padding:0;overflow:hidden;margin:0;box-shadow:none}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-partner[open]{border-color:var(--wish-accent-line)}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-partner>summary{padding:20px 22px;display:block;list-style:none;cursor:pointer;font-size:14px;font-weight:400}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-partner>summary>span{display:flex;justify-content:space-between;align-items:center;gap:12px}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-partner>summary strong{font-size:15px;font-weight:550;color:var(--wish-fg)}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-partner>summary em{flex:none;font-size:11px;font-style:normal;font-weight:400;padding:3px 10px;border-radius:999px;background:var(--wish-accent-soft);color:var(--wish-accent-strong)}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-partner>summary p{margin-top:9px;color:var(--wish-fg-2);font-size:12px;font-weight:400;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.7}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-directions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0;padding:0 22px 22px}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-direction{min-width:0;border-top:1px solid var(--wish-line-2);padding:20px 22px 0 0}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-direction+div{border-left:1px solid var(--wish-line-2);padding:20px 0 0 22px}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-direction h4{color:var(--wish-accent-strong);font-size:12px;font-weight:500;margin-bottom:16px}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-direction h4 span{margin:0 4px;color:var(--wish-muted)}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-field{display:grid;grid-template-columns:75px minmax(0,1fr);gap:12px;margin-bottom:14px;min-width:0}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-field small{color:var(--wish-muted);font-size:11px;font-weight:400}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-field p{font-size:13px;color:var(--wish-fg-2);white-space:pre-wrap;font-weight:400;line-height:1.8}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-record+.rpcm-person-reader-record{margin-top:18px;border-top:1px solid var(--wish-line-2);padding-top:18px}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-fold{display:block;border:0;border-radius:8px;padding:0;background:var(--wish-hi);margin:8px 0;box-shadow:none;font-size:12px}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-fold>summary{display:block;list-style:none;padding:8px 11px;color:var(--wish-fg-2);font-weight:400;cursor:pointer}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-fold p{padding:0 12px 12px;white-space:pre-wrap;font-size:12px;color:var(--wish-fg-2);line-height:1.8}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-foot{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start;justify-content:space-between}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-foot>.rpcm-person-reader-fold{flex:1 1 140px;margin:0}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-edit{min-height:30px;padding:4px 9px!important;font-size:11px;font-weight:400;color:var(--wish-fg-2)!important;border:0!important;border-radius:7px;background:transparent!important;box-shadow:none!important}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-edit:hover{background:var(--wish-hi)!important;color:var(--wish-accent-strong)!important}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-speech{display:block;padding:0;margin:0;border:0;border-top:1px solid var(--wish-line-2);box-shadow:none;background:transparent}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-speech>summary{display:block;padding:12px 22px;cursor:pointer;color:var(--wish-muted);font-size:12px;font-weight:400}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-fact>summary{display:flex;align-items:center;justify-content:space-between;gap:16px;list-style:none;padding:18px 20px;cursor:pointer}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-fact>summary strong{font-size:13px;font-weight:500;line-height:1.8;overflow-wrap:anywhere;min-width:0}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-fact-body{padding:0 20px 20px}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-gap{margin-top:18px;padding-top:18px;border-top:1px solid var(--wish-line-2)}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-gap>small{display:block;color:var(--wish-muted);font-size:11px;margin-bottom:10px}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-gap>div{display:flex;flex-wrap:wrap;gap:7px}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-status{display:inline-flex;align-items:center;justify-content:center;flex:none;width:auto;max-width:100%;padding:3px 9px;border:0;border-radius:999px;background:var(--wish-hi);color:var(--wish-fg-2);font-size:11px;line-height:1.7;font-weight:400;white-space:normal}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-status[data-status=aware]{background:color-mix(in srgb,var(--wish-success) 12%,var(--wish-card));color:color-mix(in srgb,var(--wish-success) 70%,var(--wish-fg))}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-status:is([data-status=suspects],[data-status=mistaken],[data-status=conflict],[data-status=private]){background:color-mix(in srgb,var(--wish-warning) 13%,var(--wish-card));color:color-mix(in srgb,var(--wish-warning) 62%,var(--wish-fg))}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-caption{display:flex;flex-direction:column;gap:4px;color:var(--wish-fg-2);font-size:12px}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-caption small{font-size:11px;color:var(--wish-muted)}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-empty{padding:10px 0;color:var(--wish-muted);font-size:12px;line-height:1.7}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-secret{margin-top:10px;padding:12px;border-radius:8px;background:var(--wish-accent-soft);font-size:12px;color:var(--wish-fg-2)}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-archived{padding:16px;border:1px solid var(--wish-line);border-radius:10px}\n#rpcm-update-dialog-backdrop [data-person-restore-choices]{display:grid;gap:8px;margin-bottom:12px}\n#rpcm-update-dialog-backdrop .rpcm-person-restore-head{font-size:12px;color:var(--wish-fg-2);font-weight:500}\n#rpcm-update-dialog-backdrop .rpcm-person-restore-choice{display:flex;align-items:flex-start;gap:10px;padding:12px 14px;border:1px solid var(--wish-line);border-radius:10px;background:var(--wish-card)}\n#rpcm-update-dialog-backdrop .rpcm-person-restore-choice:has(:checked){background:var(--wish-accent-soft);border-color:var(--wish-accent-line)}\n#rpcm-update-dialog-backdrop .rpcm-person-restore-choice strong{display:block;font-size:13px;color:var(--wish-fg);font-weight:500}\n#rpcm-update-dialog-backdrop .rpcm-person-restore-choice small{display:block;font-size:11px;color:var(--wish-fg-2);margin-top:4px;line-height:1.6}\n#rpcm-update-dialog-backdrop .rpcm-person-restore-choice input{flex:none;margin-top:5px;accent-color:var(--wish-accent)}\n#rpcm-update-dialog-backdrop .rpcm-person-restore-choice.is-unavailable{opacity:.66;background:var(--wish-hi)}\n#rpcm-update-dialog-backdrop .rpcm-person-restore-choice.is-unavailable strong{color:var(--wish-muted)}\n#rpcm-update-dialog-backdrop .rpcm-person-restore-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}\n#rpcm-update-dialog-backdrop .rpcm-person-restore-head small{font-size:11px;color:var(--wish-muted);font-weight:400}\n#rpcm-update-dialog-backdrop .rpcm-person-restore-empty{margin:0;padding:10px 12px;border:1px dashed var(--wish-line);border-radius:10px;color:var(--wish-muted);font-size:11px;line-height:1.6}\n@media(max-width:700px){html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-directions{grid-template-columns:minmax(0,1fr);gap:20px}html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-direction,html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-direction+div{border-left:0;padding:18px 0 0}html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-head{padding:18px;flex-wrap:wrap}html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-body{padding:14px}html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-tabs{padding:10px 14px;flex-wrap:wrap}html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-field{grid-template-columns:minmax(0,1fr);gap:4px}}\n\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader summary::-webkit-details-marker{display:none}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core :is(.rpcm-person-reader-partner,.rpcm-person-reader-fact)>summary{position:relative;padding-right:44px}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core :is(.rpcm-person-reader-partner,.rpcm-person-reader-fact)>summary::after{content:\"\";position:absolute;right:22px;top:26px;width:6px;height:6px;border-right:1.5px solid var(--wish-muted);border-bottom:1.5px solid var(--wish-muted);transform:rotate(45deg)}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core :is(.rpcm-person-reader-partner,.rpcm-person-reader-fact)[open]>summary::after{transform:rotate(225deg);top:29px}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core :is(.rpcm-person-reader-fold,.rpcm-person-reader-tools,.rpcm-person-reader-settings,.rpcm-person-reader-speech)>summary::after{content:\"\";display:inline-block;float:right;margin:5px 0 0 12px;width:5px;height:5px;border-right:1px solid var(--wish-muted);border-bottom:1px solid var(--wish-muted);transform:rotate(45deg)}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-person-core :is(.rpcm-person-reader-fold,.rpcm-person-reader-tools,.rpcm-person-reader-settings,.rpcm-person-reader-speech)[open]>summary::after{transform:rotate(225deg);margin-top:8px}\n");
+    GM_addStyle("#rpcm-modal #rpcm-section-lore .rpcm-update-more,#rpcm-modal #rpcm-section-lore .rpcm-update-more[open]{position:relative;display:block;flex:0 0 auto!important;width:auto!important;min-width:85px;max-width:none;margin:0!important;padding:0!important;border:0!important;outline:0!important;box-shadow:none!important;background:transparent!important;overflow:visible!important}\n#rpcm-modal #rpcm-section-lore .rpcm-update-more>summary,#rpcm-modal #rpcm-section-lore .rpcm-update-more[open]>summary{display:flex!important;align-items:center;justify-content:center!important;box-sizing:border-box;width:auto!important;min-height:38px;padding:8px 12px!important;border:0!important;border-radius:11px;background:var(--wish-hi)!important;color:var(--wish-fg-2)!important;font-size:13px;font-weight:500;outline:0!important;box-shadow:none!important;white-space:nowrap;cursor:pointer}\n#rpcm-modal #rpcm-section-lore .rpcm-update-more>summary:focus-visible{box-shadow:0 0 0 2px var(--wish-accent-line)!important}\n#rpcm-modal #rpcm-section-lore .rpcm-update-more[open]>summary{color:var(--wish-accent-strong)!important;background:var(--wish-accent-soft)!important}\n#rpcm-modal #rpcm-section-lore .rpcm-update-more>.rpcm-update-more-actions{position:fixed!important;visibility:hidden;z-index:2147483646;display:grid!important;grid-template-columns:minmax(0,1fr);justify-content:stretch;gap:3px!important;width:max-content;min-width:174px;max-width:calc(100vw - 16px);max-height:min(420px,70vh);box-sizing:border-box;margin:0!important;padding:6px!important;border:1px solid var(--wish-line)!important;border-radius:13px;background:var(--wish-card)!important;box-shadow:var(--wish-lift,0 8px 26px rgba(0,0,0,.18))!important;overflow:auto}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-section-lore .rpcm-update-more-actions>:is(.rpcm-btn,.rpcm-add-btn){display:flex!important;justify-content:flex-start;align-items:center;width:100%;min-height:36px;padding:9px 11px!important;margin:0!important;border:0!important;outline:0!important;border-radius:8px;background:transparent!important;color:var(--wish-fg)!important;box-shadow:none!important;font-size:13px;font-weight:400;white-space:normal;text-align:left}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-section-lore .rpcm-update-more-actions>:is(.rpcm-btn,.rpcm-add-btn):hover,html body #rpcm-overlay #rpcm-modal #rpcm-section-lore .rpcm-update-more-actions>:is(.rpcm-btn,.rpcm-add-btn):focus-visible{background:var(--wish-accent-soft)!important;color:var(--wish-accent-strong)!important}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-section-lore .rpcm-update-more-actions>[hidden]{display:none!important}\n\nhtml body #rpcm-overlay #rpcm-modal #rpcm-section-lore .rpcm-section-head{align-items:flex-start;gap:20px;flex-wrap:wrap}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-section-lore .rpcm-section-head>div:first-child{flex:1 1 260px;min-width:0}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-section-lore .rpcm-lore-toolbar{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex:0 1 auto;flex-wrap:wrap;min-width:0}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-section-lore .rpcm-lore-pack-actions{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 16px}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-section-lore .rpcm-lore-pack-state{display:flex;align-items:center;gap:16px;flex:1 1 220px;min-width:0;flex-wrap:wrap}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-section-lore .rpcm-lore-pack-state>label{display:inline-flex;align-items:center;gap:7px;flex:none;margin:0;font-size:13px;white-space:nowrap}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-section-lore .rpcm-lore-pack-state .rpcm-lore-pack-mode-summary{display:block;border:0;background:transparent;min-height:0;padding:0;color:var(--wish-muted);font-size:12px;white-space:normal;line-height:1.6}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-section-lore .rpcm-lore-pack-tools{display:flex;align-items:center;gap:8px;flex:none;flex-wrap:wrap}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-section-lore .rpcm-update-more-actions>.warn{color:var(--wish-danger)!important}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-section-lore .rpcm-lore-bulk-menu .rpcm-update-more-actions{min-width:230px}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-section-lore .rpcm-lore-bulk-menu label{display:grid;gap:8px;margin:0;padding:8px;font-size:12px;color:var(--wish-fg-2)}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-section-lore .rpcm-lore-bulk-menu select{box-sizing:border-box;max-width:100%;width:100%;min-height:38px;background:var(--wish-card-2);color:var(--wish-fg);border:1px solid var(--wish-line);border-radius:8px;padding:8px;font:inherit}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-section-lore .rpcm-new-badge{width:max-content!important;justify-self:start;align-self:start}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-section-lore .rpcm-lore-menu-separator{height:1px;background:var(--wish-line-2);margin:4px 8px}\n@media(max-width:600px){html body #rpcm-overlay #rpcm-modal #rpcm-section-lore .rpcm-lore-toolbar{justify-content:flex-start;width:100%}html body #rpcm-overlay #rpcm-modal #rpcm-section-lore .rpcm-lore-pack-tools{width:100%;justify-content:flex-end}}\n");
+    GM_addStyle("#rpcm-modal #rpcm-section-update .rpcm-update-more,#rpcm-modal #rpcm-section-update .rpcm-update-more[open]{position:relative;display:block;flex:0 0 auto!important;width:auto!important;min-width:85px;max-width:none;margin:0!important;padding:0!important;border:0!important;outline:0!important;box-shadow:none!important;background:transparent!important;overflow:visible!important}\n#rpcm-modal #rpcm-section-update .rpcm-update-more>summary,#rpcm-modal #rpcm-section-update .rpcm-update-more[open]>summary{display:flex!important;align-items:center;justify-content:center!important;box-sizing:border-box;width:auto!important;min-height:38px;padding:8px 12px!important;border:0!important;border-radius:11px;background:var(--wish-hi)!important;color:var(--wish-fg-2)!important;font-size:13px;font-weight:500;outline:0!important;box-shadow:none!important;white-space:nowrap;cursor:pointer}\n#rpcm-modal #rpcm-section-update .rpcm-update-more>summary:focus-visible{box-shadow:0 0 0 2px var(--wish-accent-line)!important}\n#rpcm-modal #rpcm-section-update .rpcm-update-more[open]>summary{color:var(--wish-accent-strong)!important;background:var(--wish-accent-soft)!important}\n#rpcm-modal #rpcm-section-update .rpcm-update-more>.rpcm-update-more-actions{position:fixed!important;visibility:hidden;z-index:2147483646;display:grid!important;grid-template-columns:minmax(0,1fr);justify-content:stretch;gap:3px!important;width:max-content;min-width:174px;max-width:calc(100vw - 16px);max-height:min(420px,70vh);box-sizing:border-box;margin:0!important;padding:6px!important;border:1px solid var(--wish-line)!important;border-radius:13px;background:var(--wish-card)!important;box-shadow:var(--wish-lift,0 8px 26px rgba(0,0,0,.18))!important;overflow:auto}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-section-update .rpcm-update-more-actions>.rpcm-btn{display:flex!important;justify-content:flex-start;align-items:center;width:100%;min-height:36px;padding:9px 11px!important;margin:0!important;border:0!important;outline:0!important;border-radius:8px;background:transparent!important;color:var(--wish-fg)!important;box-shadow:none!important;font-size:13px;font-weight:400;white-space:normal;text-align:left}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-section-update .rpcm-update-more-actions>.rpcm-btn:hover,html body #rpcm-overlay #rpcm-modal #rpcm-section-update .rpcm-update-more-actions>.rpcm-btn:focus-visible{background:var(--wish-accent-soft)!important;color:var(--wish-accent-strong)!important}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-section-update .rpcm-update-more-actions>[hidden]{display:none!important}\n#rpcm-update-dialog-backdrop .rpcm-person-import-selection{margin:14px 0;border:0;border-radius:12px;padding:12px 14px;background:var(--wish-hi);color:var(--wish-fg);font-size:13px}\n#rpcm-update-dialog-backdrop .rpcm-person-import-selection>summary{cursor:pointer;font-weight:500}\n#rpcm-update-dialog-backdrop .rpcm-person-import-selection p{font-size:12px;line-height:1.7;color:var(--wish-fg-2);margin:10px 0}\n#rpcm-update-dialog-backdrop [data-person-import-choices]{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;max-height:220px;overflow:auto;padding:3px}\n#rpcm-update-dialog-backdrop [data-person-choice]{display:flex;gap:10px;align-items:center;padding:10px 12px;min-width:0;background:var(--wish-card);border-radius:9px;font-size:13px;cursor:pointer}\n#rpcm-update-dialog-backdrop [data-person-choice] input{flex:none;accent-color:var(--wish-accent)}\n#rpcm-update-dialog-backdrop [data-person-choice] span{overflow-wrap:anywhere}\n#rpcm-update-dialog-backdrop [data-person-choice] small{display:block;font-size:11px;color:var(--wish-muted);margin-top:4px}\n#rpcm-update-dialog-backdrop [data-person-choice].is-conflict{box-shadow:0 0 0 2px var(--wish-accent-line);background:var(--wish-accent-soft)}\n/* Pair surfaces and text colors; do not retain dark-only badge backgrounds. */\nhtml body #rpcm-modal #rpcm-person-core .rpcm-relmap-entry button[data-person-core-action=\"openRelationshipMap\"]{background:var(--wish-accent-soft)!important;color:var(--wish-accent-strong)!important;border:0!important;box-shadow:none!important;font-weight:500!important}\nhtml body #rpcm-modal #rpcm-person-core .rpcm-relmap-entry button[data-person-core-action=\"openRelationshipMap\"]:hover{background:var(--wish-accent-soft-2)!important}\nhtml body #rpcm-modal .rpcm-profile .rpcm-profile-active{background:color-mix(in srgb,var(--wish-success) 12%,var(--wish-card))!important;color:color-mix(in srgb,var(--wish-success) 70%,var(--wish-fg))!important;border-color:color-mix(in srgb,var(--wish-success) 28%,var(--wish-card))!important;font-weight:500!important}\nhtml body #rpcm-modal #rpcm-person-core .m3-chip.known{color:var(--wish-accent-strong)!important}\nhtml body #rpcm-modal #rpcm-person-core .m3-chip.never{color:color-mix(in srgb,var(--wish-warning) 72%,var(--wish-fg))!important}\n");
+    GM_addStyle("#rpcm-update-dialog-backdrop .rpcm-split-downloads{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 17px;border-bottom:1px solid var(--wish-line);flex:none}\n#rpcm-update-dialog-backdrop .rpcm-split-downloads button{font-size:13px;min-height:36px;padding:8px 12px}\n#rpcm-update-dialog-backdrop .rpcm-source-approval{display:flex;gap:10px;align-items:flex-start;border-radius:12px;padding:12px 14px;margin:14px 0;background:var(--wish-accent-soft);color:var(--wish-fg);font-size:13px;line-height:1.6}\n#rpcm-update-dialog-backdrop .rpcm-source-approval[hidden]{display:none}\n#rpcm-update-dialog-backdrop .rpcm-source-approval input{margin-top:3px;flex:none;accent-color:var(--wish-accent)}\n#rpcm-update-dialog-backdrop .rpcm-source-approval small{display:block;color:var(--wish-fg-2);font-size:12px;margin-top:3px}\n@media(max-width:600px){#rpcm-update-dialog-backdrop .rpcm-split-downloads{gap:6px;padding:8px 12px}#rpcm-update-dialog-backdrop .rpcm-split-downloads button{font-size:12px}}\n#rpcm-modal #rpcm-section-update .rpcm-update-actions{align-items:flex-start!important;gap:10px!important}\n#rpcm-section-update .rpcm-update-primary-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;min-width:0}\n#rpcm-section-update .rpcm-update-more{align-self:flex-start;flex:none;max-width:100%;color:var(--wish-fg-2);font-size:13px;min-width:85px;margin:0;padding:0;border:0;background:none}\n#rpcm-section-update .rpcm-update-more summary{list-style:none;display:flex;align-items:center;justify-content:center;gap:6px;border-radius:11px;min-height:38px;padding:8px 12px;background:var(--wish-card);cursor:pointer;font-weight:500;box-sizing:border-box}\n#rpcm-section-update .rpcm-update-more summary::-webkit-details-marker{display:none}\n#rpcm-section-update .rpcm-update-more summary::after{content:'⌄';font-size:14px;color:var(--wish-muted)}\n#rpcm-section-update .rpcm-update-more[open]{flex-basis:100%}\n#rpcm-section-update .rpcm-update-more[open] summary{justify-content:flex-end;background:none}\n#rpcm-section-update .rpcm-update-more-actions{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px;padding:12px;background:var(--wish-paper);border-radius:14px;margin-top:6px}\n#rpcm-modal #rpcm-section-update [hidden]{display:none!important}\n@media(max-width:600px){#rpcm-section-update .rpcm-update-more-actions{justify-content:flex-start}#rpcm-section-update .rpcm-update-primary-actions button{min-width:0}}\n");
+    // v0.14.94: 인물 고정 복원·실제 RP 등장 빈도 갱신·알림 다음 작업 연결·WISH 원형 채움 호환성 보강.
+    // v0.14.95: 응답 교정 저장 후 자동 새로고침·미반영 확인 팝업, 인지 카드 자동 카테고리 탭/수동 분류 추가.
+    GM_addStyle("\n/* v0.14.93: status never collapses behind a long row of actions. */\n#rpcm-modal #rpcm-section-update .rpcm-update-card{display:grid!important;grid-template-columns:minmax(0,1fr)!important;align-items:stretch!important;gap:14px!important}\n#rpcm-modal #rpcm-section-update .rpcm-update-card-main{width:100%;min-width:0!important;max-width:none!important}\n#rpcm-modal #rpcm-section-update .rpcm-update-status{width:100%;min-width:0;line-height:1.7;overflow-wrap:anywhere}\n#rpcm-modal #rpcm-section-update .rpcm-update-actions{width:100%;min-width:0!important;flex-wrap:wrap!important;justify-content:flex-end!important}\n#rpcm-modal #rpcm-section-update .rpcm-update-muted{flex-basis:100%;min-width:0}\n#rpcm-update-dialog-backdrop .rpcm-split-navigation{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:12px 17px;border-bottom:1px solid var(--wish-line)}\n#rpcm-update-dialog-backdrop .rpcm-split-navigation label{display:flex;align-items:center;gap:8px;flex:1;min-width:160px;font-size:13px;white-space:nowrap}\n#rpcm-update-dialog-backdrop .rpcm-split-navigation select{flex:1;width:auto;min-width:0;padding:9px 12px;border:1px solid var(--wish-line);border-radius:10px;background:var(--wish-card);color:var(--wish-fg)}\n#rpcm-update-dialog-backdrop .rpcm-split-progress{flex:none;margin:0!important;padding:13px 17px!important;border:0!important;border-radius:0!important;display:flex;flex-direction:column;gap:5px}\n#rpcm-update-dialog-backdrop .rpcm-split-progress strong{font-size:14px;font-weight:600}\n#rpcm-update-dialog-backdrop .rpcm-split-progress :is(span,p){font-size:12px;line-height:1.7;margin:0}\n#rpcm-update-dialog-backdrop .rpcm-split-browser-status{flex:none;margin:0 17px;font-size:12px;line-height:1.7;color:var(--wish-fg-2)}\n#rpcm-update-dialog-backdrop .rpcm-split-browser-status:empty{display:none}\n@media(max-width:600px){#rpcm-modal #rpcm-section-update .rpcm-update-actions{justify-content:flex-start!important}#rpcm-update-dialog-backdrop .rpcm-split-navigation [data-split-current]{width:100%}}\n");
+    GM_addStyle(`
+      /* UI 2.0 foundation: semantic colors and shared desktop surfaces. */
+      html:not(.rpcm-mobile-layout) #rpcm-modal,
+      #rpcm-update-dialog-backdrop {
+        --rpcm-bg:#181619;--rpcm-sheet:#242127;--rpcm-card:#2c2830;--rpcm-card-2:#342e37;
+        --rpcm-line:#554a56;--rpcm-line-soft:#3a333d;
+        --rpcm-fg:#f3e9ef;--rpcm-fg-2:#d5c6d0;--rpcm-muted:#aa9aa6;
+        --rpcm-accent:#d994bb;--rpcm-accent-soft:#3b2c38;--rpcm-accent-line:#855f77;
+        --rpcm-success:#75c9a1;--rpcm-warning:#e4b268;--rpcm-danger:#e58f98;
+        --rpcm-shadow:0 8px 22px rgba(0,0,0,.14);--rpcm-shadow-lift:0 18px 36px rgba(0,0,0,.26);
+        --rpcm-ease:cubic-bezier(.2,.8,.3,1);--rpcm-spring:cubic-bezier(.34,1.42,.5,1);
+      }
+      html:not(.rpcm-mobile-layout) #rpcm-modal {background:var(--rpcm-sheet);color:var(--rpcm-fg)}
+      html:not(.rpcm-mobile-layout) #rpcm-modal :is(.rpcm-header,.rpcm-side-surface) {background:var(--rpcm-sheet);border-color:var(--rpcm-line-soft)}
+      html:not(.rpcm-mobile-layout) #rpcm-modal :is(.rpcm-body,.rpcm-workspace,.rpcm-work-content) {background:var(--rpcm-bg)}
+      html:not(.rpcm-mobile-layout) #rpcm-modal :is(.rpcm-overview-card,.rpcm-tool-card,.rpcm-ai-control-grid article) {background:var(--rpcm-card);border-color:var(--rpcm-line);box-shadow:var(--rpcm-shadow)}
+      html:not(.rpcm-mobile-layout) #rpcm-modal :is(.rpcm-overview-card,.rpcm-tool-card,.rpcm-ai-control-grid article):hover {border-color:var(--rpcm-accent-line)}
+      html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-work-nav {position:relative;isolation:isolate}
+      html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-work-nav .rpcm-nav-indicator {
+        position:absolute;z-index:0;left:6px;right:6px;top:0;border:1px solid var(--rpcm-accent-line);
+        border-radius:var(--rpcm-radius-control);background:var(--rpcm-accent-soft);
+        pointer-events:none;transition:transform .38s var(--rpcm-spring),height .24s var(--rpcm-ease);
+      }
+      html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-work-nav button {z-index:1}
+      html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-work-nav button.is-active {background:transparent!important;color:#f4cee1}
+      html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-work-nav button:hover:not(.is-active) {background:var(--rpcm-card-2)}
+      html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-work-nav button:active {transform:scale(.98)}
+      html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-btn:active {transform:scale(.98)}
+      html:not(.rpcm-mobile-layout) #rpcm-modal :is(.rpcm-work-nav button,.rpcm-update-center button):focus-visible,
+      #rpcm-update-dialog-backdrop button:focus-visible {outline:2px solid var(--rpcm-accent);outline-offset:2px}
+      #rpcm-modal .rpcm-workspace:not([data-view="update"]) #rpcm-section-update {display:none!important}
+      html.rpcm-mobile-layout #rpcm-section-update {display:block!important;min-width:0}
+      #rpcm-section-update {display:block;padding:0;border:0;background:none}
+      #rpcm-section-update .rpcm-update-intro {
+        display:flex;align-items:center;justify-content:space-between;gap:14px;margin:0 0 14px;
+        padding:15px 17px;border:1px solid var(--rpcm-line);border-radius:var(--rpcm-radius-panel);
+        background:var(--rpcm-card);box-shadow:var(--rpcm-shadow)
+      }
+      #rpcm-section-update .rpcm-update-intro strong {display:block;color:var(--rpcm-fg);font-size:15px}
+      #rpcm-section-update .rpcm-update-intro p {margin:4px 0 0;color:var(--rpcm-fg-2);font-size:12px;line-height:1.55}
+      #rpcm-section-update .rpcm-update-intro button {flex:none;min-height:34px}
+      #rpcm-section-update .rpcm-update-list {display:grid;gap:9px}
+      #rpcm-section-update .rpcm-update-card {
+        display:flex;align-items:center;justify-content:space-between;gap:14px;min-width:0;
+        padding:14px 16px;border:1px solid var(--rpcm-line);border-radius:var(--rpcm-radius-panel);
+        background:var(--rpcm-card);box-shadow:var(--rpcm-shadow);
+        transition:border-color .18s var(--rpcm-ease),box-shadow .22s var(--rpcm-ease)
+      }
+      #rpcm-section-update .rpcm-update-card:hover {border-color:var(--rpcm-accent-line);box-shadow:var(--rpcm-shadow-lift)}
+      #rpcm-section-update .rpcm-update-card-main {flex:1;min-width:0}
+      #rpcm-section-update .rpcm-update-kicker {display:block;color:var(--rpcm-accent);font-size:11px;font-weight:600}
+      #rpcm-section-update .rpcm-update-card h3 {margin:3px 0 2px;color:var(--rpcm-fg);font-size:14px}
+      #rpcm-section-update .rpcm-update-card p {margin:0;color:var(--rpcm-fg-2);font-size:12px}
+      #rpcm-section-update .rpcm-update-status {display:flex;align-items:center;gap:5px 10px;flex-wrap:wrap;margin-top:9px}
+      #rpcm-section-update .rpcm-update-chip {
+        display:inline-flex;align-items:center;min-height:22px;padding:2px 7px;
+        border:1px solid var(--rpcm-accent-line);border-radius:999px;background:var(--rpcm-accent-soft);
+        color:#f0cadf;font-size:11px;font-weight:650
+      }
+      #rpcm-section-update .rpcm-update-chip.is-warning {border-color:#806642;background:#3a3025;color:var(--rpcm-warning)}
+      #rpcm-section-update .rpcm-update-chip.is-created {border-color:#547968;background:#293b34;color:var(--rpcm-success)}
+      #rpcm-section-update .rpcm-update-muted {color:var(--rpcm-muted);font-size:11px}
+      #rpcm-section-update .rpcm-update-actions {display:flex;align-items:center;gap:7px;flex:none}
+      #rpcm-section-update .rpcm-update-actions .rpcm-btn {min-height:34px;white-space:nowrap}
+      #rpcm-section-update .rpcm-update-footnote {margin:13px 2px;color:var(--rpcm-muted);font-size:11px;line-height:1.6}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) {position:fixed;inset:0;z-index:2147483647;display:grid;place-items:center;padding:18px;box-sizing:border-box;background:rgba(0,0,0,.72);font-family:-apple-system,BlinkMacSystemFont,"Pretendard",sans-serif}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-dialog {display:flex;flex-direction:column;box-sizing:border-box;width:min(920px,calc(100vw - 36px));height:min(780px,calc(100vh - 36px));min-height:0;overflow:hidden;border:1px solid var(--rpcm-line);border-radius:14px;background:var(--rpcm-sheet);color:var(--rpcm-fg);box-shadow:0 28px 80px rgba(0,0,0,.6);animation:rpcm-update-in .25s var(--rpcm-ease) both}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) header {display:flex;align-items:flex-start;gap:12px;padding:15px 17px;border-bottom:1px solid var(--rpcm-line-soft);background:var(--rpcm-card)}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) header>div {flex:1;min-width:0}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) h2 {margin:0;font-size:17px;color:var(--rpcm-fg)}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) header p {margin:4px 0 0;font-size:12px;color:var(--rpcm-fg-2)}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-dialog-close {min-width:34px;min-height:34px;border:1px solid var(--rpcm-line);border-radius:7px;background:var(--rpcm-card-2);color:var(--rpcm-fg);cursor:pointer}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) textarea {box-sizing:border-box;flex:1;min-height:0;width:calc(100% - 34px);margin:16px 17px;resize:none;padding:14px;border:1px solid var(--rpcm-line);border-radius:9px;background:var(--rpcm-bg);color:var(--rpcm-fg);font:12px/1.7 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;outline:none}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) textarea:focus {border-color:var(--rpcm-accent);box-shadow:0 0 0 2px rgba(217,148,187,.15)}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) footer {display:flex;align-items:center;gap:8px;padding:11px 17px;border-top:1px solid var(--rpcm-line-soft);background:var(--rpcm-card)}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) footer span {flex:1;color:var(--rpcm-muted);font-size:11px}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-btn {min-height:36px}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-result-dialog {width:min(1120px,calc(100vw - 36px));height:min(900px,calc(100vh - 36px))}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-result-body {flex:1;min-height:0;overflow:auto;padding:14px 17px}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-import-grid {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr));gap:12px}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-import-grid label {display:flex;flex-direction:column;gap:7px;min-width:0;font-size:12px;font-weight:600;color:var(--rpcm-fg-2)}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-import-grid input {font-size:12px;color:var(--rpcm-fg-2)}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-import-grid textarea {flex:none;width:100%;height:180px;margin:0;resize:vertical}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-result-status {margin:12px 0;padding:10px 12px;border:1px solid var(--rpcm-line);border-radius:8px;background:var(--rpcm-card);color:var(--rpcm-fg-2);font-size:12px;line-height:1.5}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-result-status.is-saved {border-color:#547968;color:var(--rpcm-success)}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-diff-summary {margin:0 0 10px;color:var(--rpcm-fg);font-size:12px;font-weight:600}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-diff-part {margin:8px 0;padding:9px;border:1px solid var(--rpcm-line);border-radius:8px;background:var(--rpcm-card)}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-diff-part summary {cursor:pointer;color:var(--rpcm-fg);font-size:12px;font-weight:600}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-diff-columns {display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:9px 0}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-diff-columns>div {min-width:0}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-diff-columns strong {display:block;margin-bottom:4px;color:var(--rpcm-muted);font-size:11px}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-diff-columns pre {box-sizing:border-box;max-height:300px;overflow:auto;margin:0;padding:10px;border:1px solid var(--rpcm-line-soft);border-radius:6px;background:var(--rpcm-bg);color:var(--rpcm-fg-2);white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-diff-lines {max-height:240px;overflow:auto;font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-diff-lines>div {display:grid;grid-template-columns:1fr 1fr;gap:8px;border-bottom:1px solid var(--rpcm-line-soft)}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-diff-lines :is(del,ins) {padding:3px 5px;white-space:pre-wrap;overflow-wrap:anywhere;text-decoration:none}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-diff-lines del {background:#412b32;color:#efb2b8}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-diff-lines ins {background:#254036;color:#ade3c7}
+      @keyframes rpcm-update-in {from{opacity:0;transform:translateY(9px) scale(.985)}}
+      @media(max-width:880px) {#rpcm-section-update .rpcm-update-card {align-items:stretch;flex-direction:column}#rpcm-section-update .rpcm-update-actions {justify-content:flex-end}}
+      @media(max-width:680px) {:is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) {padding:0}:is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-dialog {width:100vw;height:100vh;height:100dvh;border:0;border-radius:0}:is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) footer {flex-wrap:wrap}:is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) footer span {flex-basis:100%}:is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-diff-columns {grid-template-columns:1fr}}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-packet-choice {width:min(540px,calc(100vw - 24px));height:auto;max-height:calc(100vh - 24px);overflow-y:auto}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-packet-options {display:grid;gap:9px;padding:16px 17px}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-packet-options button {display:flex;flex-direction:column;align-items:flex-start;gap:5px;width:100%;padding:13px 15px;text-align:left}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-packet-options small {color:var(--rpcm-fg-2);font-size:11px;font-weight:400;line-height:1.5}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-packet-status {min-height:18px;padding:0 17px 14px;color:var(--rpcm-muted);font-size:11px}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-packet-choice [hidden] {display:none!important}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-full-split-offer {display:grid;gap:8px;margin:0 17px 15px;padding:13px;border:1px solid var(--rpcm-accent-line);border-radius:9px;background:var(--rpcm-card);font-size:12px}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-full-split-offer p {margin:0;color:var(--rpcm-fg-2);line-height:1.5}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-full-split-offer>div {display:flex;flex-wrap:wrap;gap:7px}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-split-progress {display:grid;gap:5px;margin:0 17px 12px;padding:12px 14px;border:1px solid var(--rpcm-accent-line);border-radius:9px;background:var(--rpcm-card);font-size:12px}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-split-progress strong {font-size:14px}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-split-progress span {color:var(--rpcm-fg-2)}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-split-progress p {margin:3px 0 0;line-height:1.55;color:var(--rpcm-fg-2)}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-range-controls {display:grid;gap:9px;padding:16px 17px 0}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-range-controls label,#rpcm-auto-start-backdrop label {display:grid;gap:5px;color:var(--rpcm-fg-2);font-size:12px}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-range-controls select,#rpcm-auto-start-backdrop select {box-sizing:border-box;width:100%;min-width:0;padding:9px 10px;border:1px solid var(--rpcm-line-soft);border-radius:8px;background:var(--rpcm-bg);color:var(--rpcm-fg)}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-range-controls [data-packet-custom],:is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-range-controls [data-export-custom] {display:grid;gap:9px;min-width:0}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-range-controls [hidden] {display:none!important}
+      :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-range-controls p {margin:0;color:var(--rpcm-muted);font-size:11px;line-height:1.5}
+      @media(prefers-reduced-motion:reduce) {:is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-dialog {animation:none!important}html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-nav-indicator,html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-update-card {transition:none!important}}
+    `);
+
+    // v0.15.1 · Person header/tab alignment cleanup.
+    // Text-only segmented navigation is shared by light/dark mode via theme variables.
+    GM_addStyle(`
+      html body #rpcm-overlay #rpcm-modal #rpcm-person-core .m3-person-heading{
+        display:inline-flex!important;
+        align-items:baseline!important;
+        gap:7px!important;
+        min-width:0;
+        flex-wrap:wrap;
+      }
+      html body #rpcm-overlay #rpcm-modal #rpcm-person-core .m3-person-heading>b{
+        flex:none;
+        font-size:13.5px;
+      }
+      html body #rpcm-overlay #rpcm-modal #rpcm-person-core .m3-person-heading>.m3-muted{
+        flex:none;
+        margin:0!important;
+        font-size:11px!important;
+        line-height:1.4;
+      }
+
+      html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-tabs{
+        display:grid!important;
+        grid-template-columns:minmax(0,1fr) auto minmax(0,1fr)!important;
+        align-items:center!important;
+        gap:12px!important;
+        background:transparent!important;
+      }
+      html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-tabs>[role=tablist]{
+        grid-column:2;
+        justify-self:center;
+        display:flex!important;
+        align-items:center;
+        justify-content:center;
+        gap:22px!important;
+        padding:0!important;
+        border:0!important;
+        border-radius:0!important;
+        background:transparent!important;
+        box-shadow:none!important;
+      }
+      html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-tabs>[role=tablist]>button{
+        min-width:58px;
+        padding:8px 4px!important;
+        border:0!important;
+        border-radius:0!important;
+        background:transparent!important;
+        box-shadow:none!important;
+      }
+      html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-tabs>[role=tablist]>button[aria-selected=true]{
+        background:transparent!important;
+        color:var(--wish-accent-strong)!important;
+        font-weight:650!important;
+        box-shadow:inset 0 -2px 0 var(--wish-accent-strong)!important;
+      }
+      html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-tabs>[role=tablist]>button:hover{
+        background:transparent!important;
+        color:var(--wish-fg)!important;
+      }
+      html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-tabs>button[data-person-core-tab="review"]{
+        grid-column:3;
+        justify-self:end;
+        background:transparent!important;
+        box-shadow:none!important;
+      }
+      @media(max-width:700px){
+        html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-tabs{
+          grid-template-columns:1fr!important;
+          justify-items:center;
+        }
+        html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-tabs>[role=tablist],
+        html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-tabs>button[data-person-core-tab="review"]{
+          grid-column:1;
+          justify-self:center;
+        }
+        html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-tabs>[role=tablist]{gap:14px!important}
+      }
+    `);
+
+    // v0.15.2 · Person rail pin/edit spacing + detail injection control cleanup.
+    // v0.15.7 · Tolerant Lore V2 paste parser + revision-safe local save rebase.
+    // v0.15.8 · Distribution privacy cleanup: replace private-RP names and setting examples with generic placeholders.
+    // v0.15.6 · Legacy deleted-person recovery: infer missing subjects from incoming full result and require explicit restore/add opt-in.
+    // v0.15.3 · Mobile full navigation restored to the top-right menu + overflow regression fixes.
+    GM_addStyle(`
+      html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-pin .rpcm-person-pin-mark{
+        display:inline-flex!important;
+        align-items:center;
+        justify-content:center;
+        width:15px;
+        height:15px;
+        font-size:13px;
+        line-height:1;
+        filter:saturate(.92);
+      }
+      html body #rpcm-overlay #rpcm-modal #rpcm-person-core .m3-who>.rpcm-person-pin .rpcm-person-pin-label{
+        display:none!important;
+      }
+      html body #rpcm-overlay #rpcm-modal #rpcm-person-core .m3-who>.rpcm-person-pin .rpcm-person-pin-mark{
+        display:inline-flex!important;
+      }
+      html body #rpcm-overlay #rpcm-modal #rpcm-person-core .m3-who .m3-person-open small{
+        box-sizing:border-box;
+        width:100%;
+        padding:0 24px 0 6px;
+      }
+      html body #rpcm-overlay #rpcm-modal #rpcm-person-core .m3-person-meta{
+        right:5px;
+        bottom:4px;
+        z-index:3;
+      }
+      html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-head-copy{
+        min-width:0;
+        flex:1 1 auto;
+      }
+      html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-head-copy p{
+        overflow-wrap:anywhere;
+      }
+      html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-head-actions{
+        margin-left:auto;
+        display:flex;
+        align-items:center;
+        justify-content:flex-end;
+        gap:8px;
+        flex:none;
+      }
+      html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-head-actions .rpcm-person-reader-settings{
+        margin-left:0!important;
+      }
+      html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-settings>div{
+        min-width:190px;
+        max-width:230px;
+      }
+      @media(max-width:700px){
+        html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-head-copy{flex:1 1 calc(100% - 72px)}
+        html body #rpcm-overlay #rpcm-modal #rpcm-person-core .rpcm-person-reader-head-actions{width:100%;justify-content:flex-end;margin-left:0}
+      }
+    `);
+  }
+
+  // Chain only at nested vertical boundaries. Native scrolling handles ordinary movement.
+  // One delegated listener also covers dialogs opened later, without scroll observers/re-renders.
+  let wishScrollChainingBound=false;
+  function bindWishScrollChaining() {
+    if(wishScrollChainingBound)return;
+    wishScrollChainingBound=true;
+    const roots='#rpcm-overlay,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,[class*="rpcm-"][class*="-backdrop"],.wish-rpcore-refiner-ui';
+    document.addEventListener('wheel',event=>{
+      if(event.defaultPrevented||event.ctrlKey||event.metaKey||!event.deltaY||Math.abs(event.deltaX)>Math.abs(event.deltaY))return;
+      const target=event.target instanceof Element?event.target:event.target?.parentElement;
+      if(!target?.closest(roots))return;
+      // The native browser already handles scrolling/chaining inside the main
+      // Manager. Avoid synchronous scrollHeight/style reads on EVERY wheel frame.
+      // Keep legacy custom chaining for independent dialogs/popups.
+      if(target.closest('#rpcm-modal-wrap'))return;
+      let boundary=null;
+      // Static inline panels share the surrounding Manager boundary; floating dialogs keep their own.
+      for(let node=target;node&&node!==document.body;node=node.parentElement){
+        if(!node.matches(roots))continue;
+        boundary=node;
+        if(['fixed','absolute'].includes(getComputedStyle(node).position))break;
+      }
+      if(!boundary)return;
+      const scrollers=[];
+      for(let node=target;node;node=node.parentElement){
+        if(node.clientHeight>0&&node.scrollHeight>node.clientHeight+1&&/^(auto|scroll)$/.test(getComputedStyle(node).overflowY))scrollers.push(node);
+        if(node===boundary)break;
+      }
+      if(!scrollers.length)return;
+      const first=scrollers[0],scale=event.deltaMode===1?18:event.deltaMode===2?first.clientHeight:1;
+      let delta=event.deltaY*scale;
+      const room=node=>delta>0?Math.max(0,node.scrollHeight-node.clientHeight-node.scrollTop):Math.max(0,node.scrollTop);
+      if(room(first)>=Math.abs(delta)+1)return;
+      if(!event.cancelable)return;
+      event.preventDefault();
+      for(const node of scrollers){
+        const available=room(node),step=Math.sign(delta)*Math.min(Math.abs(delta),available);
+        if(step){const previous=node.scrollTop;node.scrollTop+=step;delta-=node.scrollTop-previous;}
+        if(Math.abs(delta)<1)break;
+      }
+      // Keep the minor horizontal component on diagonal trackpad gestures.
+      if(event.deltaX&&first.scrollWidth>first.clientWidth)first.scrollLeft+=event.deltaX*scale;
+    },{passive:false});
+  }
+
+  // One Wish design layer for migrated UI; older selectors remain only for legacy feature markup.
+  function addWishUiStyles() {
+    bindWishScrollChaining();
+    GM_addStyle(`
+/* Wish Core shell/components adapted to the existing RP Manager DOM and Pink Wish palette. */
+/* Inline panels and editors may chain to the Manager scroll host, including touch input. */
+#rpcm-modal :is(#rpcm-ai-inline-host .rpcm-ai-body,.rpcm-assistant-inline .rpcm-utility-body,textarea){overscroll-behavior-y:auto!important}
+
+
+/* v0.17.5: shared status badges and readable activity/update cards. */
+#rpcm-modal .rpcm-badge-row{display:flex;align-items:center;flex-wrap:wrap;gap:6px;min-width:0}
+#rpcm-modal .rpcm-status-pill{flex:0 0 auto!important;display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:4px 9px;min-height:24px;box-sizing:border-box;border:1px solid var(--wish-line-2);border-radius:999px;color:var(--wish-fg-2);background:var(--wish-hi);font-size:11px;font-weight:600;line-height:1.3;white-space:nowrap}
+#rpcm-modal .rpcm-status-pill.tone-accent{background:var(--wish-accent-soft);border-color:var(--wish-accent-line);color:var(--wish-accent-strong)}
+#rpcm-modal .rpcm-status-pill.tone-success{background:color-mix(in srgb,var(--wish-success) 10%,var(--wish-card));border-color:color-mix(in srgb,var(--wish-success) 24%,var(--wish-line));color:var(--wish-fg-2)}
+#rpcm-modal .rpcm-status-pill.tone-warning{background:color-mix(in srgb,var(--wish-warning) 10%,var(--wish-card));border-color:color-mix(in srgb,var(--wish-warning) 24%,var(--wish-line));color:var(--wish-fg-2)}
+#rpcm-modal .rpcm-audit-heading,#rpcm-modal .rpcm-update-card-title{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+#rpcm-modal .rpcm-audit-heading h3{font-size:15px!important;font-weight:650;margin:0 0 5px!important;color:var(--wish-fg)!important}
+#rpcm-modal .rpcm-audit-heading p{margin:0!important;font-size:12px;line-height:1.7}
+#rpcm-modal .rpcm-ai-execution-history{padding:18px!important}
+#rpcm-modal .rpcm-audit-search-status{font-size:12px;padding:9px 12px;background:var(--wish-hi);border-radius:9px;color:var(--wish-fg-2)}
+#rpcm-modal .rpcm-audit-list{display:grid;gap:9px}
+#rpcm-modal .rpcm-audit-entry{border:1px solid var(--wish-line);border-radius:12px;background:var(--wish-card);overflow:hidden}
+#rpcm-modal .rpcm-audit-entry>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 14px;cursor:pointer;list-style:none}
+#rpcm-modal .rpcm-audit-entry>summary::-webkit-details-marker{display:none}
+#rpcm-modal .rpcm-audit-entry>summary:after{content:'⌄';font-size:15px;flex:none;color:var(--wish-fg-2)}
+#rpcm-modal .rpcm-audit-entry[open]>summary:after{content:'⌃'}
+#rpcm-modal .rpcm-audit-title{display:flex;flex-direction:column;gap:5px;flex:1;min-width:0;font-size:13px;font-weight:600;color:var(--wish-fg)}
+#rpcm-modal .rpcm-audit-title time{font-size:11px;font-weight:400;color:var(--wish-fg-2)}
+#rpcm-modal .rpcm-audit-entry-body{padding:14px;border-top:1px solid var(--wish-line-2);display:grid;gap:11px}
+#rpcm-modal .rpcm-audit-route{display:grid;gap:7px;padding:10px 12px;background:var(--wish-hi);border-radius:9px;font-size:12px;line-height:1.65;color:var(--wish-fg-2)}
+#rpcm-modal .rpcm-audit-route span{display:flex;align-items:baseline;gap:10px;overflow-wrap:anywhere}
+#rpcm-modal .rpcm-audit-route b{flex:none;min-width:44px;color:var(--wish-fg);font-weight:600}
+#rpcm-modal .rpcm-audit-change{padding:11px 12px;border:1px solid var(--wish-line-2);border-radius:10px;background:var(--wish-card)}
+#rpcm-modal .rpcm-audit-change header{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+#rpcm-modal .rpcm-audit-change strong{font-size:12px;color:var(--wish-fg);font-weight:600}
+#rpcm-modal .rpcm-audit-change p,#rpcm-modal .rpcm-audit-entry-body>p{font-size:12px;line-height:1.7;color:var(--wish-fg-2);margin:7px 0}
+#rpcm-modal .rpcm-audit-change small{font-size:11px;line-height:1.6;color:var(--wish-fg-2)}
+#rpcm-modal .rpcm-audit-empty{margin:0;padding:11px 12px;background:var(--wish-hi);border-radius:9px;font-size:12px;line-height:1.7;color:var(--wish-fg-2)}
+#rpcm-modal .rpcm-audit-kept>summary,#rpcm-modal .rpcm-audit-refiners>summary{display:flex;align-items:center;gap:8px;padding:10px 0;cursor:pointer;font-size:12px;color:var(--wish-fg-2)}
+#rpcm-modal .rpcm-audit-kept>summary:before,#rpcm-modal .rpcm-audit-refiners>summary:before{content:'▸';font-size:10px}
+#rpcm-modal .rpcm-audit-kept[open]>summary:before,#rpcm-modal .rpcm-audit-refiners[open]>summary:before{content:'▾'}
+#rpcm-modal .rpcm-audit-kept>summary::-webkit-details-marker,#rpcm-modal .rpcm-audit-refiners>summary::-webkit-details-marker{display:none}
+#rpcm-modal .rpcm-audit-refiners{margin-top:14px;border-top:1px solid var(--wish-line-2);padding-top:5px}
+#rpcm-modal .rpcm-audit-hint{font-size:12px;line-height:1.7;margin:0 0 10px;color:var(--wish-fg-2)}
+#rpcm-modal :is(.rpcm-ai-context-results,.rpcm-ai-context-report)>summary{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 0;font-size:13px;color:var(--wish-fg)}
+#rpcm-modal .rpcm-ai-context-report>summary{justify-content:space-between;padding:12px 14px}
+#rpcm-modal .rpcm-context-review-body{display:grid;gap:12px;padding:14px!important}
+#rpcm-modal .rpcm-context-review-body .rpcm-ai-context-actions{padding:0!important;font-size:11px;color:var(--wish-fg-2);align-items:center}
+#rpcm-modal .rpcm-context-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+#rpcm-modal .rpcm-context-metrics>div{display:grid;gap:8px;padding:11px 12px;background:var(--wish-hi);border-radius:10px}
+#rpcm-modal .rpcm-context-metrics span{font-size:11px;color:var(--wish-fg-2)}
+#rpcm-modal .rpcm-context-metrics strong{font-size:21px;font-weight:650;color:var(--wish-fg)}
+#rpcm-modal .rpcm-context-metrics small{font-size:11px;font-weight:400;margin-left:4px;color:var(--wish-fg-2)}
+#rpcm-modal .rpcm-context-review-body .rpcm-ai-context-situation{margin:0!important;padding:13px 14px;border:0!important;border-left:3px solid var(--wish-accent-line)!important;background:var(--wish-hi);border-radius:9px;display:grid;gap:6px;line-height:1.7}
+#rpcm-modal .rpcm-ai-context-situation strong{font-size:12px!important;color:var(--wish-accent-strong)!important}
+#rpcm-modal .rpcm-ai-context-situation span{font-size:13px!important;color:var(--wish-fg)!important;line-height:1.8}
+#rpcm-modal .rpcm-context-note{font-size:12px;line-height:1.75;margin:0!important;color:var(--wish-fg-2)}
+#rpcm-modal #rpcm-section-update .rpcm-update-card{padding:18px!important;gap:13px!important;border-radius:13px!important;box-shadow:none!important}
+#rpcm-modal #rpcm-section-update .rpcm-update-card-title{margin-bottom:8px;align-items:center}
+#rpcm-modal #rpcm-section-update .rpcm-update-card-title h3{font-size:15px;margin:0;line-height:1.5;font-weight:650;color:var(--wish-fg)}
+#rpcm-modal #rpcm-section-update .rpcm-update-status{gap:8px; margin-top:12px;line-height:1.6}
+#rpcm-modal #rpcm-section-update .rpcm-update-chip{font-size:11px!important;line-height:1.45;min-height:25px!important;padding:4px 9px!important}
+#rpcm-modal #rpcm-section-update .rpcm-update-chip.is-idle{background:var(--wish-hi)!important;color:var(--wish-fg-2)!important;border-color:var(--wish-line)!important}
+#rpcm-modal .rpcm-update-meta{display:grid;gap:5px;width:100%;padding:10px 12px;border-radius:9px;background:var(--wish-hi);font-size:11px;color:var(--wish-fg-2)}
+#rpcm-modal .rpcm-update-meta>span{display:flex;align-items:baseline;gap:10px;line-height:1.65}
+#rpcm-modal .rpcm-update-meta b{min-width:26px;color:var(--wish-fg);font-weight:600}
+#rpcm-modal .rpcm-update-waiting{margin-top:2px}
+#rpcm-modal .rpcm-update-steps{display:flex;align-items:center;flex-wrap:wrap;gap:12px 18px;margin:16px 2px;font-size:12px;color:var(--wish-fg-2)}
+#rpcm-modal .rpcm-update-steps>span{display:flex;align-items:center;gap:7px}
+#rpcm-modal .rpcm-update-steps b{display:grid;place-items:center;width:23px;height:23px;border-radius:50%;background:var(--wish-accent-soft);color:var(--wish-accent-strong);font-size:11px}
+#rpcm-modal :is(.rpcm-audit-entry,.rpcm-audit-kept,.rpcm-audit-refiners,.rpcm-ai-context-results,.rpcm-ai-context-report)>summary:focus-visible{outline:2px solid var(--wish-accent-line);outline-offset:2px;border-radius:9px}
+@media(max-width:680px){#rpcm-modal .rpcm-audit-entry>summary{flex-wrap:wrap;gap:10px}#rpcm-modal .rpcm-audit-entry>summary>.rpcm-badge-row{width:100%}#rpcm-modal .rpcm-context-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}#rpcm-modal .rpcm-audit-heading{align-items:center}#rpcm-modal .rpcm-update-card-title>.rpcm-badge-row{width:100%}}
+
+/* v0.17.5: all owned dialogs share the Wish theme, including lazy editors. */
+html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui){
+  --rpcm-bg:var(--wish-bg);--rpcm-sheet:var(--wish-sheet);--rpcm-card:var(--wish-card);--rpcm-card-2:var(--wish-card-2);--rpcm-fg:var(--wish-fg);--rpcm-fg-2:var(--wish-fg-2);--rpcm-muted:var(--wish-muted);--rpcm-line:var(--wish-line);--rpcm-line-soft:var(--wish-line-2);--rpcm-accent:var(--wish-accent);--rpcm-accent-soft:var(--wish-accent-soft);--rpcm-accent-line:var(--wish-accent-line);
+  color:var(--wish-fg);font-family:'Pretendard','Noto Sans KR',-apple-system,BlinkMacSystemFont,'Apple SD Gothic Neo',sans-serif;
+}
+html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui) *{-webkit-text-stroke:0!important;text-shadow:none!important}
+html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui) :is([role="dialog"],.rpcm-lib-dialog,.rpcm-lore-dialog){animation:none!important;filter:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;color:var(--wish-fg)!important;background:var(--wish-sheet)!important;border-color:var(--wish-line)!important}
+html body #rpcm-modal{animation:none!important}
+html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui) :where(button,input:not([type="checkbox"]):not([type="radio"]),textarea,select){
+  box-sizing:border-box;color:var(--wish-fg-2)!important;border-color:var(--wish-line)!important;outline:none;background:var(--wish-card)!important;font-family:inherit;border-radius:9px;
+}
+html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui) button:where(:not([role="switch"]):not(.rpcm-switch):not(.rpcm-person-pin):not(.m3-person-open):not(.m3-person-meta):not([data-topview]):not([data-workview]):not([data-person-core-tab])){font-size:12px;line-height:1.4;min-height:32px;padding:7px 11px;border-width:1px;border-style:solid}
+html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui) :is(button,input,textarea,select):disabled{opacity:1!important;color:var(--wish-muted)!important;-webkit-text-fill-color:var(--wish-muted)!important;background:var(--wish-card-2)!important;border-color:var(--wish-line)!important;cursor:not-allowed}
+html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui) :is(button.primary,button.rpcm-add-primary,button.rr-primary,#rpcm-person-apply):not(:disabled){color:var(--wish-accent-ink)!important;background:var(--wish-accent)!important;border-color:var(--wish-accent)!important}
+html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui) :is(button,input,textarea,select,summary):focus-visible{outline:2px solid var(--wish-accent)!important;outline-offset:2px}
+html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui) :is(input,textarea)::placeholder{color:var(--wish-muted)!important;opacity:1!important}
+html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,.rpcm-ltm-backdrop) :is(p,label,small,em,legend){color:var(--wish-fg-2)!important}
+html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,.rpcm-ltm-backdrop) :is(h1,h2,h3,h4,strong){color:var(--wish-fg)!important}
+html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,.rpcm-ltm-backdrop) :is(header,footer,fieldset){border-color:var(--wish-line)!important}
+html body #rpcm-notice-badge{background:var(--wish-accent)!important;color:var(--wish-accent-ink)!important}
+html body :is(#rpcm-person-preview-backdrop,#rpcm-story-dialog-backdrop) :is(span,div){color:var(--wish-fg-2)!important}
+html body #rpcm-modal :is(.rpcm-section-desc,.rpcm-story-title,.rpcm-story-desc,.rpcm-story-count,.rpcm-story-number){color:var(--wish-fg-2)!important}
+html body #rpcm-modal :is(.rpcm-footer-arm,.rpcm-footer-preview,.rpcm-header-menu>summary){background:var(--wish-accent-soft)!important;color:var(--wish-fg-2)!important;border-color:var(--wish-line)!important}
+html body #rpcm-modal .rpcm-ai-chip.is-error{color:var(--wish-danger)!important}
+html body #rpcm-modal :is(.rpcm-ai-job-card,.rpcm-ai-work-card){background:var(--wish-card)!important;border-color:var(--wish-line)!important}
+html body #rpcm-modal :is(.rpcm-update-more,.rpcm-section-more,.rpcm-header-menu,.rpcm-lore-pack-menu){position:relative;flex:0 0 auto;min-width:0}
+html body #rpcm-modal :is(.rpcm-update-more,.rpcm-section-more,.rpcm-header-menu,.rpcm-lore-pack-menu)>summary{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;box-sizing:border-box;padding:7px 11px;border:1px solid var(--wish-line);border-radius:9px;background:var(--wish-card)!important;color:var(--wish-fg-2)!important;font-size:12px;line-height:1.4;cursor:pointer;list-style:none;user-select:none}
+html body #rpcm-modal :is(.rpcm-update-more,.rpcm-section-more,.rpcm-header-menu,.rpcm-lore-pack-menu)>summary::-webkit-details-marker{display:none}
+html body #rpcm-modal :is(.rpcm-update-more,.rpcm-section-more,.rpcm-header-menu,.rpcm-lore-pack-menu)[open]>summary{background:var(--wish-accent-soft)!important;border-color:var(--wish-accent-line)!important;color:var(--wish-accent-strong)!important}
+html body #rpcm-modal :is(.rpcm-update-more,.rpcm-section-more,.rpcm-lore-pack-menu)>div{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:7px;max-width:100%;margin-top:8px;padding:10px;border:1px solid var(--wish-line);border-radius:10px;background:var(--wish-card)!important;box-sizing:border-box}
+html body #rpcm-modal .rpcm-update-actions{align-items:center}
+/* Nested legacy selectors and muted cards must not undo theme contrast. */
+html body #rpcm-overlay #rpcm-modal .rpcm-section-desc{color:var(--wish-fg-2)!important}
+html body #rpcm-overlay #rpcm-modal #rpcm-notice-badge{color:var(--wish-accent-ink)!important;background:var(--wish-accent)!important}
+html body #rpcm-overlay #rpcm-modal button:disabled{opacity:1!important;color:var(--wish-muted)!important;-webkit-text-fill-color:var(--wish-muted)!important;background:var(--wish-card-2)!important}
+html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,.rpcm-person-preview-backdrop) button{opacity:1!important}
+html body #rpcm-overlay #rpcm-modal .rpcm-item-person-tabs small{opacity:1!important}
+html body :is(#rpcm-related-picker-backdrop,#rpcm-user-memo-backdrop,#rpcm-quick-backdrop,#rpcm-ai-memory-backdrop,#rpcm-modal) :is(.is-active.rpcm-related-picker-card,.rpcm-user-memo-card.is-off,.rpcm-quick-row.is-off,.rpcm-ai-review-change.is-excluded,.rpcm-ltm-native-item.is-deleted){opacity:1!important;background:var(--wish-card-2)!important}
+html body .rpcm-person-preview-backdrop :is(button,input,textarea,select){background:var(--wish-card)!important;border-color:var(--wish-line)!important;color:var(--wish-fg-2)!important;border-radius:9px;outline:none}
+html body .rpcm-person-preview-backdrop :is(p,label,small,em,span){color:var(--wish-fg-2)!important;opacity:1!important}
+html body .rpcm-person-preview-backdrop :is(strong,h2,h3){color:var(--wish-fg)!important}
+html body .rpcm-person-preview-backdrop #rpcm-person-apply:not(:disabled){background:var(--wish-accent)!important;border-color:var(--wish-accent)!important;color:var(--wish-accent-ink)!important}
+html body .rpcm-person-preview-backdrop :is(header,footer,.rpcm-person-import-row){border-color:var(--wish-line)!important}
+html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],.rpcm-person-preview-backdrop) :is(button.danger,button.rpcm-btn.danger){color:var(--wish-danger)!important;border-color:var(--wish-accent-line)!important}
+/* Keep older high-specificity controls readable without changing selected navigation. */
+html body #rpcm-overlay #rpcm-modal :is(#rpcm-header-quick-toggle,.rpcm-auto-inline-toggle,.rpcm-read-copy){color:var(--wish-fg-2)!important;border-color:var(--wish-line)!important;background:var(--wish-card)!important}
+html body #rpcm-overlay #rpcm-modal .rpcm-knowledge-category-tabs small{opacity:1!important}
+html body #rpcm-overlay #rpcm-modal .rpcm-knowledge-category-badge{color:var(--wish-fg-2)!important;background:var(--wish-accent-soft)!important;border-color:var(--wish-line)!important}
+html body :is(#rpcm-story-dialog-backdrop,#rpcm-story-view-backdrop) :is(.rpcm-story-dialog,.rpcm-story-view-dialog) :is(div,span,label){color:var(--wish-fg-2)!important}
+html body :is(#rpcm-story-dialog-backdrop,#rpcm-story-view-backdrop) :is(.rpcm-story-dialog,.rpcm-story-view-dialog) :is(button,input,select,textarea){color:var(--wish-fg-2)!important;background:var(--wish-card)!important;border-color:var(--wish-line)!important}
+html body :is(#rpcm-story-dialog-backdrop,#rpcm-story-view-backdrop) :is(.rpcm-story-dialog,.rpcm-story-view-dialog) button.danger{color:var(--wish-danger)!important}
+html body #rpcm-log-dialog-backdrop :is(.rpcm-date-row,.rpcm-log-dialog-controls) input,html body #rpcm-log-dialog-backdrop :is(#rpcm-date-bulk-year,#rpcm-date-bulk-month,#rpcm-date-bulk-day){color:var(--wish-fg-2)!important;background:var(--wish-card)!important;border-color:var(--wish-line)!important}
+html body :is(#rpcm-story-dialog-backdrop,#rpcm-story-view-backdrop) :is(.rpcm-story-dialog,.rpcm-story-view-dialog) [class*="rpcm-story-"]{color:var(--wish-fg-2)!important;border-color:var(--wish-line)!important}
+html body #rpcm-log-dialog-backdrop :is(.rpcm-date-row input[type="number"],.rpcm-date-bulk-fields input,.rpcm-date-full){color:var(--wish-fg-2)!important;-webkit-text-fill-color:var(--wish-fg-2)!important;caret-color:var(--wish-fg)!important;background:var(--wish-card)!important;border-color:var(--wish-line)!important;color-scheme:normal}
+html body #rpcm-log-dialog-backdrop :is(.rpcm-date-row input[type="number"],.rpcm-date-bulk-fields input,.rpcm-date-full)::placeholder{color:var(--wish-muted)!important;-webkit-text-fill-color:var(--wish-muted)!important;opacity:1!important}
+html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,.rpcm-person-preview-backdrop,.wish-rpcore-refiner-ui) :is(button.primary,button.rpcm-btn.primary,button.rr-primary):disabled{color:var(--wish-muted)!important;-webkit-text-fill-color:var(--wish-muted)!important;background:var(--wish-card-2)!important;border-color:var(--wish-line)!important;opacity:1!important}
+html body :is(#rpcm-story-dialog-backdrop,#rpcm-story-view-backdrop) :is(.rpcm-story-dot,.rpcm-story-read-rail span){background:var(--wish-accent)!important;box-shadow:0 0 0 3px var(--wish-accent-soft)!important}
+html body :is(#rpcm-story-dialog-backdrop,#rpcm-story-view-backdrop) :is(.rpcm-story-line,.rpcm-story-read-rail i){background:var(--wish-accent-line)!important}
+html body :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-ai-memory-backdrop) .rpcm-update-diff-lines del{background:color-mix(in srgb,var(--wish-danger) 10%,var(--wish-card))!important;color:var(--wish-danger)!important}
+html body :is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-ai-memory-backdrop) .rpcm-update-diff-lines ins{background:color-mix(in srgb,var(--wish-success) 10%,var(--wish-card))!important;color:var(--wish-success)!important}
+html body #rpcm-ai-memory-backdrop .rpcm-update-dialog>footer .rpcm-btn.primary:disabled{color:var(--wish-muted)!important;-webkit-text-fill-color:var(--wish-muted)!important;background:var(--wish-card-2)!important;border-color:var(--wish-line)!important;opacity:1!important}
+html body #rpcm-notice-dialog{box-sizing:border-box;width:min(680px,100%);min-width:0}
+html body #rpcm-notice-dialog :is(.rpcm-notice-row,.rpcm-notice-actions,.rpcm-notice-settings){min-width:0;overflow-wrap:anywhere}
+/* Fit long selector labels and guide editors without clipping mobile actions. */
+html body #rpcm-ai-memory-baseline-dialog{box-sizing:border-box}
+html body #rpcm-ai-memory-baseline-dialog>section{box-sizing:border-box;width:min(620px,calc(100vw - 24px));min-width:0;max-width:100%;max-height:calc(100dvh - 24px);overflow:auto}
+html body #rpcm-ai-memory-baseline-dialog :is(select,p){min-width:0;max-width:100%;overflow-wrap:anywhere}
+html body #rpcm-update-dialog-backdrop .rpcm-update-packet-choice>footer{flex-wrap:wrap;min-width:0}
+html body #rpcm-update-dialog-backdrop .rpcm-update-packet-choice>footer>span{min-width:0;max-width:100%;white-space:normal;overflow-wrap:anywhere;flex:1 1 100%}
+html body #rpcm-update-dialog-backdrop .rpcm-update-packet-options{grid-template-columns:minmax(0,1fr);min-width:0}
+html body #rpcm-update-dialog-backdrop .rpcm-update-packet-options button{min-width:0;max-width:100%;white-space:normal;overflow-wrap:anywhere}
+html body #rpcm-update-dialog-backdrop .rpcm-update-packet-options :is(strong,small){max-width:100%;min-width:0;white-space:normal;overflow-wrap:anywhere}
+@media(max-width:760px){
+ html body #rpcm-common-guide-backdrop{padding:0!important}
+ html body #rpcm-common-guide-backdrop .rpcm-common-guide-dialog{box-sizing:border-box;width:100vw!important;max-width:100vw!important;height:100dvh!important;max-height:100dvh!important;min-width:0}
+ html body #rpcm-common-guide-backdrop .rpcm-common-guide-dialog>footer{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+ html body #rpcm-maintenance-backdrop .rpcm-maintenance-dialog>header{flex-wrap:wrap}
+ html body #rpcm-maintenance-backdrop .rpcm-maintenance-dialog>header>div{flex:1 1 calc(100% - 50px);min-width:0;order:0}
+ html body #rpcm-maintenance-backdrop [data-maintenance-close=""]{flex-shrink:0}
+ html body #rpcm-maintenance-backdrop header [data-maintenance-close]{order:1;margin-left:auto}
+ html body #rpcm-maintenance-backdrop header [data-maintenance-ai]{order:2;flex:1 1 auto}
+}
+
+
+:is(#rpcm-overlay,#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop,#rpcm-lore-dialog-backdrop,#rpcm-api-settings-backdrop,#rpcm-compression-backdrop,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui),
+:is(#rpcm-overlay,#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop,#rpcm-lore-dialog-backdrop,#rpcm-api-settings-backdrop,#rpcm-compression-backdrop,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui) *{-webkit-text-stroke:0!important;text-shadow:none!important}
+:is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-btn{background:var(--wish-card)!important;color:var(--wish-fg-2)!important;border:1px solid var(--wish-line)!important;outline:none;border-radius:9px}
+:is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-btn.primary:not(:disabled){background:var(--wish-accent)!important;border-color:var(--wish-accent)!important;color:var(--wish-accent-ink)!important}
+:is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) :is(button,input,textarea,select):disabled{opacity:1!important;color:var(--wish-muted)!important;-webkit-text-fill-color:var(--wish-muted)!important;background:var(--wish-card-2)!important;border-color:var(--wish-line)!important;cursor:not-allowed}
+:is(#rpcm-overlay,#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) :is(button,input,textarea,select,summary):focus-visible{outline:2px solid var(--wish-accent-line)!important;outline-offset:2px}
+:is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-dialog{animation:none!important;transform:none!important;filter:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;isolation:isolate}
+:is(#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,#rpcm-ai-memory-backdrop) .rpcm-update-result-body{overscroll-behavior:contain;scroll-behavior:auto;overflow-anchor:none}
+
+:root,[data-rpcm-theme="light"]{
+  --wish-bg:#F8F3F6;--wish-sheet:#FFFBFD;--wish-card:#FFFFFF;--wish-card-2:#FAF1F6;
+  --wish-line:#E9D8E2;--wish-line-2:#F2E6EC;--wish-fg:#2C2229;--wish-fg-2:#604F59;--wish-muted:#685660;
+  --wish-accent:#A94778;--wish-accent-hover:#943B68;--wish-accent-strong:#A94778;--wish-accent-ink:#FFFFFF;
+  --wish-accent-soft:#F9E8F0;--wish-accent-soft-2:#F5DCE8;--wish-accent-line:#E7B8CE;--wish-glow:#E8A3C4;
+  --wish-hi:rgba(201,101,150,.085);--wish-success:#347153;--wish-warning:#8A591B;--wish-danger:#A43E53;
+  --wish-deep:var(--wish-card);--wish-deep-2:var(--wish-card-2);--wish-deep-line:var(--wish-line);--wish-deep-fg:var(--wish-fg);--wish-deep-muted:var(--wish-fg-2);
+  --wish-context-toast-bg:#F9E8F0;--wish-context-toast-fg:#6F5B66;--wish-context-toast-mark:#C96596;
+  --wish-scrim:rgba(38,23,32,.30);--wish-shadow:0 1px 2px rgba(83,49,67,.04),0 12px 28px -20px rgba(83,49,67,.28);
+  --wish-lift:0 2px 5px rgba(83,49,67,.06),0 18px 34px -18px rgba(83,49,67,.34);--wish-shell-shadow:0 28px 68px -34px rgba(73,39,59,.38);
+  --wish-spring:cubic-bezier(.34,1.42,.5,1);--wish-ease:cubic-bezier(.2,.8,.3,1)
+}
+body[data-theme="dark"],html[data-rpcm-theme="dark"]{
+  --wish-bg:#181518;--wish-sheet:#211C21;--wish-card:#292229;--wish-card-2:#312831;
+  --wish-line:#493A43;--wish-line-2:#392F35;--wish-fg:#F7EEF3;--wish-fg-2:#D5C2CD;--wish-muted:#A9939F;
+  --wish-accent:#DF78AA;--wish-accent-hover:#EA8BBA;--wish-accent-strong:#F1A9CC;--wish-accent-ink:#26151E;
+  --wish-accent-soft:#3B2832;--wish-accent-soft-2:#472D3A;--wish-accent-line:#725065;--wish-glow:#F1A9CC;
+  --wish-hi:rgba(223,120,170,.11);--wish-success:#79B99C;--wish-warning:#D0A15D;--wish-danger:#DF8290;
+  --wish-deep:#292229;--wish-deep-2:#312831;--wish-deep-line:#594650;--wish-deep-fg:#F7EEF3;--wish-deep-muted:#D5C2CD;
+  --wish-context-toast-bg:#F7EEF3;--wish-context-toast-fg:#211C21;--wish-context-toast-mark:#79B99C;
+  --wish-scrim:rgba(9,5,8,.48);--wish-shadow:0 1px 2px rgba(0,0,0,.24),0 12px 28px -20px rgba(0,0,0,.72);
+  --wish-lift:0 2px 6px rgba(0,0,0,.30),0 18px 36px -18px rgba(0,0,0,.78);--wish-shell-shadow:0 30px 72px -32px rgba(0,0,0,.84)
+}
+/* v0.17.13 (임시): 사용자 메인 강조색. 경고/성공/위험 의미색은 유지하고 accent 계열만 자동 파생합니다. */
+html.rpcm-custom-accent,html.rpcm-custom-accent body,body.rpcm-custom-accent{
+  --wish-accent:var(--wish-user-accent)!important;
+  --wish-accent-hover:color-mix(in srgb,var(--wish-user-accent) 84%,var(--wish-fg) 16%)!important;
+  --wish-accent-strong:color-mix(in srgb,var(--wish-user-accent) 72%,var(--wish-fg) 28%)!important;
+  --wish-accent-ink:var(--wish-user-accent-ink)!important;
+  --wish-accent-soft:color-mix(in srgb,var(--wish-user-accent) 13%,var(--wish-card) 87%)!important;
+  --wish-accent-soft-2:color-mix(in srgb,var(--wish-user-accent) 22%,var(--wish-card) 78%)!important;
+  --wish-accent-line:color-mix(in srgb,var(--wish-user-accent) 44%,var(--wish-line) 56%)!important;
+  --wish-glow:color-mix(in srgb,var(--wish-user-accent) 66%,var(--wish-fg) 34%)!important;
+  --wish-hi:color-mix(in srgb,var(--wish-user-accent) 10%,transparent)!important
+}
+
+/* v0.17.13 (임시): 사용자 배경 메인색에서 라이트/다크 각각의 시트·카드·선 계층을 자동 파생합니다. */
+html.rpcm-custom-surface:not([data-rpcm-theme="dark"]) body:not([data-theme="dark"]),html:not([data-rpcm-theme="dark"]) body.rpcm-custom-surface:not([data-theme="dark"]),html.rpcm-custom-surface[data-rpcm-theme="light"]{
+  --wish-bg:var(--wish-user-bg-light)!important;--wish-sheet:var(--wish-user-sheet-light)!important;--wish-card:var(--wish-user-card-light)!important;--wish-card-2:var(--wish-user-card2-light)!important;
+  --wish-line:var(--wish-user-line-light)!important;--wish-line-2:var(--wish-user-line2-light)!important;--wish-fg:var(--wish-user-fg-light)!important;--wish-fg-2:var(--wish-user-fg2-light)!important;--wish-muted:var(--wish-user-muted-light)!important;
+  --wish-deep:var(--wish-user-card-light)!important;--wish-deep-2:var(--wish-user-card2-light)!important;--wish-deep-line:var(--wish-user-line-light)!important;--wish-deep-fg:var(--wish-user-fg-light)!important;--wish-deep-muted:var(--wish-user-fg2-light)!important;
+  --wish-context-toast-bg:var(--wish-user-card2-light)!important;--wish-context-toast-fg:var(--wish-user-fg2-light)!important;
+  --wish-scrim:color-mix(in srgb,var(--wish-user-surface) 24%,rgba(0,0,0,.30))!important;--wish-shadow:0 1px 2px rgba(0,0,0,.05),0 12px 28px -20px color-mix(in srgb,var(--wish-user-surface) 35%,rgba(0,0,0,.30))!important;
+  --wish-lift:0 2px 5px rgba(0,0,0,.07),0 18px 34px -18px color-mix(in srgb,var(--wish-user-surface) 40%,rgba(0,0,0,.35))!important;--wish-shell-shadow:0 28px 68px -34px color-mix(in srgb,var(--wish-user-surface) 46%,rgba(0,0,0,.42))!important
+}
+html.rpcm-custom-surface body[data-theme="dark"],body.rpcm-custom-surface[data-theme="dark"],html.rpcm-custom-surface[data-rpcm-theme="dark"]{
+  --wish-bg:var(--wish-user-bg-dark)!important;--wish-sheet:var(--wish-user-sheet-dark)!important;--wish-card:var(--wish-user-card-dark)!important;--wish-card-2:var(--wish-user-card2-dark)!important;
+  --wish-line:var(--wish-user-line-dark)!important;--wish-line-2:var(--wish-user-line2-dark)!important;--wish-fg:var(--wish-user-fg-dark)!important;--wish-fg-2:var(--wish-user-fg2-dark)!important;--wish-muted:var(--wish-user-muted-dark)!important;
+  --wish-deep:var(--wish-user-card-dark)!important;--wish-deep-2:var(--wish-user-card2-dark)!important;--wish-deep-line:var(--wish-user-line-dark)!important;--wish-deep-fg:var(--wish-user-fg-dark)!important;--wish-deep-muted:var(--wish-user-fg2-dark)!important;
+  --wish-context-toast-bg:var(--wish-user-card2-dark)!important;--wish-context-toast-fg:var(--wish-user-fg2-dark)!important;
+  --wish-scrim:color-mix(in srgb,var(--wish-user-surface) 18%,rgba(0,0,0,.62))!important;--wish-shadow:0 1px 2px rgba(0,0,0,.28),0 12px 28px -20px rgba(0,0,0,.78)!important;
+  --wish-lift:0 2px 6px rgba(0,0,0,.34),0 18px 36px -18px rgba(0,0,0,.82)!important;--wish-shell-shadow:0 30px 72px -32px rgba(0,0,0,.88)!important
+}
+
+/* v0.17.13 (임시) 회귀 보강: 구형 패널에 남아 있던 고정 핑크 인터랙션을 사용자 accent에 연결합니다. 의미색(성공/경고/위험/즐겨찾기)은 건드리지 않습니다. */
+:is(html.rpcm-custom-accent,body.rpcm-custom-accent) :is(.rpcm-ai-preset:hover,.rpcm-ai-preset.active,.rpcm-ai-view-tab.active){border-color:var(--wish-accent-line)!important;background:var(--wish-accent-soft)!important;color:var(--wish-accent-strong)!important}
+:is(html.rpcm-custom-accent,body.rpcm-custom-accent) .rpcm-ai-tab.active{color:var(--wish-accent-strong)!important;border-bottom-color:var(--wish-accent)!important}
+:is(html.rpcm-custom-accent,body.rpcm-custom-accent) .rpcm-work-nav button.is-active{border-color:var(--wish-accent-line)!important;background:var(--wish-accent-soft-2)!important;color:var(--wish-accent-strong)!important;box-shadow:inset 0 -2px 0 var(--wish-accent)!important}
+:is(html.rpcm-custom-accent,body.rpcm-custom-accent) .rpcm-work-nav button:focus-visible{outline-color:var(--wish-accent-line)!important}
+:is(html.rpcm-custom-accent,body.rpcm-custom-accent) :is(.rpcm-knowledge-card>summary:hover,.rpcm-item-folder>summary:hover){background:var(--wish-hi)!important}
+:is(html.rpcm-custom-accent,body.rpcm-custom-accent) :is(.rpcm-knowledge-panel input[type=checkbox],#rpcm-log-backdrop input[type=checkbox],#rpcm-log-dialog-backdrop input[type=checkbox],#rpcm-story-dialog-backdrop input[type=checkbox],#rpcm-story-view-backdrop input[type=checkbox],#rpcm-dup-dialog-backdrop input[type=radio],.rpcm-lib-row input,.rpcm-lib-preserve input,.rpcm-log-groupbar input,.rpcm-log-manual,.rpcm-library-item-card>summary>[data-manager-select],.rpcm-related-picker-filters label.check input){accent-color:var(--wish-accent)!important}
+:is(html.rpcm-custom-accent,body.rpcm-custom-accent) :is(.rpcm-knowledge-head button,.rpcm-knowledge-actions button){border-color:var(--wish-accent-line)!important;background:var(--wish-accent-soft)!important;color:var(--wish-accent-strong)!important}
+:is(html.rpcm-custom-accent,body.rpcm-custom-accent) .rpcm-knowledge-category-tabs button[aria-selected="true"]{background:var(--wish-accent-soft-2)!important;border-color:var(--wish-accent-line)!important;color:var(--wish-accent-strong)!important}
+:is(html.rpcm-custom-accent,body.rpcm-custom-accent) .rpcm-knowledge-card>summary:before{color:var(--wish-accent-strong)!important}
+:is(html.rpcm-custom-accent,body.rpcm-custom-accent) .rpcm-knowledge-card>summary small{color:var(--wish-accent-strong)!important;border-color:var(--wish-accent-line)!important}
+:is(html.rpcm-custom-accent,body.rpcm-custom-accent) :is(.rpcm-knowledge-fields input:focus,.rpcm-knowledge-fields textarea:focus,.rpcm-knowledge-fields select:focus,.rpcm-library-name-input:focus,.rpcm-library-item-edit input:focus,.rpcm-library-item-edit select:focus,.rpcm-library-item-edit textarea:focus,.rpcm-related-picker-filters input:focus,.rpcm-related-picker-filters select:focus,.rpcm-item-import-body textarea:focus){border-color:var(--wish-accent)!important;box-shadow:0 0 0 2px color-mix(in srgb,var(--wish-accent) 18%,transparent)!important}
+:is(html.rpcm-custom-accent,body.rpcm-custom-accent) .rpcm-lib-rename-icon:hover{background:var(--wish-accent-soft)!important;border-color:var(--wish-accent-line)!important;color:var(--wish-accent-strong)!important}
+:is(html.rpcm-custom-accent,body.rpcm-custom-accent) .rpcm-library-item-number{color:var(--wish-accent-strong)!important}
+:is(html.rpcm-custom-accent,body.rpcm-custom-accent) .rpcm-log-row.is-picked-jump{border-color:var(--wish-accent)!important;box-shadow:0 0 0 2px color-mix(in srgb,var(--wish-accent) 15%,transparent)!important}
+:is(html.rpcm-custom-accent,body.rpcm-custom-accent) #rpcm-log-dialog-backdrop :is(.rpcm-date-row input[type=number]:focus,.rpcm-date-bulk-fields input:focus,.rpcm-date-full:focus){border-color:var(--wish-accent)!important;box-shadow:0 0 0 2px color-mix(in srgb,var(--wish-accent) 22%,transparent)!important}
+:is(html.rpcm-custom-accent,body.rpcm-custom-accent) #rpcm-quick-trigger>em{background:var(--wish-accent)!important;color:var(--wish-accent-ink)!important}
+:is(html.rpcm-custom-accent,body.rpcm-custom-accent) .rpcm-related-add:hover{border-color:var(--wish-accent)!important;background:var(--wish-accent-soft)!important;color:var(--wish-accent-strong)!important}
+:is(html.rpcm-custom-accent,body.rpcm-custom-accent) .rpcm-related-picker-row button.primary{border-color:var(--wish-accent-line)!important;background:var(--wish-accent-soft-2)!important;color:var(--wish-accent-strong)!important}
+:is(html.rpcm-custom-accent,body.rpcm-custom-accent) .rpcm-related-picker-row button:not(.rpcm-related-star):hover{border-color:var(--wish-accent-line)!important;color:var(--wish-accent-strong)!important}
+:is(html.rpcm-custom-accent,body.rpcm-custom-accent) #rpcm-ai-backdrop .rpcm-ai-result-tab.active{border-color:var(--wish-accent-line)!important;background:var(--wish-accent-soft)!important;color:var(--wish-accent-strong)!important}
+/* v0.17.13 (임시) 회귀 보강 3: 모바일 활성 탭과 설정 진입점의 비활성 상태 표시도 사용자 accent를 따릅니다. armed 녹색 상태는 의미색으로 유지합니다. */
+html.rpcm-custom-accent.rpcm-mobile-layout .rpcm-mobile-nav-strip .rpcm-jump.is-active{border-color:var(--wish-accent-line)!important;background:var(--wish-accent-soft)!important;color:var(--wish-accent-strong)!important;box-shadow:inset 0 -2px 0 var(--wish-accent)!important}
+html.rpcm-custom-accent [data-rpcm-settings-entry="1"]:not(.rpcm-menu-armed) .rpcm-settings-state-dot{background:var(--wish-accent)!important;box-shadow:0 0 0 2px var(--wish-hi)!important}
+#rpcm-overlay,#rpcm-quick-backdrop,#rpcm-lore-dialog-backdrop,#rpcm-lore-copy-backdrop,#rpcm-update-dialog-backdrop,#rpcm-full-rebuild-dialog,#rpcm-issue-log-backdrop,
+#rpcm-lib-dialog-backdrop,#rpcm-library-manager-backdrop,#rpcm-log-dialog-backdrop,#rpcm-dup-dialog-backdrop,
+#rpcm-story-dialog-backdrop,#rpcm-story-view-backdrop,#rpcm-person-preview-backdrop,#rpcm-preview-backdrop,
+#rpcm-import-backdrop,#rpcm-items-raw-backdrop,#rpcm-ai-backdrop,#rpcm-ai-review-backdrop,
+#rpcm-api-settings-backdrop,#rpcm-related-picker-backdrop,#rpcm-common-guide-backdrop,#rpcm-detached-backdrop,
+#rpcm-quick-trigger,.rpcm-toast{
+  --rpcm-bg:var(--wish-bg);--rpcm-sheet:var(--wish-sheet);--rpcm-card:var(--wish-card);--rpcm-card-2:var(--wish-card-2);
+  --rpcm-line:var(--wish-line);--rpcm-line-soft:var(--wish-line-2);--rpcm-fg:var(--wish-fg);--rpcm-fg-2:var(--wish-fg-2);
+  --rpcm-muted:var(--wish-muted);--rpcm-accent:var(--wish-accent);--rpcm-accent-soft:var(--wish-accent-soft);
+  --rpcm-accent-line:var(--wish-accent-line);--rpcm-success:var(--wish-success);--rpcm-warning:var(--wish-warning);
+  --rpcm-danger:var(--wish-danger);--rpcm-shadow:var(--wish-shadow);--rpcm-shadow-lift:var(--wish-lift);
+  --rpcm-spring:var(--wish-spring);--rpcm-ease:var(--wish-ease);
+  --m3-bg:var(--wish-bg);--m3-sheet:var(--wish-sheet);--m3-card:var(--wish-card);--m3-card2:var(--wish-card-2);
+  --m3-line:var(--wish-line);--m3-line2:var(--wish-line-2);--m3-fg:var(--wish-fg);--m3-fg2:var(--wish-fg-2);
+  --m3-muted:var(--wish-muted);--m3-accent:var(--wish-accent);--m3-accent-ink:var(--wish-accent-ink);
+  --m3-accent-soft:var(--wish-accent-soft);--m3-accent-line:var(--wish-accent-line);--m3-glow:var(--wish-glow);
+  --m3-hi:var(--wish-hi);--m3-ok:var(--wish-success);--m3-warn:var(--wish-warning);--m3-danger:var(--wish-danger);
+  font-family:'Pretendard','Noto Sans KR',-apple-system,BlinkMacSystemFont,'Apple SD Gothic Neo',sans-serif
+}
+#rpcm-overlay{background:var(--wish-scrim)!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
+#rpcm-modal-wrap{width:min(1120px,calc(100vw - 28px))!important;max-height:min(890px,calc(100dvh - 28px))!important}
+#rpcm-modal{background:var(--wish-sheet)!important;color:var(--wish-fg)!important;border:1px solid var(--wish-line)!important;border-radius:16px!important;box-shadow:var(--wish-shell-shadow)!important;overflow:hidden;animation:rpcm-wish-shell-in .48s var(--wish-spring) both}
+#rpcm-modal .rpcm-header{background:var(--wish-sheet)!important;border-bottom:1px solid var(--wish-line-2)!important;padding:13px 18px!important}
+#rpcm-modal .rpcm-title{font-size:18px!important;font-weight:600!important;color:var(--wish-fg)!important}
+#rpcm-modal .rpcm-sub{font-size:11.5px!important;color:var(--wish-muted)!important}
+#rpcm-modal .rpcm-global-status,#rpcm-modal .rpcm-footer{background:var(--wish-sheet)!important;border-color:var(--wish-line-2)!important;color:var(--wish-fg-2)!important}
+#rpcm-modal .rpcm-body,#rpcm-modal .rpcm-workspace,#rpcm-modal .rpcm-work-content{background:var(--wish-bg)!important}
+html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-body{flex:1;min-height:0;overflow:hidden!important}
+html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-workspace{display:grid!important;grid-template-columns:82px minmax(0,1fr)!important;height:100%;min-height:0}
+html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-side-surface{min-height:0;background:var(--wish-sheet)!important;border-right:1px solid var(--wish-line-2)!important;overflow-y:auto}
+#rpcm-modal .rpcm-work-nav{position:relative;display:flex;flex-direction:column;gap:2px;padding:12px 9px!important}
+#rpcm-modal .rpcm-work-nav .rpcm-nav-indicator{position:absolute;left:9px;right:9px;top:0;z-index:0;border-radius:11px;background:var(--wish-accent-soft)!important;pointer-events:none;transition:transform .46s var(--wish-spring),height .28s var(--wish-ease)}
+#rpcm-modal .rpcm-work-nav .rpcm-nav-indicator:after{content:'';position:absolute;top:25%;bottom:25%;left:0;width:3px;border-radius:3px;background:var(--wish-accent)}
+#rpcm-modal .rpcm-work-nav button{position:relative;z-index:1;display:flex!important;flex-direction:column!important;align-items:center!important;justify-content:center!important;gap:5px!important;width:100%;min-height:58px!important;padding:5px 2px!important;border:0!important;border-radius:11px!important;background:transparent!important;color:var(--wish-muted)!important;font-size:11.5px!important;font-weight:500!important;white-space:normal;line-height:1.2;cursor:pointer;transition:color .25s var(--wish-ease)}
+#rpcm-modal .rpcm-work-nav button:hover{color:var(--wish-fg-2)!important;transform:none!important}
+#rpcm-modal .rpcm-work-nav button.is-active{color:var(--wish-accent-strong)!important;font-weight:600!important;box-shadow:none!important}
+#rpcm-modal .rpcm-work-nav button:before{display:none!important}
+#rpcm-modal .rpcm-work-nav .rpcm-svg{width:19px;height:19px;flex:none;transition:transform .42s var(--wish-spring)}
+#rpcm-modal .rpcm-work-nav button:hover .rpcm-svg{transform:translateY(-2px)}
+#rpcm-modal .rpcm-work-nav button.is-active .rpcm-svg{transform:translateY(-2px) scale(1.12)}
+html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-work-content{height:100%;box-sizing:border-box;overflow:auto;min-width:0;padding:20px clamp(16px,3vw,32px) 32px!important;scrollbar-color:var(--wish-line) transparent}
+html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-work-content>*{max-width:948px;margin-left:auto;margin-right:auto}
+#rpcm-modal .rpcm-view-head{display:flex;align-items:baseline;gap:8px;margin:0 0 15px;padding:0 2px 10px;border-bottom:1px solid var(--wish-line-2)}
+#rpcm-modal .rpcm-view-head strong{font-size:17px!important;color:var(--wish-fg)!important;font-weight:600!important}
+#rpcm-modal .rpcm-view-head span{font-size:11.5px!important;color:var(--wish-muted)!important}
+#rpcm-modal .rpcm-work-subnav{position:relative;display:flex;flex-wrap:wrap;gap:3px;margin:0 auto 14px;padding:4px;border:1px solid var(--wish-line);border-radius:11px;background:var(--wish-sheet);box-shadow:var(--wish-shadow)}
+#rpcm-modal .rpcm-work-subnav .rpcm-nav-group,#rpcm-modal .rpcm-work-subnav .rpcm-nav-emoji{display:none!important}
+#rpcm-modal .rpcm-work-subnav .rpcm-nav-indicator{position:absolute;top:4px;bottom:4px;left:0;border:1px solid var(--wish-accent-line);border-radius:8px;background:var(--wish-accent-soft)!important;pointer-events:none;transition:transform .42s var(--wish-spring),width .42s var(--wish-spring)}
+#rpcm-modal .rpcm-work-subnav button{position:relative;z-index:1;display:none;min-height:35px;padding:6px 12px;border:0!important;border-radius:8px;background:transparent!important;color:var(--wish-fg-2)!important;font-size:12px;font-weight:600;cursor:pointer}
+#rpcm-modal .rpcm-work-subnav button.is-active{color:var(--wish-accent-strong)!important;background:transparent!important}
+#rpcm-modal .rpcm-workspace[data-top-group="memory"] .rpcm-work-subnav button[data-workview="memory"],#rpcm-modal .rpcm-workspace[data-top-group="memory"] .rpcm-work-subnav button[data-workview="logs"],#rpcm-modal .rpcm-workspace[data-top-group="memory"] .rpcm-work-subnav button[data-workview="timeline"],#rpcm-modal .rpcm-workspace[data-top-group="memory"] .rpcm-work-subnav button[data-workview="items"],#rpcm-modal .rpcm-workspace[data-top-group="memory"] .rpcm-work-subnav button[data-workview="characters"],#rpcm-modal .rpcm-workspace[data-top-group="memory"] .rpcm-work-subnav button[data-workview="extra"],
+#rpcm-modal .rpcm-workspace[data-top-group="manage"] .rpcm-work-subnav button[data-workview="compression"],#rpcm-modal .rpcm-workspace[data-top-group="manage"] .rpcm-work-subnav button[data-workview="update"],#rpcm-modal .rpcm-workspace[data-top-group="manage"] .rpcm-work-subnav button[data-workview="tools"],#rpcm-modal .rpcm-workspace[data-top-group="manage"] .rpcm-work-subnav button[data-workview="longterm"],
+#rpcm-modal .rpcm-workspace[data-top-group="settings"] .rpcm-work-subnav button[data-workview="preferences"]{display:inline-flex;align-items:center;justify-content:center}
+#rpcm-modal .rpcm-workspace[data-top-group="overview"] .rpcm-work-subnav,#rpcm-modal .rpcm-workspace[data-top-group="lore"] .rpcm-work-subnav,#rpcm-modal .rpcm-workspace[data-top-group="people"] .rpcm-work-subnav,#rpcm-modal .rpcm-workspace[data-top-group="ai"] .rpcm-work-subnav{display:none}
+#rpcm-modal :is(.rpcm-overview-card,.rpcm-summary,.rpcm-warnings,.rpcm-auto-active,.rpcm-ai-launchbar,.rpcm-story-launchbar,.rpcm-timeline-preview,.rpcm-knowledge-panel,.rpcm-person-intro,.rpcm-person-import,.rpcm-tool-card,.rpcm-ai-control-grid article,.rpcm-ai-statusbar,.rpcm-slot,.rpcm-item-folder,.rpcm-extra-folder,.rpcm-profile,.rpcm-person-advanced,.rpcm-inline-story-list,.rpcm-update-card,.rpcm-update-intro,.rpcm-lore-pack,.rpcm-lore-card){background:var(--wish-card)!important;border:1px solid var(--wish-line)!important;border-radius:11px!important;box-shadow:var(--wish-shadow)!important;color:var(--wish-fg-2)!important}
+#rpcm-modal :is(.rpcm-slot,.rpcm-item-folder,.rpcm-extra-folder,.rpcm-profile,.rpcm-knowledge-card,.rpcm-tool-card,.rpcm-ai-control-grid article,.rpcm-lore-card,.rpcm-lore-pack){transition:border-color .22s var(--wish-ease),box-shadow .25s var(--wish-ease),transform .3s var(--wish-spring)}
+#rpcm-modal :is(.rpcm-slot,.rpcm-item-folder,.rpcm-extra-folder,.rpcm-profile,.rpcm-knowledge-card,.rpcm-tool-card,.rpcm-ai-control-grid article,.rpcm-lore-card,.rpcm-lore-pack):hover{border-color:var(--wish-accent-line)!important;box-shadow:var(--wish-lift)!important}
+#rpcm-modal :is(.rpcm-slot,.rpcm-item-folder,.rpcm-extra-folder,.rpcm-profile,.rpcm-knowledge-card,.rpcm-lore-pack)>summary{background:var(--wish-card)!important;color:var(--wish-fg)!important}
+#rpcm-modal :is(.rpcm-slot,.rpcm-item-folder,.rpcm-extra-folder,.rpcm-profile,.rpcm-knowledge-card,.rpcm-lore-pack)>summary:hover{background:var(--wish-card-2)!important}
+#rpcm-modal .rpcm-overview-card{min-height:105px!important;padding:14px 16px!important}
+#rpcm-modal .rpcm-overview-card small,#rpcm-modal :is(.rpcm-slot-count,.rpcm-item-head-meta,.rpcm-profile-summary small,.rpcm-auto-terms){color:var(--wish-muted)!important;font-size:11px!important}
+#rpcm-modal .rpcm-overview-card strong{font-size:23px!important;color:var(--wish-fg)!important;font-variant-numeric:tabular-nums}
+#rpcm-modal .rpcm-overview-card:nth-child(2){background:var(--wish-accent-soft)!important;border-color:var(--wish-accent-line)!important}
+#rpcm-modal .rpcm-overview-card span{color:var(--wish-fg-2)!important}
+#rpcm-modal .rpcm-overview-progress{background:var(--wish-line)!important}#rpcm-modal .rpcm-overview-progress i{background:var(--wish-accent)!important}
+#rpcm-modal .rpcm-warnings{background:var(--wish-card)!important;border-color:var(--wish-warning)!important;color:var(--wish-fg-2)!important}
+#rpcm-modal :is(.rpcm-auto-active-row,.rpcm-person-record,.rpcm-knowledge-card,.rpcm-inline-story-card){background:var(--wish-card)!important;border-color:var(--wish-line)!important;color:var(--wish-fg-2)!important}
+#rpcm-modal :is(.rpcm-auto-active-row strong,.rpcm-person-record strong,.rpcm-knowledge-card strong,.rpcm-inline-story-card strong,.rpcm-slot-name,.rpcm-ai-statusbar strong){color:var(--wish-fg)!important}
+#rpcm-modal :is(.rpcm-auto-reason,.rpcm-auto-evidence,.rpcm-inline-story-card span,.rpcm-person-record small,.rpcm-knowledge-card small){color:var(--wish-fg-2)!important}
+#rpcm-modal :is(.rpcm-ai-chip,.rpcm-auto-badge,.rpcm-quick-badge){background:var(--wish-card-2)!important;border-color:var(--wish-line)!important;color:var(--wish-fg-2)!important}
+#rpcm-modal .rpcm-ai-chip.is-ok{color:var(--wish-success)!important}#rpcm-modal .rpcm-ai-chip.is-error{color:var(--wish-danger)!important}
+
+#rpcm-modal .rpcm-overview-issues button{background:var(--wish-accent-soft)!important;border-color:var(--wish-accent-line)!important;color:var(--wish-accent-strong)!important}
+#rpcm-modal .rpcm-section-head{border-color:var(--wish-line-2)!important}
+#rpcm-modal .rpcm-section-title,#rpcm-modal .rpcm-memory-pane-head strong{font-size:13.5px!important;color:var(--wish-fg)!important;font-weight:600!important}
+#rpcm-modal :is(.rpcm-section-desc,.rpcm-section-details summary,.rpcm-fixed-note,.rpcm-log-help,.rpcm-person-intro){color:var(--wish-fg-2)!important;line-height:1.7}
+#rpcm-modal :is(.rpcm-slot-readview,.rpcm-item-readview,.rpcm-inline-story-list,.rpcm-timeline-preview){background:var(--wish-sheet)!important;color:var(--wish-fg)!important}
+#rpcm-modal :is(.rpcm-read-toolbar,.rpcm-item-view-actions,.rpcm-inline-story-toolbar,.rpcm-edit){background:var(--wish-card-2)!important;border-color:var(--wish-line-2)!important}
+#rpcm-modal :is(.rpcm-memory-tabs,.rpcm-person-tabs){position:sticky;top:0;z-index:5;display:flex!important;gap:4px;padding:4px!important;background:var(--wish-sheet)!important;border:1px solid var(--wish-line)!important;border-radius:11px!important;box-shadow:var(--wish-shadow)!important}
+#rpcm-modal :is(.rpcm-memory-tabs,.rpcm-person-tabs) .rpcm-tab-indicator{position:absolute;top:4px;bottom:4px;left:0;border:1px solid var(--wish-accent-line);border-radius:8px;background:var(--wish-accent-soft);pointer-events:none;transition:transform .42s var(--wish-spring),width .42s var(--wish-spring)}
+#rpcm-modal :is(.rpcm-memory-tabs,.rpcm-person-tabs)>button{position:relative;z-index:1;flex:1;min-height:39px!important;border:0!important;background:transparent!important;color:var(--wish-fg-2)!important;font-weight:600!important}
+#rpcm-modal :is(.rpcm-memory-tabs,.rpcm-person-tabs)>button[aria-selected=true]{background:transparent!important;color:var(--wish-accent-strong)!important;box-shadow:none!important}
+#rpcm-modal :is(button,input,select,textarea):focus-visible,#rpcm-quick-trigger:focus-visible{outline:2px solid var(--wish-accent)!important;outline-offset:2px;box-shadow:0 0 0 3.5px var(--wish-hi)!important}
+#rpcm-modal :is(.rpcm-btn,.rpcm-mini,.rpcm-add-btn,.rpcm-lib-small,.rpcm-editor-action,.rpcm-warning-action,.rpcm-iconbtn),.rpcm-lore-dialog .rpcm-btn{border-radius:8px!important;transition:background .18s var(--wish-ease),border-color .18s var(--wish-ease),color .18s var(--wish-ease),transform .25s var(--wish-spring),box-shadow .18s var(--wish-ease)}
+#rpcm-modal :is(.rpcm-btn,.rpcm-mini,.rpcm-add-btn,.rpcm-lib-small,.rpcm-editor-action,.rpcm-warning-action,.rpcm-iconbtn):hover:not(:disabled){border-color:var(--wish-accent-line)!important;box-shadow:var(--wish-lift)!important}
+#rpcm-modal :is(.rpcm-btn,.rpcm-mini,.rpcm-add-btn,.rpcm-lib-small,.rpcm-editor-action,.rpcm-warning-action,.rpcm-iconbtn):active:not(:disabled){transform:scale(.97)}
+#rpcm-modal :is(.rpcm-btn.primary,.rpcm-add-primary,#rpcm-arm),.rpcm-lore-dialog .rpcm-btn.primary{background:var(--wish-accent)!important;border-color:var(--wish-accent)!important;color:var(--wish-accent-ink)!important;font-weight:600!important}
+#rpcm-modal :is(.rpcm-btn.primary,.rpcm-add-primary,#rpcm-arm):hover:not(:disabled),.rpcm-lore-dialog .rpcm-btn.primary:hover{background:var(--wish-accent-hover)!important}
+#rpcm-modal :is(.rpcm-btn.secondary,.rpcm-mini,.rpcm-add-btn,.rpcm-lib-small,.rpcm-editor-action),.rpcm-lore-dialog .rpcm-btn.secondary{background:var(--wish-card)!important;border-color:var(--wish-line)!important;color:var(--wish-fg-2)!important}
+#rpcm-modal :is(.rpcm-btn.warn,#rpcm-reset,.rpcm-delete-btn,.rpcm-item-bulk-delete){background:transparent!important;border-color:var(--wish-line)!important;color:var(--wish-danger)!important}
+#rpcm-modal :is(button,input,select,textarea):disabled{opacity:1!important;color:var(--wish-muted)!important;cursor:not-allowed!important}
+#rpcm-modal :is(input:not([type=checkbox]):not([type=radio]):not([type=hidden]),select,textarea),.rpcm-lore-dialog :is(input:not([type=checkbox]),select,textarea){background:var(--wish-card)!important;color:var(--wish-fg)!important;border:1px solid var(--wish-line)!important;border-radius:8px!important;line-height:1.7}
+#rpcm-modal input[type=checkbox],.rpcm-lore-dialog input[type=checkbox]{accent-color:var(--wish-accent)}
+#rpcm-modal :is(.rpcm-textarea,.rpcm-guide-textarea,.rpcm-person-import textarea,.rpcm-person-guide-panel textarea,.rpcm-knowledge-fields textarea){min-height:120px;resize:vertical}
+#rpcm-modal :is(.rpcm-pending,.rpcm-ai-chip,.rpcm-auto-badge,.rpcm-slot-remain,.rpcm-inline-story-diff){border-radius:8px}
+#rpcm-modal .rpcm-save-status.saved{color:var(--wish-success)!important}#rpcm-modal .rpcm-save-status.error{color:var(--wish-danger)!important}
+#rpcm-modal .rpcm-footer{box-shadow:0 -8px 24px -18px var(--wish-fg)!important}
+#rpcm-modal .rpcm-update-overview{margin:0 0 14px;padding:13px 15px;border:1px solid var(--wish-accent-line);border-radius:11px;background:var(--wish-card);box-shadow:var(--wish-shadow)}
+#rpcm-modal .rpcm-update-overview-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+#rpcm-modal .rpcm-update-overview-head>div{display:grid;gap:2px}#rpcm-modal .rpcm-update-overview-head strong{font-size:13.5px;color:var(--wish-fg)}#rpcm-modal .rpcm-update-overview-head span{font-size:11px;color:var(--wish-muted)}
+#rpcm-modal .rpcm-update-overview-rows{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.rpcm-update-overview-row{display:inline-flex;gap:6px;align-items:center;padding:5px 8px;border:1px solid var(--wish-line);border-radius:99px;background:var(--wish-card-2);font-size:10.5px;color:var(--wish-fg-2)}.rpcm-update-overview-row strong{font-weight:600}.rpcm-update-overview-row em{font-style:normal;color:var(--wish-accent-strong)}.rpcm-update-overview-row em.is-warning{color:var(--wish-warning)}
+#rpcm-modal #rpcm-section-update{color:var(--wish-fg-2)!important}
+#rpcm-modal #rpcm-section-update .rpcm-update-intro strong{color:var(--wish-fg)!important}
+#rpcm-modal #rpcm-section-update :is(.rpcm-update-intro p,.rpcm-update-footnote,.rpcm-update-muted){color:var(--wish-fg-2)!important}
+#rpcm-modal .rpcm-ai-launchbar strong,#rpcm-modal .rpcm-story-launchbar strong{color:var(--wish-fg)!important}
+#rpcm-modal .rpcm-ai-launchbar span,#rpcm-modal .rpcm-story-launchbar span{color:var(--wish-fg-2)!important}
+#rpcm-modal #rpcm-section-update .rpcm-update-list{display:grid;gap:10px}
+#rpcm-modal #rpcm-section-update .rpcm-update-card{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 16px}
+#rpcm-modal #rpcm-section-update .rpcm-update-kicker{color:var(--wish-accent-strong)!important}
+#rpcm-modal #rpcm-section-update .rpcm-update-card h3{color:var(--wish-fg)!important}
+#rpcm-modal #rpcm-section-update .rpcm-update-card p{color:var(--wish-fg-2)!important}
+#rpcm-modal #rpcm-section-update .rpcm-update-chip{background:var(--wish-accent-soft)!important;border-color:var(--wish-accent-line)!important;color:var(--wish-accent-strong)!important}
+#rpcm-modal .rpcm-lore-status{padding:10px 13px;margin:0 0 12px;border:1px solid var(--wish-line);border-radius:11px;background:var(--wish-card-2);color:var(--wish-fg-2);font-size:11px;line-height:1.6}
+#rpcm-modal .rpcm-lore-filters{display:grid;grid-template-columns:minmax(190px,2fr) repeat(3,minmax(115px,1fr));gap:8px;margin:0 0 12px}
+#rpcm-modal .rpcm-lore-filters :is(input,select){min-width:0;width:100%;min-height:37px;box-sizing:border-box;padding:6px 9px;font-size:12px}
+#rpcm-modal #rpcm-lore-list{display:grid;gap:12px}
+#rpcm-modal .rpcm-lore-pack{overflow:hidden;min-width:0}
+#rpcm-modal .rpcm-lore-pack>summary{display:flex;align-items:center;min-height:48px;padding:10px 14px;cursor:pointer}
+#rpcm-modal .rpcm-lore-pack>summary span{display:grid;gap:3px}
+#rpcm-modal .rpcm-lore-pack>summary strong,#rpcm-modal .rpcm-lore-card-head strong{font-size:13.5px;color:var(--wish-fg)!important}
+#rpcm-modal .rpcm-lore-pack>summary small,#rpcm-modal .rpcm-lore-card-head small,#rpcm-modal .rpcm-lore-keywords{font-size:11px;color:var(--wish-muted)!important}
+#rpcm-modal .rpcm-lore-pack-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:6px;padding:9px 12px;border-top:1px solid var(--wish-line-2);border-bottom:1px solid var(--wish-line-2)}
+#rpcm-modal .rpcm-lore-pack-actions label{margin-right:auto;color:var(--wish-fg-2)}
+#rpcm-modal .rpcm-lore-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:12px}
+#rpcm-modal .rpcm-lore-card{min-width:0;padding:12px}
+#rpcm-modal .rpcm-lore-card-head{display:flex;gap:8px;justify-content:space-between;align-items:start}
+#rpcm-modal .rpcm-lore-card-head>div{display:grid;gap:4px;min-width:0}
+#rpcm-modal .rpcm-lore-card-head label{white-space:nowrap;font-size:11px}
+#rpcm-modal .rpcm-lore-type{width:max-content;padding:2px 7px;border:1px solid var(--wish-accent-line);border-radius:99px;background:var(--wish-accent-soft);color:var(--wish-accent-strong);font-size:10px}
+#rpcm-modal .rpcm-lore-card p{margin:10px 0;color:var(--wish-fg-2);font-size:12px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere}
+#rpcm-modal .rpcm-lore-card-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;padding-top:9px;border-top:1px solid var(--wish-line-2)}
+#rpcm-modal .rpcm-lore-card-actions select{flex:1;min-width:110px;padding:6px}
+#rpcm-modal .rpcm-lore-manual-select{display:inline-flex;align-items:center;gap:5px;padding:4px 6px;border:1px solid var(--wish-accent-line);border-radius:8px;background:var(--wish-accent-soft);color:var(--wish-accent-strong);font-size:11px;white-space:nowrap}
+#rpcm-modal .rpcm-lore-detail{margin-top:10px;padding-top:8px;border-top:1px solid var(--wish-line-2)}
+#rpcm-modal .rpcm-lore-detail>summary{cursor:pointer;color:var(--wish-accent-strong);font-size:11px}
+#rpcm-modal .rpcm-lore-detail pre{max-height:340px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--wish-fg-2);font:11px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}
+#rpcm-modal .rpcm-lore-empty{grid-column:1/-1;padding:20px;color:var(--wish-muted);text-align:center;font-size:12px}
+#rpcm-modal .rpcm-lore-pack>summary{gap:10px}
+#rpcm-modal .rpcm-lore-pack>summary>span:first-child{flex:1;min-width:0}
+#rpcm-modal .rpcm-lore-pack>summary .rpcm-lore-pack-status{display:inline-flex;flex:none;padding:4px 8px;border:1px solid var(--wish-accent-line);border-radius:99px;background:var(--wish-accent-soft);color:var(--wish-accent-strong);font-size:10px;white-space:nowrap}
+#rpcm-modal .rpcm-lore-chevron{flex:none;color:var(--wish-muted);transition:transform .2s ease}
+#rpcm-modal details[open]>summary>.rpcm-lore-chevron{transform:rotate(180deg)}
+#rpcm-modal .rpcm-lore-packbody{border-top:1px solid var(--wish-line-2)}
+#rpcm-modal .rpcm-lore-cards{grid-template-columns:minmax(0,1fr);gap:14px;padding:12px}
+#rpcm-modal .rpcm-lore-type-group{display:grid;gap:5px;min-width:0}
+#rpcm-modal .rpcm-lore-type-head{display:flex;align-items:center;gap:8px;padding:5px 3px;color:var(--wish-fg-2);font-size:12px}
+#rpcm-modal .rpcm-lore-type-head small{color:var(--wish-muted)}
+#rpcm-modal .rpcm-lore-card{display:block;padding:0;border:1px solid var(--wish-line);border-radius:9px;background:var(--wish-card-2);overflow:hidden}
+#rpcm-modal .rpcm-lore-card[open]{border-color:var(--wish-accent-line)}
+#rpcm-modal .rpcm-lore-card-head{display:flex;align-items:center;gap:10px;min-height:45px;padding:8px 12px;cursor:pointer;list-style:none}
+#rpcm-modal .rpcm-lore-card-head::-webkit-details-marker,#rpcm-modal .rpcm-lore-pack>summary::-webkit-details-marker{display:none}
+#rpcm-modal .rpcm-lore-card-head:hover{background:var(--wish-card)}
+#rpcm-modal .rpcm-lore-card-title{display:grid;gap:2px;flex:1;min-width:0}
+#rpcm-modal .rpcm-lore-card-title strong,#rpcm-modal .rpcm-lore-card-title small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#rpcm-modal .rpcm-lore-mode-badge{flex:none;padding:3px 7px;border:1px solid var(--wish-line);border-radius:99px;color:var(--wish-fg-2);font-size:10px;white-space:nowrap}
+#rpcm-modal .rpcm-lore-cardbody{padding:12px;border-top:1px solid var(--wish-line-2)}
+#rpcm-modal .rpcm-lore-full{margin:0 0 10px!important;font-size:12px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere}
+#rpcm-modal .rpcm-lore-density{display:flex;gap:9px;padding:6px 0;color:var(--wish-fg-2);font-size:11px;line-height:1.5}
+#rpcm-modal .rpcm-lore-density strong{flex:none;color:var(--wish-accent-strong)}
+#rpcm-modal .rpcm-lore-meta-row{display:flex;align-items:start;gap:10px;margin-top:8px;font-size:11px}
+#rpcm-modal .rpcm-lore-meta-row>strong{flex:none;min-width:52px;color:var(--wish-muted)}
+#rpcm-modal .rpcm-lore-meta-row>span{display:flex;flex-wrap:wrap;gap:5px}
+#rpcm-modal .rpcm-lore-meta-row em{padding:3px 7px;border:1px solid var(--wish-accent-line);border-radius:99px;background:var(--wish-accent-soft);color:var(--wish-accent-strong);font-style:normal;overflow-wrap:anywhere}
+#rpcm-modal .rpcm-lore-quote{margin:0 0 10px;padding:10px 12px;border-left:3px solid var(--wish-accent-strong);background:var(--wish-card);color:var(--wish-fg);font-size:13px;line-height:1.6;white-space:pre-wrap}
+#rpcm-modal .rpcm-lore-quote-meta{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:9px;font-size:11px;color:var(--wish-fg-2)}
+#rpcm-modal .rpcm-lore-quote-meta span{display:flex;gap:4px}#rpcm-modal .rpcm-lore-quote-meta strong{color:var(--wish-muted)}
+#rpcm-modal .rpcm-lore-source{margin-top:10px;padding:7px 0;border-top:1px solid var(--wish-line-2);font-size:11px}#rpcm-modal .rpcm-lore-source>summary{cursor:pointer;color:var(--wish-accent-strong)}
+#rpcm-modal .rpcm-lore-source pre{max-height:160px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--wish-fg-2)}
+#rpcm-modal .rpcm-lore-card-actions{align-items:center;justify-content:flex-end}
+#rpcm-modal .rpcm-lore-actions-menu{position:relative}#rpcm-modal .rpcm-lore-actions-menu>summary{cursor:pointer;padding:6px 9px;border:1px solid var(--wish-line);border-radius:7px;color:var(--wish-fg-2);font-size:11px;list-style:none}
+#rpcm-modal .rpcm-lore-actions-menu>div{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:6px;margin-top:8px;padding:8px;border:1px solid var(--wish-line);border-radius:8px;background:var(--wish-card)}
+#rpcm-modal .rpcm-lore-actions-menu label{display:inline-flex;align-items:center;gap:5px;color:var(--wish-fg-2);font-size:11px}
+@media(max-width:650px){#rpcm-modal .rpcm-lore-card-head{gap:6px}#rpcm-modal .rpcm-lore-mode-badge{font-size:9px}#rpcm-modal .rpcm-lore-cardbody{padding:10px}#rpcm-modal .rpcm-lore-pack>summary{padding:9px 10px}#rpcm-modal .rpcm-lore-actions-menu>div{justify-content:flex-start}}
+#rpcm-modal .rpcm-full-rebuild-card{flex-basis:100%;border-color:var(--wish-accent-line)!important}
+#rpcm-modal .rpcm-full-rebuild-card small{display:block;color:var(--wish-muted);line-height:1.5;overflow-wrap:anywhere;white-space:pre-line}
+.rpcm-full-rebuild-dialog{width:min(920px,94vw)}
+.rpcm-full-rebuild-dialog .rpcm-update-result-body{overflow:auto}
+.rpcm-full-rebuild-dialog .rpcm-update-result-body>p{color:var(--wish-fg-2);font-size:12px;line-height:1.6}
+.rpcm-full-rebuild-files{display:grid;gap:7px;margin:10px 0}
+.rpcm-full-rebuild-files>div{display:flex;align-items:center;gap:10px;justify-content:space-between;padding:8px 10px;border:1px solid var(--wish-line);border-radius:8px;background:var(--wish-card)}
+.rpcm-full-rebuild-files span{display:grid;gap:2px;min-width:0;overflow-wrap:anywhere}
+.rpcm-full-rebuild-files small{color:var(--wish-muted)}
+.rpcm-full-rebuild-warning{padding:10px;border:1px solid var(--wish-warning);border-radius:8px;color:var(--wish-warning)!important;background:var(--wish-card-2)}
+.rpcm-full-rebuild-dialog .rpcm-update-result-body>label{display:grid;gap:7px;font-size:12px;font-weight:600;color:var(--wish-fg-2)}
+.rpcm-full-rebuild-dialog .rpcm-update-result-body>label textarea{width:100%;height:180px;min-height:130px;margin:0;resize:vertical}

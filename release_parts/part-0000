@@ -1,0 +1,1000 @@
+﻿// ==UserScript==
+// @name         🪽위시 RP Manager(키메라 버전)
+// @namespace    local.rp.context.manager
+// @version      0.17.30.1
+// @description  [키메라 버전] 장기 RP의 현재상태·날짜로그·인물·타임라인·자료집을 관리하고, 검수형 AI 생성·컨텍스트 주입·통합 백업·기존 백업 이사를 지원합니다.
+// @author       User
+// @license      All Rights Reserved
+// @homepageURL  https://github.com/dinggadingga0515/wish-rp-manager-improved
+// @updateURL    https://raw.githubusercontent.com/dinggadingga0515/wish-rp-manager-improved/main/%EC%9C%84%EC%8B%9C_RP_Manager_%EA%B0%9C%EC%84%A0.user.js
+// @downloadURL  https://raw.githubusercontent.com/dinggadingga0515/wish-rp-manager-improved/main/%EC%9C%84%EC%8B%9C_RP_Manager_%EA%B0%9C%EC%84%A0.user.js
+// @match        https://crack.wrtn.ai/stories/*/episodes/*
+// @match        https://crack.wrtn.ai/characters/*/chats/*
+// @match        https://crack.wrtn.ai/u/*/c/*
+// @connect      crack-api.wrtn.ai
+// @connect      contents-api.wrtn.ai
+// @connect      generativelanguage.googleapis.com
+// @connect      firebaseappcheck.googleapis.com
+// @connect      content-firebaseappcheck.googleapis.com
+// @connect      firebaseinstallations.googleapis.com
+// @connect      www.gstatic.com
+// @connect      oauth2.googleapis.com
+// @connect      aiplatform.googleapis.com
+// @connect      *.aiplatform.googleapis.com
+// @connect      api.deepseek.com
+// @connect      *
+// @grant        GM_addStyle
+// @grant        GM_xmlhttpRequest
+// @grant        GM_getValue
+// @grant        GM_listValues
+// @grant        GM_setValue
+// @grant        GM_registerMenuCommand
+// @grant        GM_deleteValue
+// @noframes
+// @run-at       document-start
+// ==/UserScript==
+
+// ============================================================
+// 🪽위시 RP Manager
+//
+// 개인 사용 목적으로만 배포합니다.
+// 무단 재배포, 수정본 재배포, 코드 일부를 포함한 재배포를 허용하지 않습니다.
+// 원본 배포처 외의 장소에 파일/코드를 다시 업로드하지 말아주세요.
+// ============================================================
+
+(function () {
+'use strict';
+// Message reads share routing only within one validated cursor chain.
+const rpcmNetDiagnostics=[];
+function rpcmNetStatus(error){return Number(error?.httpStatus||error?.rpcmStatus||error?.status||error?.diagnostic?.httpStatus||0)||0;}
+function rpcmNetRetryAfter(headers){
+  const value=String(headers||'').match(/^retry-after\s*:\s*(.+)$/im)?.[1]?.trim();
+  if(!value)return 0;
+  const seconds=Number(value);if(Number.isFinite(seconds))return seconds>=0?Math.min(Number.MAX_SAFE_INTEGER,seconds*1000):0;
+  const at=Date.parse(value);return Number.isFinite(at)?Math.max(0,at-Date.now()):0;
+}
+function rpcmNetError(message,{service='crack-read',status=0,code='',url='',retryAfterMs=0,cause=null}={}){
+  const error=new Error(String(message));error.code=code||'RPCM_HTTP_ERROR';error.httpStatus=Number(status)||0;error.rpcmStatus=error.httpStatus;
+  error.retryAfterMs=Math.max(0,Number(retryAfterMs)||0);error.rpcmRetryAfterMs=error.retryAfterMs;
+  let host='';try{host=new URL(url).host;}catch(_){}
+  error.diagnostic={service,host,httpStatus:error.httpStatus,code:error.code,retryAfterMs:error.retryAfterMs};
+  if(cause)error.cause=cause;
+  rpcmNetDiagnostics.push({...error.diagnostic,at:Date.now()});if(rpcmNetDiagnostics.length>80)rpcmNetDiagnostics.splice(0,rpcmNetDiagnostics.length-80);
+  return error;
+}
+function rpcmReadRoute(url){
+  let parsed;try{parsed=new URL(String(url));}catch(_){return null;}
+  if(parsed.protocol!=='https:'||parsed.port||parsed.username||parsed.password||parsed.hash)return null;
+  const prefix=parsed.hostname==='crack-api.wrtn.ai'?'/crack-gen/v3/chats/':parsed.hostname==='contents-api.wrtn.ai'?'/character-chat/v3/chats/':'';
+  if(!prefix||!parsed.pathname.startsWith(prefix))return null;
+  const match=/^([^/]+)\/messages(?:\/([^/]+))?$/.exec(parsed.pathname.slice(prefix.length));if(!match)return null;
+  let chatId,messageId;try{chatId=decodeURIComponent(match[1]);messageId=match[2]?decodeURIComponent(match[2]):'';}catch(_){return null;}
+  if(!chatId||/[/?#]/.test(chatId)||/[/?#]/.test(messageId))return null;
+  return {url:parsed,chatId,messageId};
+}
+function rpcmReadUrl(url,host){
+  const route=rpcmReadRoute(url);if(!route)return '';
+  const target=host|| (route.url.hostname==='crack-api.wrtn.ai'?'contents-api.wrtn.ai':'crack-api.wrtn.ai');
+  if(!['crack-api.wrtn.ai','contents-api.wrtn.ai'].includes(target))return '';
+  const prefix=target==='crack-api.wrtn.ai'?'/crack-gen/v3/chats/':'/character-chat/v3/chats/';
+  return 'https://'+target+prefix+encodeURIComponent(route.chatId)+'/messages'+(route.messageId?'/'+encodeURIComponent(route.messageId):'')+route.url.search;
+}
+function rpcmReadValidate(url,data){
+  const route=rpcmReadRoute(url);if(!route)return data;
+  const invalid=()=>rpcmNetError('대화 조회 응답의 방·메시지 또는 페이지 형식이 일치하지 않습니다.',{url,code:'RPCM_INVALID_READ_RESPONSE'});
+  if(!data||typeof data!=='object'||Array.isArray(data))throw invalid();
+  const nested=data.data,value=route.messageId?(nested??data):(Array.isArray(nested?.messages)?nested:Array.isArray(data.messages)?data:(nested??data));
+  if(!value||typeof value!=='object'||Array.isArray(value))throw invalid();
+  if((nested?.chatId!=null&&String(nested.chatId)!==route.chatId)||(data.chatId!=null&&String(data.chatId)!==route.chatId))throw invalid();
+  const idOf=row=>String(row?._id||row?.id||row?.messageId||'');
+  if(route.messageId){if(idOf(value)!==route.messageId)throw invalid();return data;}
+  const rows=value.messages;if(!Array.isArray(rows))throw invalid();
+  if(rows.some(row=>!row||typeof row!=='object'||!idOf(row)))throw invalid();
+  // Recent/bounded lists do not establish end-of-history; the full reader checks pagination.
+  const next=String(nested?.nextCursor||data.nextCursor||'');if(next&&!rows.length)throw invalid();
+  return data;
+}
+function rpcmReadCanFallback(error){
+  const code=String(error?.code||'');
+  if(error?.rpcmBeforeSendRejected||['RPCM_USER_ABORT','RPCM_HISTORY_STALE','CRACK_AUTH_REQUIRED','RPCM_BACKUP_RESTORE_BUSY','RPCM_INVALID_READ_RESPONSE','RPCM_RETRY_DEFERRED','RPCM_CARRIER_WRITE_DEADLINE'].includes(code))return false;
+  const status=rpcmNetStatus(error);if(status)return [404,405,408].includes(status)||(status>=500&&status<600);
+  return ['CRACK_NETWORK','CRACK_TIMEOUT'].includes(code);
+}
+function rpcmReadMustStop(error){return [401,403,429].includes(rpcmNetStatus(error))||error?.rpcmBeforeSendRejected||['RPCM_USER_ABORT','RPCM_HISTORY_STALE','CRACK_AUTH_REQUIRED','RPCM_BACKUP_RESTORE_BUSY','RPCM_INVALID_READ_RESPONSE','RPCM_RETRY_DEFERRED','RPCM_CARRIER_WRITE_DEADLINE'].includes(String(error?.code||''));}
+async function rpcmReadFallback(url,read,{chain=null,check=()=>{},validate=rpcmReadValidate}={}){
+  const route=rpcmReadRoute(url);if(!route)return read(url);
+  const current=chain?.host?rpcmReadUrl(url,chain.host):String(url);check();
+  const accept=(to,value)=>{check();const accepted=validate(to,value);if(chain){chain.host=new URL(to).hostname;chain.accepted=true;}return accepted;};
+  try{return accept(current,await read(current));}catch(primary){
+    check();if(chain?.accepted||chain?.switched||!rpcmReadCanFallback(primary))throw primary;
+    const alternate=rpcmReadUrl(current);if(!alternate)throw primary;if(chain)chain.switched=true;
+    try{check();return accept(alternate,await read(alternate));}catch(secondary){
+      check();const combined=rpcmNetError(secondary.message,{status:rpcmNetStatus(secondary),code:secondary.code||'RPCM_READ_BOTH_FAILED',url:alternate,retryAfterMs:secondary.retryAfterMs||secondary.rpcmRetryAfterMs,cause:secondary});
+      combined.primaryFailure=primary;combined.failures=[primary,secondary];throw combined;
+    }
+  }
+}
+function rpcmAiRetryInfo(data){
+  const details=data?.error?.details;if(!Array.isArray(details))return 0;
+  const delay=details.find(row=>String(row?.['@type']||'').endsWith('RetryInfo'))?.retryDelay;
+  const seconds=typeof delay==='object'?Number(delay?.seconds||0)+Number(delay?.nanos||0)/1e9:parseFloat(String(delay||0));
+  return Number.isFinite(seconds)&&seconds>=0?seconds*1000:0;
+}
+function rpcmRefinerCanAutoRetry(error){
+  if(error?.noAutoRetry||error?.deliveryUnknown||error?.rpcmGenerationCompleted)return false;
+  const status=rpcmNetStatus(error);if([400,401,403,413,429].includes(status))return false;
+  return !/^(?:AI_|RPCM_USER_ABORT$|RPCM_HISTORY_STALE$|RPCM_RETRY_DEFERRED$|RPCM_INVALID_READ_RESPONSE$|CRACK_AUTH_REQUIRED$|STALE_RESPONSE_REVIEW$|RESPONSE_READBACK_UNVERIFIED$|REVIEW_OUTPUT_LIMIT$)/.test(String(error?.code||''));
+}
+
+// Shared only by the two userscript closures. No page/global bridge or API key export.
+function wishLocalStorageRecord(value){
+  if(value===null||typeof value!=='object')return value;
+  return structuredClone(value);
+}
+function wishResolveStorageRecord(request,fallback,resolve,reject){
+  try{resolve(wishLocalStorageRecord(request.result||fallback));}catch(error){reject(error);}
+}
+const wrpmStartup=(()=>{
+  let host=null,phase='starting',message='스크립트 실행 준비',dismissed=false,scheduled=false,started=false,mountTimer=null;
+  const stop=()=>{if(mountTimer!==null){clearInterval(mountTimer);mountTimer=null;}};
+  const render=(force=false)=>{
+    if(force)dismissed=false;
+    if(dismissed||(phase==='ready'&&!force)||!document.documentElement)return;
+    if(!host?.isConnected){
+      host=document.createElement('div');host.id='wish-rpcm-startup-status';
+      const root=host.attachShadow({mode:'open'}),style=document.createElement('style'),card=document.createElement('section'),title=document.createElement('strong'),text=document.createElement('span'),close=document.createElement('button');
+      style.textContent=':host{all:initial}section{box-sizing:border-box;width:280px;border:1px solid #a8afc0;border-radius:12px;background:#202638;color:#f1f3f8;padding:12px;font:13px/1.5 system-ui;box-shadow:0 4px 20px #0005}strong,span{display:block}span{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:5px}button{font:inherit;margin-top:8px;padding:5px 9px;border:1px solid #a8afc0;border-radius:6px;background:#343c51;color:#fff;cursor:pointer}';
+      title.textContent='WISH 0.17.30.1 · 키메라 버전 실행 상태';text.setAttribute('role','status');text.setAttribute('aria-live','polite');close.type='button';close.textContent='닫기';close.onclick=()=>{dismissed=true;host?.remove();host=null;stop();};
+      card.append(title,text,close);root.append(style,card);document.documentElement.append(host);
+      for(const [k,v]of Object.entries({position:'fixed',right:'16px',top:'112px','z-index':'2147483647',display:'block',visibility:'visible',opacity:'1',width:'280px',height:'auto'}))host.style.setProperty(k,v,'important');
+    }
+    const text=host.shadowRoot.querySelector('span');if(text.textContent!==message)text.textContent=message;host.dataset.wishStartupPhase=phase;
+  };
+  const status=(next,text)=>{phase=next;message=String(text||'');stop();if(next==='ready'){host?.remove();host=null;}else render();};
+  try{GM_registerMenuCommand('🪽 RP Manager 실행 상태',()=>render(true));}catch(_){}
+  render();
+  if(!document.documentElement){let passes=0;mountTimer=setInterval(()=>{render();if(host||dismissed||++passes>=15)stop();},2000);}
+  window.addEventListener('pagehide',stop,{once:true});
+  return {status,schedule(){if(scheduled)return false;scheduled=true;return true;},begin(){if(started)return false;started=true;return true;},fail(error){let detail=String(error?.message||error);try{detail=wrpmFullBackupV2.redactDiagnostic(detail);}catch(_){detail='오류 상세는 저장소 진단에서 확인해 주세요.';}status('error','초기화 중단 ('+message+'): '+detail.slice(0,240));}};
+})();
+const wrpmStorageMaintenanceV11 = (() => {
+    const ORIGIN = location.origin, DB_NAME = 'RPCM_AuxStorage_v1', LIMIT = 128 * 1024 * 1024;
+    const PREFIX = 'RPCM_STORAGE_V11:' + ORIGIN + ':', PACK_PREFIX = 'RPCM_RESCUE_V2:' + ORIGIN + ':';
+    const HISTORY = 'wish-rp-core-response-refiner-history:', ARCHIVE = 'wish-rp-correction-text-archive-v1:';
+    const cache = new Map(), queues = new Map(); let dbPromise = null, validator = null, codecQueue=Promise.resolve();
+    function codec(task) {const run=codecQueue.catch(()=>{}).then(task);codecQueue=run.catch(()=>{});return run;}
+    const encode = value => JSON.stringify({value});
+    const bytes = text => new TextEncoder().encode(text).length;
+    const equal = (a,b) => encode(a) === encode(b);
+    const errorText = error => String(error?.message || error);
+    const clone = value => structuredClone(value);
+    const now = () => new Date().toISOString();
+    function installation(create=true) {
+      const key = 'RPCM_STORAGE_INSTALL_V11'; let id = GM_getValue(key, null);
+      if (id === null) { if(!create)throw new Error('설치 식별자가 없어 기존 소유권을 확인하지 못했습니다.');id = crypto.randomUUID(); GM_setValue(key,id); if (GM_getValue(key,null) !== id) throw new Error('설치 식별자 저장 확인 실패'); }
+      if (typeof id !== 'string' || !/^[\w-]{16,80}$/.test(id)) throw new Error('설치 식별자 손상');
+      return id;
+    }
+    async function digest(value) {
+      const data = new TextEncoder().encode(encode(value));
+      if (data.byteLength > LIMIT) throw new Error('항목이 처리 한도 128MiB를 넘습니다. 원본을 유지합니다.');
+      const hash = await crypto.subtle.digest('SHA-256',data);
+      return Array.from(new Uint8Array(hash),n=>n.toString(16).padStart(2,'0')).join('');
+    }
+    function routeKey(key) { return PREFIX + 'route:' + encodeURIComponent(key); }
+    function readRoute(key) {
+      const raw = GM_getValue(routeKey(key),null); if (raw === null) return null;
+      let row; try { row = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch (_) { throw new Error('저장 경로 표지 손상'); }
+      if (row?.format !== 'RPCM_STORAGE_ROUTE_V11' || row.origin !== ORIGIN || row.installation !== installation(false) || row.key !== key || !['idb','pack','legacy'].includes(row.target)) throw new Error('저장 경로 소유권 불일치');
+      const role=rescueRole(key),scope=archiveScope(key);
+      if(!role&&scope===null || row.target==='idb'&&scope===null || row.target==='pack'&&(!role||row.targetKey!==PACK_PREFIX+role.role+':'+role.id) || !/^[a-f0-9]{64}$/.test(row.sourceDigest||'') || typeof row.cleaned!=='boolean' || row.rollbackPendingDigest!=null&&!/^[a-f0-9]{64}$/.test(row.rollbackPendingDigest))throw new Error('저장 경로 역할/참조 불일치');
+      return row;
+    }
+    async function writeRoute(row) {
+      const key = routeKey(row.key), text = JSON.stringify(row); await GM_setValue(key,text);
+      if (await GM_getValue(key,null) !== text) throw new Error('저장 경로 표지 확인 실패');
+      return row;
+    }
+    async function locked(task) {
+      if (!globalThis.navigator?.locks?.request) throw new Error('이 환경은 탭 간 잠금을 지원하지 않습니다. 기존 자료를 유지합니다.');
+      return navigator.locks.request('RPCM_STORAGE_V11:' + ORIGIN + ':' + installation(), {mode:'exclusive'}, task);
+    }
+    async function optionalLock(task) {
+      if(globalThis.navigator?.locks?.request)return locked(task);
+      if(listRoutes().length)throw new Error('이전한 자료가 있으나 탭 간 잠금을 사용할 수 없습니다. 다른 환경에서 백업/복원하세요.');
+      return task();
+    }
+    async function lineage(row) {
+      const source = await GM_getValue(row.key,null);
+      const absent=row.cleaned || row.cleanupPending&&source===null;
+      const currentDigest=source===null?null:await digest(source);
+      if(row.rollbackPendingDigest&&currentDigest===row.rollbackPendingDigest)return source;
+      if (absent ? source !== null : currentDigest !== row.sourceDigest && currentDigest !== row.rollbackPendingDigest) throw new Error('구버전/다른 탭이 기존 자료를 변경했습니다. 양쪽 자료를 보존하고 전환을 보류합니다.');
+      return source;
+    }
+    function archiveScope(key) { return key.startsWith(HISTORY) ? key.slice(HISTORY.length) : key.startsWith(ARCHIVE) ? key.slice(ARCHIVE.length) : null; }
+    function rescueRole(key) {
+      const prefix = 'RPCM_RESCUE_V1:' + ORIGIN + ':'; if (!key.startsWith(prefix)) return null;
+      const rest = key.slice(prefix.length), split = rest.indexOf(':'); if (split < 0) return null;
+      const role = rest.slice(0,split), id = rest.slice(split+1);
+      return id && ['room','library','previous-room','previous-library'].includes(role) ? {role,id,kind:role.replace(/^previous-/, '')} : null;
+    }
+    function parseRows(raw) {
+      if (raw === null || raw === undefined) return [];
+      const rows = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (!Array.isArray(rows) || rows.some(row=>!row || typeof row !== 'object' || Array.isArray(row))) throw new Error('기록 형식 손상: 원본을 빈 목록으로 덮어쓰지 않습니다.');
+      return clone(rows);
+    }
+    async function validateRescue(key,value) {
+      const role = rescueRole(key); if (!role || !validator) throw new Error('비상본 검증 연결을 확인하지 못했습니다.');
+      const entry = typeof value === 'string' ? JSON.parse(value) : value;
+      await validator(entry,role.kind,role.id);
+    }
+    async function openDB() {
+      if (!dbPromise) dbPromise = new Promise((resolve,reject)=>{
+        const request = indexedDB.open(DB_NAME,1);
+        request.onupgradeneeded = () => { const db=request.result; if(!db.objectStoreNames.contains('archives'))db.createObjectStore('archives',{keyPath:'id'}); };
+        request.onerror = () => reject(request.error || new Error('기록 저장소 열기 실패'));
+        request.onblocked = () => reject(new Error('다른 탭이 기록 저장소 열기를 막고 있습니다.'));
+        request.onsuccess = () => { const db=request.result; db.onversionchange=()=>{db.close();dbPromise=null;for(const row of cache.values()){row.state='unloaded';announce(row);}};resolve(db); };
+      }).catch(error=>{dbPromise=null;throw error;});
+      return dbPromise;
+    }
+    function recordID(key) { return ORIGIN + ':' + installation() + ':' + key; }
+    async function readRecord(key) {
+      const db=await openDB(); return new Promise((resolve,reject)=>{
+        const tx=db.transaction('archives','readonly'), request=tx.objectStore('archives').get(recordID(key)); let value;
+        request.onsuccess=()=>{value=request.result;};
+        tx.oncomplete=()=>resolve(value || null); tx.onabort=()=>reject(tx.error||new Error('기록 읽기 중단'));tx.onerror=()=>reject(tx.error||new Error('기록 읽기 실패'));
+      });
+    }
+    async function writeRecord(key,value,verification='full') {
+      const rawDigest=await digest(value), record={id:recordID(key),origin:ORIGIN,installation:installation(),key,value,digest:rawDigest,at:now()};
+      const db=await openDB(); await new Promise((resolve,reject)=>{
+        const tx=db.transaction('archives','readwrite');tx.objectStore('archives').put(record);
+        tx.oncomplete=resolve;tx.onabort=()=>reject(tx.error||new Error('기록 저장 중단'));tx.onerror=()=>reject(tx.error||new Error('기록 저장 실패'));
+      });
+      if(verification==='none')return record;
+      const readback=await readRecord(key);
+      if(!readback||!equal(readback,record))throw new Error('기록 저장 재읽기 불일치');
+      return readback;
+    }
+    const REF_MEMORY_CACHE_INDEX='RPCM_RUNTIME_REF_MEMORY_CACHE_INDEX_V1',REF_MEMORY_CACHE_PREFIX='RPCM_RUNTIME_REF_MEMORY_CACHE_V1:';
+    function isRefinerCacheKey(key){return key===REF_MEMORY_CACHE_INDEX||String(key||'').startsWith(REF_MEMORY_CACHE_PREFIX);}
+    function assertRefinerCacheKey(key){if(!isRefinerCacheKey(key))throw new Error('응답교정 임시 캐시 키 범위 오류');return String(key);}
+    async function refinerCacheRead(key){
+      key=assertRefinerCacheKey(key);const record=await readRecord(key);if(!record)return null;
+      if(record.origin!==ORIGIN||record.installation!==installation()||record.key!==key||record.id!==recordID(key)||await digest(record.value)!==record.digest)throw new Error('응답교정 임시 캐시 무결성 불일치');
+      return record.value;
+    }
+    async function refinerCacheWrite(key,value){key=assertRefinerCacheKey(key);await writeRecord(key,value,'none');return value;}
+    async function refinerCacheDelete(key){
+      key=assertRefinerCacheKey(key);const db=await openDB();await new Promise((resolve,reject)=>{
+        const tx=db.transaction('archives','readwrite');tx.objectStore('archives').delete(recordID(key));
+        tx.oncomplete=resolve;tx.onabort=()=>reject(tx.error||new Error('응답교정 임시 캐시 삭제 중단'));tx.onerror=()=>reject(tx.error||new Error('응답교정 임시 캐시 삭제 실패'));
+      });
+      if(await readRecord(key))throw new Error('응답교정 임시 캐시 삭제 재읽기 불일치');
+    }
+    async function refinerCacheKeys(){
+      const db=await openDB(),owner=installation();return new Promise((resolve,reject)=>{
+        const keys=[],tx=db.transaction('archives','readonly'),request=tx.objectStore('archives').openCursor();
+        request.onsuccess=()=>{const cursor=request.result;if(!cursor)return;const record=cursor.value;if(record?.origin===ORIGIN&&record?.installation===owner&&isRefinerCacheKey(record.key))keys.push(String(record.key));cursor.continue();};
+        tx.oncomplete=()=>resolve(keys);tx.onabort=()=>reject(tx.error||new Error('응답교정 임시 캐시 목록 읽기 중단'));tx.onerror=()=>reject(tx.error||new Error('응답교정 임시 캐시 목록 읽기 실패'));
+      });
+    }
+    async function verifiedRecord(key) {
+      const record=await readRecord(key);
+      if (!record || record.origin!==ORIGIN || record.installation!==installation() || record.key!==key || record.id!==recordID(key) || await digest(record.value)!==record.digest) throw new Error('이전한 기록이 없거나 손상됐습니다. 외부 백업을 복원하세요. 빈 목록을 저장하지 않습니다.');
+      parseRows(record.value); return record;
+    }
+    function base64(data) { let result=''; for(let i=0;i<data.length;i+=24576)result+=btoa(String.fromCharCode(...data.subarray(i,i+24576))); return result; }
+    function unbase64(text) {
+      if (typeof text!=='string' || text.length>LIMIT*2 || !/^[A-Za-z0-9+/]*={0,2}$/.test(text)) throw new Error('압축 데이터 형식/크기 오류');
+      const binary=atob(text), out=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)out[i]=binary.charCodeAt(i);return out;
+    }
+    async function readStream(stream,maximum) {
+      const reader=stream.getReader(), chunks=[];let size=0;
+      try { while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>maximum)throw new Error('압축 해제 처리 한도를 넘습니다.');chunks.push(value);} }
+      catch(error){await reader.cancel().catch(()=>{});throw error;}
+      const result=new Uint8Array(size);let offset=0;for(const chunk of chunks){result.set(chunk,offset);offset+=chunk.length;}return result;
+    }
+    async function packUnlocked(key,value) {
+      const text=encode(value), data=new TextEncoder().encode(text);
+      if (data.length>LIMIT) throw new Error('항목이 처리 한도 128MiB를 넘습니다.');
+      if (typeof CompressionStream!=='function' || typeof DecompressionStream!=='function') throw new Error('브라우저 무손실 압축 API 미지원');
+      const start=performance.now(), compressed=await readStream(new Blob([data]).stream().pipeThrough(new CompressionStream('gzip')),LIMIT);
+      const packed={format:'RPCM_RESCUE_PACK_V2',origin:ORIGIN,installation:installation(),key,codec:'gzip-json',rawBytes:data.length,digest:await digest(value),body:base64(compressed)};
+      const serialized=JSON.stringify(packed); await unpackUnlocked(key,serialized);
+      return {serialized,rawBytes:bytes(typeof value==='string'?value:JSON.stringify(value)),packedBytes:bytes(serialized),packMs:performance.now()-start};
+    }
+    async function unpackUnlocked(key,raw) {
+      const packed=typeof raw==='string'?JSON.parse(raw):raw;
+      if (packed?.format!=='RPCM_RESCUE_PACK_V2' || packed.origin!==ORIGIN || packed.installation!==installation(false) || packed.key!==key || packed.codec!=='gzip-json' || !Number.isInteger(packed.rawBytes) || packed.rawBytes<0 || packed.rawBytes>LIMIT) throw new Error('압축 비상본 역할/설치/원문 크기 불일치');
+      if(typeof DecompressionStream!=='function')throw new Error('브라우저 압축 해제 API 미지원');
+      const data=await readStream(new Blob([unbase64(packed.body)]).stream().pipeThrough(new DecompressionStream('gzip')),Math.min(LIMIT,packed.rawBytes));
+      if(data.length!==packed.rawBytes)throw new Error('압축 비상본 원문 크기 불일치');
+      const value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(data)).value;
+      if(await digest(value)!==packed.digest)throw new Error('압축 비상본 원문 무결성 불일치');
+      await validateRescue(key,value);return value;
+    }
+    function pack(key,value) {return codec(()=>packUnlocked(key,value));}
+    function unpack(key,raw) {return codec(()=>unpackUnlocked(key,raw));}
+    async function readRescue(key) {
+      const role=rescueRole(key);
+      if(role?.role.startsWith('previous-')){
+        const currentKey='RPCM_RESCUE_V1:'+ORIGIN+':'+role.kind+':'+role.id,pending=await rotationValue(currentKey);
+        if(pending){const current=await readRescue(currentKey),entry=typeof current==='string'?JSON.parse(current):current;if(entry?.hash===pending.intendedHash)return pending.value;}
+      }
+      const row=readRoute(key);
+      if(!row || row.target==='legacy'){
+        const value=await GM_getValue(key,null);if(value!==null || row)return value;
+        const orphan=role?await GM_getValue(PACK_PREFIX+role.role+':'+role.id,null):null;
+        return orphan===null?null:unpack(key,orphan);
+      }
+      if(row.target!=='pack')throw new Error('비상본 저장 경로 불일치');
+      await lineage(row);const raw=await GM_getValue(row.targetKey,null);if(raw===null)throw new Error('압축 비상본이 없습니다. 외부 백업을 복원하세요.');
+      return unpack(key,raw);
+    }
+    async function writeRescue(key,value,expected,freshCheck) {
+      const initial=readRoute(key),size=bytes(typeof value==='string'?value:JSON.stringify(value));
+      if((!initial || initial.target==='legacy')&&(size<1048576||typeof CompressionStream!=='function'||typeof DecompressionStream!=='function')){
+        const prior=await GM_getValue(key,null);if(expected!==undefined&&!equal(prior,expected))throw new Error('다른 탭이 비상본을 변경했습니다.');
+        if(freshCheck)await freshCheck();await GM_setValue(key,value);
+        if(!equal(await GM_getValue(key,null),value))throw new Error('비상 보관본 저장 확인 실패');return;
+      }
+      return locked(async()=>{
+        const row=readRoute(key);
+        if(!row || row.target==='legacy'){
+          const prior=await GM_getValue(key,null);if(expected!==undefined&&!equal(prior,expected))throw new Error('다른 탭이 비상본을 변경했습니다.');
+          const role=rescueRole(key),result=await pack(key,value),targetKey=PACK_PREFIX+role.role+':'+role.id;
+          if(freshCheck)await freshCheck();await GM_setValue(targetKey,result.serialized);
+          if(await GM_getValue(targetKey,null)!==result.serialized||!equal(await unpack(key,result.serialized),value))throw new Error('압축 비상본 저장 확인 실패');
+          const sourceDigest=await digest(prior),base=row||{format:'RPCM_STORAGE_ROUTE_V11',origin:ORIGIN,installation:installation(),key};
+          await writeRoute({...base,target:'pack',targetKey,sourceDigest,cleaned:prior===null,cleanupPending:false,rollbackPendingDigest:null,at:now(),targetDigest:await digest(value)});return;
+        }
+        if(row.target!=='pack')throw new Error('비상본 저장 경로 불일치');
+        if(row.rollbackPendingDigest)throw new Error('저장방식 복원이 중단됐습니다. 기존 저장방식으로 복원을 다시 실행하세요.');
+        const before=await readRescue(key);if(expected!==undefined&&!equal(before,expected))throw new Error('다른 탭이 압축 비상본을 변경했습니다.');
+        const result=await pack(key,value);await lineage(row);if(freshCheck)await freshCheck();
+        const oldTarget=await GM_getValue(row.targetKey,null);
+        await GM_setValue(row.targetKey,result.serialized);
+        if(await GM_getValue(row.targetKey,null)!==result.serialized || !equal(await unpack(key,result.serialized),value))throw new Error('압축 비상본 저장 확인 실패');
+        // A stale legacy writer never gets silently preferred, even after successful packing.
+        try{await lineage(row);}catch(error){if(oldTarget!==null){await GM_setValue(PREFIX+'conflict:'+encodeURIComponent(key)+':'+Date.now(),oldTarget);}throw error;}
+        await writeRoute({...row,at:now(),targetDigest:await digest(value)});
+      });
+    }
+    function rotationKey(key) {return PREFIX+'rotation:'+encodeURIComponent(key);}
+    async function rotationValue(key) {
+      const raw=await GM_getValue(rotationKey(key),null);if(raw===null)return null;
+      const row=typeof raw==='string'?JSON.parse(raw):raw;
+      if(row?.format!=='RPCM_RESCUE_ROTATION_V11'||row.origin!==ORIGIN||row.installation!==installation()||row.key!==key)throw new Error('비상본 교체 복구 표지 손상');
+      const value=row.codec==='gzip-json'?await unpack(key,row.body):row.codec==='plain-json'?JSON.parse(row.body).value:undefined;
+      if(value===undefined||await digest(value)!==row.digest)throw new Error('비상본 교체 복구 원문 손상');await validateRescue(key,value);
+      return {...row,value,raw};
+    }
+    async function finishRotation(key) {
+      const pending=await rotationValue(key);if(!pending)return;
+      const current=await readRescue(key),entry=typeof current==='string'?JSON.parse(current):current,prior=typeof pending.value==='string'?JSON.parse(pending.value):pending.value,role=rescueRole(key);
+      if(entry?.hash===pending.intendedHash){const previousKey='RPCM_RESCUE_V1:'+ORIGIN+':previous-'+role.kind+':'+role.id;await writeRescue(previousKey,pending.value);}
+      else if(entry?.hash!==prior.hash)throw new Error('중단된 비상본 교체와 현재 자료가 다릅니다. 양쪽을 보존합니다.');
+      if(!equal(GM_getValue(rotationKey(key),null),pending.raw))throw new Error('다른 탭이 교체 복구본을 바꿨습니다.');
+      await GM_deleteValue(rotationKey(key));if(GM_getValue(rotationKey(key),null)!==null)throw new Error('교체 복구본 마무리 확인 실패');
+    }
+    async function protectRotation(key,value,intendedHash) {
+      await finishRotation(key);await validateRescue(key,value);
+      let codec='plain-json',body=encode(value);
+      if(typeof CompressionStream==='function'&&typeof DecompressionStream==='function'){codec='gzip-json';body=(await pack(key,value)).serialized;}
+      const row={format:'RPCM_RESCUE_ROTATION_V11',origin:ORIGIN,installation:installation(),key,intendedHash,codec,body,digest:await digest(value),at:now()},text=JSON.stringify(row);
+      await GM_setValue(rotationKey(key),text);if(GM_getValue(rotationKey(key),null)!==text||!equal((await rotationValue(key)).value,value))throw new Error('비상본 교체 복구본 저장 확인 실패');
+    }
+    function getCache(key) {
+      if(!cache.has(key)) { if(cache.size>=32){for(const [id,row]of cache){if(!queues.has(id)&&row.state!=='loading'){cache.delete(id);break;}}} cache.set(key,{state:'unloaded',rows:[],error:'',listeners:new Set()}); }
+      return cache.get(key);
+    }
+    function announce(row) { for(const listener of row.listeners)queueMicrotask(()=>{try{listener();}catch(_) {}}); }
+    function listen(key,listener) { const row=getCache(key);if(listener){row.listeners.clear();row.listeners.add(listener);}return row; }
+    const stamp = route => JSON.stringify([route.at,route.revision,route.targetDigest]);
+    function legacyRows(key,row,warning='',limit=10) {
+      try{const rows=parseRows(GM_getValue(key,null));row.state='ready';row.error=warning;row.rows=rows.slice(-limit);return clone(row.rows);}
+      catch(error){row.state='error';row.error=errorText(error);return clone(row.rows);}
+    }
+    async function loadMigrated(key,row,limit=10) {
+      const route=readRoute(key);if(!route || route.target==='legacy')return legacyRows(key,row,'',limit);
+      if(route.target!=='idb')throw new Error('기록 저장 경로 불일치');
+      await lineage(route);const record=await verifiedRecord(key);await lineage(route);
+      row.rows=parseRows(record.value).slice(-limit);row.routeStamp=stamp(route);row.state='ready';row.error='';return clone(row.rows);
+    }
+    function archiveRows(key,listener,limit=10) {
+      limit=Math.max(1,Math.floor(Number(limit)||10));const row=listen(key,listener);let route;
+      try{route=readRoute(key);}catch(error){row.state='error';row.error=errorText(error);return clone(row.rows);}
+      if(!route || route.target==='legacy')return legacyRows(key,row,route?.fallbackReason||'',limit);
+      if(row.state==='unloaded'||(row.state==='ready'&&row.routeStamp!==stamp(route))){row.state='loading';void locked(()=>loadMigrated(key,row,limit)).catch(error=>{row.state='error';row.error=errorText(error);}).finally(()=>announce(row));}
+      return clone(row.rows);
+    }
+    function archiveStatus(key) {const row=getCache(key);return {state:row.state,error:row.error,pending:queues.has(key)};}
+    function quarantine(key,raw) {
+      if(raw===null)return;
+      const slot=PREFIX+'invalid:'+encodeURIComponent(key);GM_setValue(slot,raw);
+      if(!equal(GM_getValue(slot,null),raw))throw new Error('손상 자료 격리 확인 실패');
+    }
+    function mutateArchive(key,mutator,listener,limit=10) {
+      limit=Math.max(1,Math.floor(Number(limit)||10));const row=listen(key,listener);let route;
+      try{route=readRoute(key);}catch(error){row.state='error';row.error=errorText(error);announce(row);return {error:row.error};}
+      if(!route || route.target==='legacy'){
+        try{const source=GM_getValue(key,null);let rows;try{rows=parseRows(source);}catch(error){quarantine(key,source);throw error;}
+          const next=mutator(clone(rows)).slice(-limit),text=JSON.stringify(next);parseRows(text);
+          if(!equal(GM_getValue(key,null),source))throw new Error('다른 탭이 기록을 변경했습니다.');
+          GM_setValue(key,text);if(GM_getValue(key,null)!==text)throw new Error('기록 저장 확인 실패');row.rows=clone(next);row.state='ready';row.error='';announce(row);return {};
+        }catch(error){row.state='error';row.error=errorText(error);announce(row);return {error:row.error};}
+      }
+      const work=(queues.get(key)||Promise.resolve()).catch(()=>{}).then(()=>locked(async()=>{
+        const current=readRoute(key);
+        if(!current || current.target==='legacy'){
+          const result=mutateArchive(key,mutator,listener,limit);if(result.error)throw new Error(result.error);return;
+        }
+        if(current.target!=='idb')throw new Error('기록 저장 경로 불일치');
+        if(current.rollbackPendingDigest)throw new Error('저장방식 복원이 중단됐습니다. 기존 저장방식으로 복원을 다시 실행하세요.');
+        await lineage(current);const record=await verifiedRecord(key),next=mutator(parseRows(record.value)).slice(-limit),text=JSON.stringify(next);
+        parseRows(text);await lineage(current);row.rows=clone(next);
+        try{await writeRecord(key,text);}catch(error){
+          // Fallback is allowed only after a verified current read under the lock.
+          // Missing/corrupt targets fail before this point and cannot become empty GM data.
+          await lineage(current);await GM_setValue(key,text);if(GM_getValue(key,null)!==text)throw new Error('IDB/GM 기록 저장 모두 실패: '+errorText(error));
+          const reason='기록 저장소 쓰기 실패로 GM 보관으로 복귀했습니다: '+errorText(error);
+          await writeRoute({...current,target:'legacy',cleaned:false,sourceDigest:await digest(text),at:now(),fallbackReason:reason});
+          row.rows=clone(next);row.state='ready';row.error=reason;return;
+        }
+        await lineage(current);
+        const updated=await writeRoute({...current,at:now(),revision:(Number(current.revision)||0)+1,targetDigest:await digest(text)});
+        row.rows=clone(next);row.routeStamp=stamp(updated);row.state='ready';row.error='';
+      })).catch(error=>{row.state='error';row.error='로컬 기록 보관 실패: '+errorText(error);}).finally(()=>{if(queues.get(key)===work)queues.delete(key);announce(row);});
+      queues.set(key,work);return {pending:true};
+    }
+    async function flushArchives() { await Promise.all([...queues.values()]); }
+    function listRoutes(includeLegacy=false,tolerateInvalid=false) {
+      const out=[];for(const key of GM_listValues()){if(key.startsWith(PREFIX+'route:')){let original=key;try{original=decodeURIComponent(key.slice((PREFIX+'route:').length));const row=readRoute(original);if(row && (includeLegacy||row.target!=='legacy'))out.push(row);}catch(error){if(!tolerateInvalid)throw error;out.push({key:original,target:'invalid',error:errorText(error)});}}}
+      return out;
+    }
+    async function targetValue(row) {
+      await lineage(row);
+      if(row.target==='pack')return readRescue(row.key);
+      if(row.target==='idb')return (await verifiedRecord(row.key)).value;
+      return GM_getValue(row.key,null);
+    }
+    async function scan(scopes) {
+      await flushArchives();return locked(async()=>{
+        const allowed=new Set(scopes||[]),items=[],errors=[],routes=listRoutes(false,true),badKeys=new Set(routes.filter(row=>row.error).map(row=>row.key));
+        errors.push(...routes.filter(row=>row.error).map(row=>({key:row.key,reason:row.error})));
+        for(const key of new Set([...GM_listValues(),...routes.filter(row=>!row.error).map(row=>row.key)])){
+          if(badKeys.has(key))continue;
+          const role=rescueRole(key),scope=archiveScope(key);if(!role && scope===null)continue;
+          if(scope!==null&&!allowed.has(scope)){errors.push({key,reason:'현재 origin의 방/분기를 입증하지 못해 보류'});continue;}
+          try{
+            const route=readRoute(key);
+            if(route && route.target!=='legacy'){await targetValue(route);items.push({key,already:true,route,rawBytes:0,packedBytes:0});continue;}
+            const value=GM_getValue(key,null);if(value===null)continue;
+            if(role){await validateRescue(key,value);const size=bytes(typeof value==='string'?value:JSON.stringify(value));
+              if(size<1048576){errors.push({key,reason:'1MiB 미만 비상본: 기존 표현 유지'});continue;}
+              const packed=await pack(key,value);
+              if(packed.packedBytes>size*.8){errors.push({key,reason:'총 포장 크기 절감이 20% 미만: 기존 표현 유지'});continue;}
+              items.push({key,value,sourceDigest:await digest(value),target:'pack',...packed});
+            }else{parseRows(value);items.push({key,value,sourceDigest:await digest(value),target:'idb',rawBytes:bytes(typeof value==='string'?value:JSON.stringify(value)),packedBytes:0});}
+          }catch(error){errors.push({key,reason:errorText(error)});}
+        }
+        return {format:'RPCM_STORAGE_PREFLIGHT_V11',origin:ORIGIN,installation:installation(),at:now(),items,errors};
+      });
+    }
+    function rollbackFile(preflight) {
+      return {format:'RPCM_STORAGE_ROLLBACK_V11',origin:ORIGIN,installation:installation(),at:now(),items:preflight.items.filter(item=>!item.already).map(item=>({key:item.key,value:item.value,digest:item.sourceDigest})),errors:preflight.errors};
+    }
+    async function apply(preflight) {
+      if(preflight?.format!=='RPCM_STORAGE_PREFLIGHT_V11'||preflight.origin!==ORIGIN||preflight.installation!==installation())throw new Error('이전 대상 소유권 불일치');
+      await flushArchives();return locked(async()=>{
+        const done=[],errors=[];
+        for(const item of preflight.items){try{
+          const existing=readRoute(item.key);if(existing&&existing.target!=='legacy'){await targetValue(existing);done.push({key:item.key,already:true});continue;}
+          const source=GM_getValue(item.key,null);if(await digest(source)!==item.sourceDigest)throw new Error('검사 후 원본이 바뀌었습니다. 다시 점검하세요.');
+          const row={format:'RPCM_STORAGE_ROUTE_V11',origin:ORIGIN,installation:installation(),key:item.key,target:item.target,sourceDigest:item.sourceDigest,cleaned:false,at:now(),phase:'target-verified'};
+          await GM_setValue(PREFIX+'journal:'+encodeURIComponent(item.key),JSON.stringify({...row,phase:'source-captured'}));
+          if(item.target==='pack'){
+            await validateRescue(item.key,source);row.targetKey=PACK_PREFIX+rescueRole(item.key).role+':'+rescueRole(item.key).id;
+            await GM_setValue(row.targetKey,item.serialized);
+            const reread=GM_getValue(row.targetKey,null);if(reread!==item.serialized || !equal(await unpack(item.key,reread),source))throw new Error('압축 저장/재읽기 검증 실패');
+          }else{parseRows(source);await writeRecord(item.key,source);}
+          await lineage(row);await writeRoute(row);
+          const rowCache=getCache(item.key);rowCache.state='unloaded';rowCache.error='';announce(rowCache);
+          await GM_setValue(PREFIX+'journal:'+encodeURIComponent(item.key),JSON.stringify({...row,phase:'source-kept'}));
+          done.push({key:item.key,target:item.target,rawBytes:item.rawBytes,packedBytes:item.packedBytes});
+        }catch(error){errors.push({key:item.key,reason:errorText(error)});}}
+        return {done,errors,sourceDeleted:false};
+      });
+    }
+    async function verifyRollback(file) {
+      if(file?.format!=='RPCM_STORAGE_ROLLBACK_V11'||file.origin!==ORIGIN||file.installation!==installation()||!Array.isArray(file.items))throw new Error('이 설치본의 적용 전 퇴피 JSON을 선택하세요.');
+      const map=new Map();for(const item of file.items){if(map.has(item.key))throw new Error('퇴피본에 중복 키가 있습니다.');if(await digest(item.value)!==item.digest)throw new Error('퇴피본 원문 검증 실패');map.set(item.key,item);}
+      return map;
+    }
+    async function cleanup(file,validateBeforeDelete=null) {
+      const verified=await verifyRollback(file);await flushArchives();return locked(async()=>{
+        const done=[],errors=[];for(const row of listRoutes(false,true)){try{
+          if(row.error)throw new Error(row.error);
+          if(row.cleaned)continue;const original=verified.get(row.key);if(!original||original.digest!==row.sourceDigest)throw new Error('퇴피 파일에서 이 항목의 원본을 확인하지 못했습니다.');
+          if(row.rollbackPendingDigest)throw new Error('저장방식 복원을 먼저 완료하세요.');
+          const source=await lineage(row);if(!(row.cleanupPending&&source===null)&&!equal(source,original.value))throw new Error('원본이 퇴피 파일과 다릅니다.');
+          const currentTarget=await targetValue(row);if(validateBeforeDelete)await validateBeforeDelete(row,currentTarget); // Verify the latest external backup while holding the existing migration lock.
+          await lineage(row);await writeRoute({...row,cleanupPending:true,at:now()});
+          await lineage(row);await GM_deleteValue(row.key);if(GM_getValue(row.key,null)!==null)throw new Error('기존 사본 정리 확인 실패');
+          try{await writeRoute({...row,cleaned:true,cleanupPending:false,at:now()});}catch(error){if(source!==null)await GM_setValue(row.key,source);throw error;}
+          done.push(row.key);
+        }catch(error){errors.push({key:row.key,reason:errorText(error)});}}
+        return {done,errors};
+      });
+    }
+    async function rollback() {
+      await flushArchives();return locked(async()=>{
+        const done=[],errors=[];for(const row of listRoutes(false,true)){try{
+          if(row.error)throw new Error(row.error);
+          const value=await targetValue(row);await lineage(row);
+          await writeRoute({...row,rollbackPendingDigest:await digest(value),at:now()});
+          await GM_setValue(row.key,value);if(!equal(GM_getValue(row.key,null),value))throw new Error('기존 방식 복원 저장 확인 실패');
+          await writeRoute({...row,target:'legacy',sourceDigest:await digest(value),cleaned:false,cleanupPending:false,rollbackPendingDigest:null,at:now()});
+          const rowCache=getCache(row.key);rowCache.state='unloaded';rowCache.error='';announce(rowCache);done.push(row.key);
+        }catch(error){errors.push({key:row.key,reason:errorText(error)});}}
+        return {done,errors,targetsKept:true};
+      });
+    }
+    async function backupExtension() {
+      await flushArchives();return optionalLock(async()=>{
+        const archives=[],rescues=[],metadata=[];const keys=GM_listValues();
+        for(const key of keys){const role=rescueRole(key),scope=archiveScope(key);
+          if(role){const value=await readRescue(key);if(value!==null){await validateRescue(key,value);rescues.push({key,value,digest:await digest(value)});}}
+          else if(scope!==null){const row=readRoute(key),value=row&&row.target!=='legacy'?await targetValue(row):GM_getValue(key,null);if(value!==null){parseRows(value);archives.push({key,value,digest:await digest(value)});}}
+          else if(key.startsWith('RPCM_RESCUE_V1:'+ORIGIN+':')){const value=GM_getValue(key,null);metadata.push({key,value,digest:await digest(value)});}
+        }
+        // Cleaned sources are absent from the GM enumeration, but their targets remain required.
+        for(const row of listRoutes())if(!archives.some(x=>x.key===row.key)&&!rescues.some(x=>x.key===row.key)){
+          const value=await targetValue(row),entry={key:row.key,value,digest:await digest(value)};(row.target==='idb'?archives:rescues).push(entry);
+        }
+        for(const key of keys.filter(key=>key.startsWith(PACK_PREFIX))){const original='RPCM_RESCUE_V1:'+ORIGIN+':'+key.slice(PACK_PREFIX.length);if(rescueRole(original)&&!rescues.some(row=>row.key===original)){const value=await readRescue(original);if(value!==null){await validateRescue(original,value);rescues.push({key:original,value,digest:await digest(value)});}}}
+        return {format:'RPCM_STORAGE_BACKUP_V11',origin:ORIGIN,at:now(),archives,rescues,metadata,apiKeysIncluded:false};
+      });
+    }
+    async function importExtension(extension,selection,validateOnly=false) {
+      if(!extension)return {count:0};
+      if(extension.format!=='RPCM_STORAGE_BACKUP_V11'||extension.origin!==ORIGIN)throw new Error('저장소 확장 백업의 사이트/형식 불일치');
+      const rooms=new Set(selection.roomIds.map(String)),libraries=new Set(selection.libraryIds.map(String));
+      const chosen=[];
+      for(const item of [...(extension.archives||[]),...(extension.rescues||[]),...(extension.metadata||[])]){
+        const role=rescueRole(item.key),scope=archiveScope(item.key),prefix='RPCM_RESCUE_V1:'+ORIGIN+':';
+        if(!role&&scope===null&&!item.key.startsWith(prefix))throw new Error('허용하지 않은 확장 백업 키');
+        if(await digest(item.value)!==item.digest)throw new Error('확장 백업 원문 무결성 불일치');
+        if(role){await validateRescue(item.key,item.value);if((role.kind==='room'?rooms:libraries).has(role.id))chosen.push(item);}
+        else if(scope!==null){parseRows(item.value);if([...rooms].some(id=>scope==='chat:'+id))chosen.push(item);}
+        else if(/^deleted-(room|library):/.test(item.key.slice(prefix.length))){const tail=item.key.slice(prefix.length),kind=tail.startsWith('deleted-room:')?'room':'library',id=tail.slice(('deleted-'+kind+':').length),value=typeof item.value==='string'?JSON.parse(item.value):item.value;
+          if(value?.format!=='RPCM_RESCUE_DELETION_V1'||value.origin!==ORIGIN||value.kind!==kind||value.id!==id||typeof value.deleted!=='boolean')throw new Error('백업 삭제 표시 형식 불일치');
+          if((kind==='room'?rooms:libraries).has(id))chosen.push(item);}
+        // Full index/quarantine is carried by backup, but not merged over another selection's live index.
+      }
+      if(validateOnly)return {count:chosen.length};
+      await flushArchives();return optionalLock(async()=>{
+        let count=0;for(const item of chosen){
+          let row=null;try{row=readRoute(item.key);}catch(error){const raw=GM_getValue(routeKey(item.key),null);quarantine(routeKey(item.key),raw);row={format:'RPCM_STORAGE_ROUTE_V11',origin:ORIGIN,installation:installation(),key:item.key,target:'legacy',sourceDigest:item.digest,cleaned:false};}
+          await GM_setValue(item.key,item.value);if(!equal(GM_getValue(item.key,null),item.value))throw new Error('확장 백업 복원 확인 실패');
+          if(row)await writeRoute({...row,target:'legacy',sourceDigest:item.digest,cleaned:false,cleanupPending:false,rollbackPendingDigest:null,at:now()});
+          const rowCache=getCache(item.key);rowCache.state='unloaded';rowCache.error='';announce(rowCache);count++;
+        }return {count};
+      });
+    }
+    async function usage() {
+      const categories={packedCurrent:0,packedPrevious:0,retainedSources:0,controls:0},routes=listRoutes(),allRoutes=listRoutes(true),errors=[];let records=0,logicalBytes=0,activeRecords=0,activeBytes=0;
+      for(const key of GM_listValues()){
+        try{const value=GM_getValue(key,null);if(value===null)continue;const size=bytes(typeof value==='string'?value:JSON.stringify(value));
+          if(key.startsWith(PACK_PREFIX))categories[key.slice(PACK_PREFIX.length).startsWith('previous-')?'packedPrevious':'packedCurrent']+=size;
+          else if(key.startsWith(PREFIX)||key==='RPCM_STORAGE_INSTALL_V11')categories.controls+=size;
+          else if(routes.some(row=>row.key===key&&!row.cleaned))categories.retainedSources+=size;
+        }catch(error){errors.push(errorText(error));}
+      }
+      try{const id=GM_getValue('RPCM_STORAGE_INSTALL_V11',null);let exists=allRoutes.some(row=>row.target==='idb'||row.target==='legacy'&&archiveScope(row.key)!==null);
+        if(id&&typeof indexedDB.databases==='function')exists=(await indexedDB.databases()).some(db=>db.name===DB_NAME);
+        if(id&&exists){const db=await openDB();await new Promise((resolve,reject)=>{const tx=db.transaction('archives','readonly'),request=tx.objectStore('archives').openCursor();request.onsuccess=()=>{const cursor=request.result;if(!cursor)return;const record=cursor.value;if(record.origin===ORIGIN&&record.installation===id){const size=bytes(JSON.stringify(record));records++;logicalBytes+=size;if(routes.some(row=>row.target==='idb'&&row.key===record.key)){activeRecords++;activeBytes+=size;}}cursor.continue();};tx.oncomplete=resolve;tx.onabort=()=>reject(tx.error||new Error('보조 기록 계측 중단'));tx.onerror=()=>reject(tx.error||new Error('보조 기록 계측 실패'));});}
+      }catch(error){errors.push(errorText(error));}
+      for(const row of routes.filter(row=>row.target==='idb'))try{await verifiedRecord(row.key);}catch(error){errors.push(errorText(error));}
+      return {categories,auxiliary:{records,logicalBytes,activeRecords,activeBytes,retainedRecords:records-activeRecords,retainedBytes:logicalBytes-activeBytes},routeCount:routes.length,errors,metric:'logical UTF-8 bytes; retainedSources overlap legacy GM categories'};
+    }
+    return {configure:fn=>{validator=fn;},archiveRows,archiveStatus,mutateArchive,flushArchives,readRescue,writeRescue,scan,rollbackFile,apply,cleanup,rollback,backupExtension,importExtension,usage,
+      refinerCacheRead,refinerCacheWrite,refinerCacheDelete,refinerCacheKeys,isRefinerCacheKey,
+      // Pure helpers are also used by the isolated native regression harness.
+      digest,pack,unpack,readRoute,listRoutes,protectRotation,finishRotation};
+})();
+
+
+// Private to the two WRPM closures. No page bridge, network calls or API key export.
+const wrpmFullBackupV2 = (() => {
+  const FORMAT='WRPM_FULL_STORAGE_V2',ORIGIN=location.origin,AUX='RPCM_AuxStorage_v1';
+  const PROCESS_LIMIT=128*1024*1024,RECEIPT='RPCM_full_backup_verified_v2',JOURNAL='RPCM_full_restore_journal_v2';
+  const RESERVED=new Set(['RPCM_STORAGE_INSTALL_V11',RECEIPT,JOURNAL,'RPCM_global_ai_memory_notice_policy_v1','RPCM_legacy_per_room_policy_before_global_v1']);
+  let hooks=null,busy=false,proof=null,cleanupProof=null;const files=new WeakMap();
+  const clone=value=>structuredClone(value),errorText=error=>String(error?.message||error);
+  const secretKey=key=>/^(RPCM_ai_secret_v1:|wish-firebase-appcheck-debug-token:)/.test(key)||/^wish-rp-core-response-refiner-(gemini-key|firebase-config|connection-state)-/.test(key)||/(?:^|[-_:])(?:api[_-]?keys?|private[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|api[_-]?secret|bearer[_-]?token|oauth[_-]?token|authorization|(?:gemini|openai|deepseek)[_-]?key)(?:[-_:]|$)/i.test(key);
+  const ownedLocal=key=>/^(RPCM_|rpcm-|rpcm_|WISH_RP_|wish-rp-core-response-refiner-|wish-operation-errors-v1)/.test(key);
+  const volatileLocal=key=>/^(rpcm_long_term_lock_|crack_ext_auto_memory_lock_|RPCM_response_review_gate_|RPCM_carrier_utf16_refused_v1$|wish-rp-core-response-refiner-processed:|wish-rp-auto-observed|RPCM_full_)/.test(key);
+  const portableGM=key=>!secretKey(key)&&!RESERVED.has(key)&&/^(RPCM_(?:carrier_encoding_global_v1$|ai_summary_(?:settings|usage)_v1$|semantic_quota_v1:)|WISH_RP_(?:ai_settings_v1|cognition_settings_v1)$|wish-rp-core-response-refiner-settings-v3$|wish-rp-response-review-result-v1:|wish-operation-errors-v1$)/.test(key);
+  const portableLocal=key=>ownedLocal(key)&&!secretKey(key)&&!volatileLocal(key)&&!/^RPCM_pending_backup_/.test(key);
+  const plain=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
+  // Credential values remain in browser storage; backup/restore never transports them.
+  const credentialField=key=>/(?:api[_-]?keys?|access[_-]?token|refresh[_-]?token|private[_-]?key|client[_-]?secret|service[_-]?account(?:json)?|app[_-]?check[_-]?debug[_-]?token)$/i.test(key)||/^(credentials?|firebaseConfig|authorization|bearer[_-]?token|oauth[_-]?token|api[_-]?secret|(?:gemini|openai|deepseek)[_-]?key)$/i.test(key);
+  const encodedSettingsField=key=>/(?:config|settings|credentials?|authentication|connection)$/i.test(key);
+  const settingsRecord=key=>/settings|cognition/i.test(key)&&!/^RPCM_RESCUE_V1:/.test(key);
+  const text=value=>JSON.stringify(value,(_key,item)=>plain(item)?Object.fromEntries(Object.keys(item).sort().map(key=>[key,item[key]])):item);
+  async function fingerprint(serialized){
+    if(serialized===undefined)throw Error('직렬화할 수 없는 저장값');
+    const bytes=new TextEncoder().encode(serialized);if(bytes.length>PROCESS_LIMIT)throw Error('백업 묶음의 128MiB 처리 한도를 넘었습니다. 원문은 변경하지 않았습니다.');
+    return {sha256:[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(n=>n.toString(16).padStart(2,'0')).join(''),bytes:bytes.length};
+  }
+  async function digest(value){return (await fingerprint(text(value))).sha256;}
+  function check(){if(!hooks)throw Error('전체 백업 연결이 준비되지 않았습니다.');}
+  async function operation(work){check();if(busy)throw Error('백업·검증·복원 작업이 진행 중입니다.');busy=true;try{return await work();}finally{busy=false;}}
+  function managedMap(extension){const map=new Map();for(const kind of ['archives','rescues','metadata'])for(const [index,row]of (extension?.[kind]||[]).entries())map.set(row.key,{kind,index,value:row.value});return map;}
+  function refValue(row,payload){if(!row.ref)return row.value;const value=payload.storageMaintenance?.[row.ref.kind]?.[row.ref.index];if(!value||value.key!==row.ref.key)throw Error('백업 참조 대상 불일치');return value.value;}
+  function gmRows(payload){return payload.storageSnapshot.sections.gm.map(row=>({key:row.key,value:refValue(row,payload)}));}
+  function auxRows(payload){return payload.storageSnapshot.sections.aux.map(row=>row.valueRef?{...Object.fromEntries(Object.entries(row).filter(([key])=>key!=='valueRef')),value:refValue({ref:row.valueRef},payload)}:row);}
+  function rejectSettingsSecrets(value,path='',decode=true){
+    if(typeof value==='string'){if(!decode)return;try{value=JSON.parse(value);}catch{return;}}
+    if(!value||typeof value!=='object')return;
+    for(const [key,item]of Object.entries(value)){
+      if(key==='__proto__')throw Error('옵션 객체의 허용하지 않은 제어 키');
+      if(credentialField(key)&&item!==''&&item!==null&&item!==false)throw Error('백업 인증정보는 복원하지 않습니다: '+path+key);
+      if(item&&typeof item==='object'||typeof item==='string'&&encodedSettingsField(key))rejectSettingsSecrets(item,path+key+'.',encodedSettingsField(key));
+    }
+  }
+  function redactDiagnostic(value,extra=[]){
+    const secrets=new Set();
+    const collect=input=>{
+      if(typeof input==='string'){if(!input)return;try{const parsed=JSON.parse(input);if(parsed&&typeof parsed==='object'){collect(parsed);return;}}catch(_){}secrets.add(input);return;}
+      if(!input||typeof input!=='object')return;
+      if(input.version===2&&typeof input.value==='string')secrets.add(input.value);
+      for(const [key,item]of Object.entries(input))if(credentialField(key)&&typeof item==='string'&&item)secrets.add(item);else if(item&&typeof item==='object')collect(item);
+    };
+    try{for(const key of GM_listValues())if(secretKey(key))collect(GM_getValue(key,null));}catch(_){}
+    try{for(const item of hooks?.credentialValues?.()||[])collect(item);}catch(_){}
+    for(const item of extra)collect(item);
+    let output=String(value||'');for(const secret of [...secrets].filter(Boolean).sort((a,b)=>b.length-a.length))output=output.split(secret).join('[인증값 숨김]');return output;
+  }
+  function settingsWithoutCredentials(value){
+    let parsed=value,string=false,diagnosticChanges=0;const removed=[];
+    if(typeof value==='string'){try{parsed=JSON.parse(value);string=true;}catch{return {value,removed};}}
+    const walk=(input,path='',decode=false)=>{
+      if(typeof input==='string'&&path.startsWith('featureStatus.')&&/(?:message|detail|error|stack)\.$/.test(path)){const safe=redactDiagnostic(input);if(safe!==input)diagnosticChanges++;input=safe;}
+      if(typeof input==='string'&&decode){
+        let nested;try{nested=JSON.parse(input);}catch{return input;}
+        if(!nested||typeof nested!=='object')return input;
+        const count=removed.length+diagnosticChanges,clean=walk(nested,path);return removed.length+diagnosticChanges===count?input:JSON.stringify(clean);
+      }
+      if(Array.isArray(input))return input.map((item,index)=>walk(item,path+index+'.'));
+      if(!plain(input))return input;
+      const out={};for(const [key,item]of Object.entries(input)){
+        if(credentialField(key)&&item!==''&&item!==null&&item!==false){removed.push(path+key);continue;}
+        Object.defineProperty(out,key,{value:walk(item,path+key+'.',encodedSettingsField(key)),enumerable:true,writable:true,configurable:true});
+      }return out;
+    };
+    const output=walk(parsed);return {value:removed.length||diagnosticChanges?(string?JSON.stringify(output):output):value,removed};
+  }
+  function credentialSafeRows(rows){
+    return rows.filter(row=>!secretKey(row.key)).map(row=>settingsRecord(row.key)?{...row,value:settingsWithoutCredentials(row.value).value}:row);
+  }
+  function credentialSafeRecoveryValue(value){
+    if(!Array.isArray(value))return value;
+    const out=[];
+    for(const row of value){
+      if(row?.format==='WRPM_RECOVERED_RAW_V2'&&['GM','localStorage'].includes(row.sourceStore)){
+        if(secretKey(row.sourceKey))continue;
+        out.push(settingsRecord(row.sourceKey)?{...row,original:settingsWithoutCredentials(row.original).value}:row);
+      }else out.push(row);
+    }return out;
+  }
+  async function credentialSafeAuxRows(rows){
+    const out=[];
+    for(const row of rows){
+      if(secretKey(row.key))continue;
+      const value=credentialSafeRecoveryValue(row.value);
+      if(Array.isArray(row.value)&&row.value.length&&!value.length)continue;
+      if(text(value)===text(row.value)){out.push(row);continue;}
+      const key=row.key.startsWith('WRPM_RECOVERY_V2:')?'WRPM_RECOVERY_V2:'+await digest({store:'aux',key:row.key,value}):row.key;
+      out.push({...row,key,value,digest:await wrpmStorageMaintenanceV11.digest(value)});
+    }return out;
+  }
+  async function readAux(){
+    return new Promise((resolve,reject)=>{
+      let absent=false,db=null,settled=false;
+      const finish=(error,value)=>{if(settled)return;settled=true;clearTimeout(timer);db?.close();error?reject(error):resolve(value);};
+      const timer=setTimeout(()=>finish(Error('보조 저장소 읽기 시간 초과')),10000);
+      let req;try{req=indexedDB.open(AUX);}catch(error){finish(error);return;}
+      req.onupgradeneeded=()=>{absent=true;req.transaction.abort();};
+      req.onerror=()=>absent?finish(null,{status:'absent',records:[]}):finish(req.error||Error('보조 저장소 열기 실패'));
+      req.onblocked=()=>finish(Error('다른 탭이 보조 저장소 읽기를 막고 있습니다.'));
+      req.onsuccess=()=>{
+        db=req.result;if(settled){db.close();return;}db.onversionchange=()=>finish(Error('보조 저장소 버전이 바뀌었습니다.'));
+        if(!db.objectStoreNames.contains('archives')){finish(Error('보조 저장소 구조 불일치'));return;}
+        try{const tx=db.transaction('archives','readonly'),get=tx.objectStore('archives').getAll();let records;
+          get.onsuccess=()=>records=get.result;
+          tx.oncomplete=()=>{if(!Array.isArray(records)){finish(Error('보조 저장소 읽기 결과 불일치'));return;}records=records.filter(row=>!wrpmStorageMaintenanceV11.isRefinerCacheKey(row?.key));finish(null,{status:records.length?'ok':'empty',records});};
+          tx.onabort=()=>finish(tx.error||Error('보조 저장소 읽기 중단'));tx.onerror=()=>finish(tx.error||Error('보조 저장소 읽기 실패'));
+        }catch(error){finish(error);}
+      };
+    });
+  }
+  async function readStores(){
+    const gm=[],local=[],excluded=[];
+    const keys=await GM_listValues();if(!Array.isArray(keys))throw Error('GM 목록 읽기 실패');
+    for(const key of [...keys].sort()){
+      if(typeof key!=='string')throw Error('GM 키 형식 오류');
+      if(secretKey(key)||[RECEIPT,JOURNAL].includes(key)){excluded.push({store:'GM',key,reason:secretKey(key)?'credential':'operation-receipt'});continue;}
+      let value=await GM_getValue(key,undefined);if(value===undefined)throw Error('GM 열거 이후 값이 사라졌습니다: '+key);
+      if(settingsRecord(key)){const clean=settingsWithoutCredentials(value);value=clean.value;if(clean.removed.length)excluded.push({store:'GM',key,reason:'credential-fields',fields:clean.removed});}
+      gm.push({key,value});
+    }
+    for(let index=0;index<localStorage.length;index++){
+      const key=localStorage.key(index);if(!key||!ownedLocal(key))continue;
+      if(secretKey(key)||volatileLocal(key)){excluded.push({store:'localStorage',key,reason:secretKey(key)?'credential':'runtime-lock-or-gate'});continue;}
+      let value=localStorage.getItem(key);if(value===null)throw Error('localStorage 열거 이후 값이 사라졌습니다: '+key);
+      if(settingsRecord(key)){const clean=settingsWithoutCredentials(value);value=clean.value;if(clean.removed.length)excluded.push({store:'localStorage',key,reason:'credential-fields',fields:clean.removed});}
+      local.push({key,value});
+    }
+    local.sort((a,b)=>a.key.localeCompare(b.key));
+    const sessionMap=new Map(),sessionRetained=[];
+    for(let index=0;index<sessionStorage.length;index++){
+      const key=sessionStorage.key(index);if(!key?.startsWith('wish-rpcm-result-draft:'))continue;
+      const value=sessionStorage.getItem(key);if(value===null)throw Error('작업 초안 열거 이후 값이 사라졌습니다.');sessionMap.set(key,{key,value});
+    }
+    for(const row of hooks.readTransientDrafts?.()||[]){const prior=sessionMap.get(row.key);if(prior&&prior.value!==row.value)sessionRetained.push(prior);sessionMap.set(row.key,row);}
+    const session=[...sessionMap.values()].sort((a,b)=>a.key.localeCompare(b.key));
+    const core=await hooks.readCore(),aux=await readAux();
+    if(!Array.isArray(core.rooms)||!Array.isArray(core.characterLibraries))throw Error('메인 저장소 읽기 형식 오류');
+    return {core,gm,local,session,sessionRetained,aux:await credentialSafeAuxRows(aux.records),auxStatus:aux.status,excluded};
+  }
+  async function stamps(snapshot){const out={};for(const key of ['core','gm','local','session','sessionRetained','aux'])out[key]=await digest(snapshot[key]);return out;}
+  function validateCore(core){
+    const safeKeys=value=>{if(!value||typeof value!=='object')return;for(const [key,item]of Object.entries(value)){if(key==='__proto__')throw Error('자료 객체의 허용하지 않은 제어 키');safeKeys(item);}};
+    for(const [kind,id]of [['rooms','chatId'],['characterLibraries','scopeId']]){
+      if(!Array.isArray(core[kind]))throw Error('백업 '+kind+' 목록 형식 오류');const seen=new Set();
+      for(const row of core[kind]){if(!plain(row)||typeof row[id]!=='string'||!row[id]||seen.has(row[id]))throw Error('백업 '+kind+' 식별자 누락/중복');seen.add(row[id]);safeKeys(row);
+        if(kind==='rooms'){
+          if(!Array.isArray(row.slots)||row.slots.some(slot=>!plain(slot)||Object.prototype.hasOwnProperty.call(slot,'content')&&typeof slot.content!=='string'))throw Error('방 슬롯 원문 형식 오류: 자동 변환하지 않았습니다.');
+          const ids=new Set();for(const slot of row.slots){if(typeof slot.id!=='string'||!slot.id)continue;if(ids.has(slot.id))throw Error('방 슬롯 ID 중복: 원문을 합치거나 버리지 않았습니다.');ids.add(slot.id);}
+        }
+      }
+    }
+  }
+  async function upgradeLegacy(payload){
+    if(!payload?._rpContextManagerBackup||!Array.isArray(payload.rooms))throw Error('위시 RP Manager 백업 JSON이 아닙니다.');
+    if(payload.storageSnapshot){await validate(payload);return payload;}
+    if(payload.characterLibraries!==undefined&&!Array.isArray(payload.characterLibraries))throw Error('설정집 목록 형식이 올바르지 않습니다.');
+    const inputDigest=await digest(payload),data=clone(payload);
+    data.characterLibraries=data.characterLibraries||[];validateCore(data);
+    data.backupMode='legacy-import';data.version=String(data.version||'unknown');data.exportedAt=String(data.exportedAt||new Date().toISOString());
+    data.storageMaintenance=data.storageMaintenance??null;
+    data.importCompatibility={sourceKind:'legacy-rooms-and-libraries',sourceVersion:data.version,inputDigest,originalFileSignatureAvailable:false,missing:['global-options','API-credentials','GM-local-storage-snapshots']};
+    // In-memory envelope validates supplied data, not an invented original-file signature.
+    data.storageSnapshot={format:FORMAT,origin:ORIGIN,scope:'current-origin+userscript-GM+current-tab-drafts',complete:true,apiKeysIncluded:false,excluded:['legacy-file-has-no-global-storage-snapshot'],auxStatus:'absent',sections:{gm:[],local:[],session:[],sessionRetained:[],aux:[]},manifest:{}};
+    data.storageSnapshot.manifest=await manifest(data);await validate(data);return data;
+  }
+  async function create(){
+    await hooks.idle();let stable=null;
+    for(let attempt=0;attempt<3;attempt++){
+      let first=await readStores();const before=await stamps(first);first=null;
+      const extension=await wrpmStorageMaintenanceV11.backupExtension();
+      const after=await readStores(),afterStamp=await stamps(after);
+      if(text(before)===text(afterStamp)){stable={snapshot:after,extension};break;}
+    }
+    if(!stable)throw Error('수집 중 자료가 계속 바뀌었습니다. 전체 백업을 완료하지 않았습니다.');
+    const {snapshot,extension}=stable;validateCore(snapshot.core);
+    const refs=managedMap(extension),ref=(key,value)=>{const row=refs.get(key);return row&&(row.value===value||typeof value==='object'&&text(row.value)===text(value))?{kind:row.kind,index:row.index,key}:null;};
+    const gm=snapshot.gm.map(row=>{const r=ref(row.key,row.value);return r?{key:row.key,ref:r}:row;});
+    const aux=snapshot.aux.map(row=>{const r=ref(row.key,row.value);return r?{...Object.fromEntries(Object.entries(row).filter(([key])=>key!=='value')),valueRef:r}:row;});
+    const payload={_rpContextManagerBackup:true,version:hooks.version,exportedAt:new Date().toISOString(),...snapshot.core,storageMaintenance:extension,
+      storageSnapshot:{format:FORMAT,origin:ORIGIN,scope:'current-origin+userscript-GM+current-tab-drafts',complete:true,apiKeysIncluded:false,excluded:snapshot.excluded,auxStatus:snapshot.auxStatus,sections:{gm,local:snapshot.local,session:snapshot.session,sessionRetained:snapshot.sessionRetained,aux},manifest:{}}};
+    payload.storageSnapshot.manifest=await manifest(payload);
+    // Export must exclude credentials before a file is serialized. Import validation is separate.
+    for(const row of gmRows(payload))if(settingsRecord(row.key))rejectSettingsSecrets(row.value,row.key+'.');
+    for(const row of payload.storageSnapshot.sections.local)if(settingsRecord(row.key))rejectSettingsSecrets(row.value,row.key+'.');
+    await validate(payload);const serialized=JSON.stringify(payload);
+    if(new TextEncoder().encode(serialized).length>PROCESS_LIMIT)throw Error('전체 파일이 128MiB 처리 한도를 넘었습니다. 원문은 유지하며 불러올 수 없는 백업을 만들지 않았습니다.');
+    files.set(payload,serialized);return payload;
+  }
+  async function createRawPreimage(){
+    let snapshot=null;
+    for(let attempt=0;attempt<3;attempt++){
+      const first=await readStores(),before=await stamps(first),second=await readStores();
+      if(text(before)===text(await stamps(second))){snapshot=second;break;}
+    }
+    if(!snapshot)throw Error('현재 원형 자료가 수집 중 바뀌어 복원을 보류했습니다.');
+    const payload={format:'WRPM_RESTORE_PREIMAGE_RAW_V1',origin:ORIGIN,exportedAt:new Date().toISOString(),complete:true,apiKeysIncluded:false,
+      note:'손상된 현재 저장값을 변환하지 않고 보관한 복원 전 원형 퇴피입니다. 일반 전체 백업과 별도 형식입니다.',...snapshot.core,
+      rawStorage:{gm:snapshot.gm,local:snapshot.local,session:snapshot.session,sessionRetained:snapshot.sessionRetained,aux:snapshot.aux,excluded:snapshot.excluded}};
+    const serialized=JSON.stringify(payload);if(new TextEncoder().encode(serialized).length>PROCESS_LIMIT)throw Error('복원 전 원형 퇴피가 128MiB 처리 한도를 넘었습니다.');
+    files.set(payload,serialized);return payload;
+  }
+  function optionRoomScope(key){return key.match(/^(?:wish-rp-response-review-result-v1:chat:|RPCM_new_items_v1:|rpcm-person-selected:)(.+)$/)?.[1]||null;}
+  const globalLocalOption=key=>/^(?:RPCM_(?:guide_[\w]+|ai_full_guide_[\w]+|(?:ai_)?log_summary_guide_variant_v1|ai_summary_settings_v1|ui_preferences_v1|custom_accent_v1|custom_surface_v1|custom_surface_intensity_v1|palette_presets_v1(?::.*)?|modal_position_v1)|WISH_RP_(?:ai_settings_v1|cognition_settings_v1)|wish-rp-core-response-refiner-settings-v3)$/.test(key);
+  function hasGlobalOptions(payload){
+    return gmRows(payload).some(row=>portableGM(row.key)&&!optionRoomScope(row.key))||payload.storageSnapshot.sections.local.some(row=>portableLocal(row.key)&&globalLocalOption(row.key));
+  }
+  async function forRecovery(payload,data){
+    await validate(payload);validateCore(data);
+    const result={...payload,rooms:data.rooms,characterLibraries:data.characterLibraries,backupMode:'storage-recovery',storageSnapshot:{...payload.storageSnapshot,manifest:{}}};
+    result.storageSnapshot.manifest=await manifest(result);await validate(result);return result;
+  }
+  async function manifest(payload){
+    const snapshot=payload.storageSnapshot,sections={core:{rooms:payload.rooms,characterLibraries:payload.characterLibraries},managed:payload.storageMaintenance,gm:snapshot.sections.gm,local:snapshot.sections.local,aux:snapshot.sections.aux};
+    for(const name of ['session','sessionRetained'])if(Array.isArray(snapshot.sections[name]))sections[name]=snapshot.sections[name];
+    const out={};for(const [name,value]of Object.entries(sections)){out[name]={...await fingerprint(text(value)),count:Array.isArray(value)?value.length:name==='core'?payload.rooms.length+payload.characterLibraries.length:['archives','rescues','metadata'].reduce((n,key)=>n+(value?.[key]?.length||0),0)};}
+    out.header={sha256:await digest({format:snapshot.format,origin:snapshot.origin,scope:snapshot.scope,complete:snapshot.complete,apiKeysIncluded:snapshot.apiKeysIncluded,excluded:snapshot.excluded,auxStatus:snapshot.auxStatus,version:payload.version,exportedAt:payload.exportedAt})};return out;
+  }
+  async function validate(payload){
+    if(!payload?._rpContextManagerBackup)throw Error('WRPM 백업 형식 오류');validateCore(payload);
+    const s=payload.storageSnapshot;
+    if(s?.format!==FORMAT||s.origin!==ORIGIN||s.complete!==true||typeof s.apiKeysIncluded!=='boolean'||!plain(s.sections)||!plain(s.manifest))throw Error('사이트/버전/완료 표지 불일치');
+    for(const name of ['gm','local','aux'])if(!Array.isArray(s.sections[name]))throw Error('백업 묶음 누락: '+name);
+    if(s.scope&&s.scope!=='current-origin+userscript-GM+current-tab-drafts')throw Error('백업 범위 표지 오류');
+    for(const name of ['session','sessionRetained']){
+      if(s.scope&&!Array.isArray(s.sections[name]))throw Error('현재 탭 작업 초안 묶음 누락');
+      if(s.sections[name]!==undefined&&!Array.isArray(s.sections[name]))throw Error('작업 초안 목록 형식 오류');
+      const keys=new Set();for(const row of s.sections[name]||[]){if(!plain(row)||!row.key?.startsWith('wish-rpcm-result-draft:')||typeof row.value!=='string'||keys.has(row.key))throw Error('작업 초안 키/값 불일치');keys.add(row.key);const id=JSON.parse(row.key.slice('wish-rpcm-result-draft:'.length));if(!Array.isArray(id)||id.length!==3||typeof id[0]!=='string')throw Error('작업 초안 작업 식별자 오류');if(name==='session')JSON.parse(row.value);}
+    }
+    const seen=new Set();for(const row of s.sections.gm){if(!plain(row)||typeof row.key!=='string'||seen.has(row.key)||[RECEIPT,JOURNAL].includes(row.key))throw Error('GM 키 중복/형식 오류');seen.add(row.key);const value=refValue(row,payload);if(value===undefined)throw Error('GM 값 누락');if(row.key==='RPCM_carrier_encoding_global_v1'&&(value?.version!==1||!['utf-8','utf-16le'].includes(value.encoding)))throw Error('전역 인코딩 설정 형식 오류');// Credentials in old backups are ignored by restore, not a reason to block the file.
+    }
+    seen.clear();for(const row of s.sections.local){if(!plain(row)||typeof row.key!=='string'||(!ownedLocal(row.key)&&!secretKey(row.key))||volatileLocal(row.key)||typeof row.value!=='string'||seen.has(row.key))throw Error('localStorage 키/값 불일치');seen.add(row.key);}
+    seen.clear();for(const row of auxRows(payload)){if(!plain(row)||typeof row.id!=='string'||typeof row.key!=='string'||row.origin!==ORIGIN||seen.has(row.id)||row.value===undefined)throw Error('보조 기록 식별자/사이트/값 불일치');seen.add(row.id);if(await wrpmStorageMaintenanceV11.digest(row.value)!==row.digest)throw Error('보조 기록 원문 hash 불일치');}
+    if(text(await manifest(payload))!==text(s.manifest))throw Error('백업 묶음 hash/건수 불일치');
+    const selection={roomIds:payload.rooms.map(row=>row.chatId),libraryIds:payload.characterLibraries.map(row=>row.scopeId)};
+    await wrpmStorageMaintenanceV11.importExtension(payload.storageMaintenance,selection,true);
+    return {format:FORMAT,rooms:payload.rooms.length,libraries:payload.characterLibraries.length,gm:s.sections.gm.length,local:s.sections.local.length,session:s.sections.session?.length||0,aux:s.sections.aux.length,apiKeysIncluded:s.apiKeysIncluded,credentialsIgnoredOnRestore:true};
+  }
+  async function sandbox(payload){
+    const info=await validate(payload),name='RPCM_BackupVerify_v2_'+crypto.randomUUID();let db=null;
+    try{
+      db=await new Promise((resolve,reject)=>{const req=indexedDB.open(name,1);req.onupgradeneeded=()=>{for(const store of ['rooms','libraries','gm','local','session','sessionRetained','aux'])req.result.createObjectStore(store,{keyPath:store==='rooms'?'chatId':store==='libraries'?'scopeId':store==='aux'?'id':'key'});};req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);req.onblocked=()=>reject(Error('시험 저장소 열기 차단'));});
+      const values={rooms:payload.rooms,libraries:payload.characterLibraries,gm:credentialSafeRows(gmRows(payload)),local:credentialSafeRows(payload.storageSnapshot.sections.local),session:payload.storageSnapshot.sections.session||[],sessionRetained:payload.storageSnapshot.sections.sessionRetained||[],aux:await credentialSafeAuxRows(auxRows(payload))};
+      await new Promise((resolve,reject)=>{const tx=db.transaction(Object.keys(values),'readwrite');for(const [store,rows]of Object.entries(values))for(const row of rows)tx.objectStore(store).put(row);tx.oncomplete=resolve;tx.onabort=()=>reject(tx.error||Error('시험 복원 중단'));tx.onerror=()=>reject(tx.error||Error('시험 복원 실패'));});
+      const checks={};
+      for(const [store,expected]of Object.entries(values)){
+        const actual=await new Promise((resolve,reject)=>{const tx=db.transaction(store,'readonly'),req=tx.objectStore(store).getAll();let rows;req.onsuccess=()=>rows=req.result;tx.oncomplete=()=>resolve(rows);tx.onabort=()=>reject(tx.error||Error('시험 재읽기 실패'));tx.onerror=()=>reject(tx.error||Error('시험 재읽기 실패'));});
+        const id=store==='rooms'?'chatId':store==='libraries'?'scopeId':store==='aux'?'id':'key',order=rows=>[...rows].sort((a,b)=>String(a[id]).localeCompare(String(b[id])));
+        if(await digest(order(actual))!==await digest(order(expected)))throw Error('시험 복원 재읽기 불일치: '+store);checks[store]=expected.length;
+      }
+      return {...info,passed:true,checks,sourceHash:await digest(payload.storageSnapshot.manifest)};
+    }finally{
+      db?.close();if(!/^RPCM_BackupVerify_v2_[\w-]+$/.test(name))throw Error('시험 DB 범위 오류');
+      await new Promise((resolve,reject)=>{const req=indexedDB.deleteDatabase(name);req.onsuccess=resolve;req.onerror=()=>reject(req.error||Error('시험 DB 정리 실패'));req.onblocked=()=>reject(Error('시험 DB 정리 차단'));});
+    }
+  }
+  async function diagnose(){return operation(async()=>{
+    const statuses={},snapshot={};for(const [name,read]of [['core',()=>hooks.readCore()],['stores',()=>readStores()]])try{snapshot[name]=await read();statuses[name]='ok';}catch(error){statuses[name]={status:'failed',reason:errorText(error)};}
+    if(!snapshot.stores)return {format:'WRPM_STORAGE_DIAG_V2',origin:ORIGIN,at:new Date().toISOString(),statuses,complete:false};
+    const s=snapshot.stores,records=[];
+    for(const [store,rows]of [['GM',s.gm],['localStorage',s.local],['current-tab-drafts',s.session],['aux',s.aux]])for(const row of rows){
+      const value=store==='aux'?row:row.value,info={store,key:store==='aux'?row.id:row.key,...await fingerprint(text(value)),status:'read'};
+      try{
+        if(store==='GM'&&/^(wish-rp-core-response-refiner-history:|wish-rp-correction-text-archive-v1:)/.test(row.key)){const parsed=typeof value==='string'?JSON.parse(value):value;if(!Array.isArray(parsed)||parsed.some(item=>!plain(item)))throw Error();}
+        if(store==='GM'&&['RPCM_global_ai_memory_notice_policy_v1','RPCM_legacy_per_room_policy_before_global_v1'].includes(row.key)&&!plain(typeof value==='string'?JSON.parse(value):value))throw Error();
+        if(store==='GM'&&row.key==='RPCM_carrier_encoding_global_v1'&&(value?.version!==1||!['utf-8','utf-16le'].includes(value.encoding)))throw Error();
+        if(store==='GM'&&row.key.startsWith('RPCM_RESCUE_V1:'+ORIGIN+':')){const parts=row.key.slice(('RPCM_RESCUE_V1:'+ORIGIN+':').length).split(':');if(['room','library','previous-room','previous-library'].includes(parts[0])&&hooks.validateRescue)await hooks.validateRescue(typeof value==='string'?JSON.parse(value):value,parts[0].replace(/^previous-/,''),parts.slice(1).join(':'));}
+        if(store==='aux'&&(row.origin!==ORIGIN||await wrpmStorageMaintenanceV11.digest(row.value)!==row.digest))throw Error();
+      }catch{info.status='damaged';info.reason='자료 형식 또는 원문 hash 검증 실패 · 원문은 변경하지 않았습니다.';}
+      records.push(info);
+    }
+    return {format:'WRPM_STORAGE_DIAG_V2',origin:ORIGIN,at:new Date().toISOString(),complete:Object.values(statuses).every(value=>value==='ok'),integrityPassed:!records.some(row=>row.status==='damaged'),statuses,auxStatus:s.auxStatus,rooms:s.core.rooms.length,libraries:s.core.characterLibraries.length,records,excluded:s.excluded,metric:'Logical serialized UTF-8 bytes excluding credentials/runtime locks; not disk usage. No source values in this report.'};
+  });}
+  async function verifyOptimization(payload,preflight){
+    const result=await sandbox(payload),values=new Map(gmRows(payload).map(row=>[row.key,row.value]));
+    for(const item of preflight.items.filter(row=>!row.already))if(!values.has(item.key)||await wrpmStorageMaintenanceV11.digest(values.get(item.key))!==item.sourceDigest)throw Error('전체 백업에 최적화 직전 원문이 없거나 달라졌습니다: '+item.key);
+    proof={sourceHash:result.sourceHash,at:Date.now(),items:preflight.items.filter(row=>!row.already).map(row=>({key:row.key,sourceDigest:row.sourceDigest}))};
+    await GM_setValue(RECEIPT,JSON.stringify({format:'WRPM_BACKUP_VERIFIED_V2',origin:ORIGIN,...proof}));return result;
+  }
+  async function requireOptimization(preflight){
+    if(!proof)throw Error('먼저 저장한 전체 백업 JSON을 불러와 복원 검증해 주세요.');
+    for(const item of preflight.items.filter(row=>!row.already))if(!proof.items.some(row=>row.key===item.key&&row.sourceDigest===item.sourceDigest))throw Error('최적화 검사 대상이 백업 검증 이후 바뀌었습니다.');
+  }
+  async function prepareCleanup(payload){
+    await sandbox(payload);
+    const currentManaged=await wrpmStorageMaintenanceV11.backupExtension();
+    for(const kind of ['archives','rescues','metadata']){
+      const included=new Map((payload.storageMaintenance[kind]||[]).map(row=>[row.key,row.digest]));
+      for(const row of currentManaged[kind]||[])if(included.get(row.key)!==row.digest)throw Error('백업 이후 현재 자료가 바뀌었습니다. 최신 전체 백업을 다시 저장한 뒤 정리해 주세요.');
+    }
+    const values=new Map(gmRows(payload).map(row=>[row.key,row.value])),owner=await GM_getValue('RPCM_STORAGE_INSTALL_V11',null);
+    if(!owner||values.get('RPCM_STORAGE_INSTALL_V11')!==owner)throw Error('이 설치본에서 저장한 최신 전체 백업을 선택해 주세요.');
+    const items=[];
+    for(const row of wrpmStorageMaintenanceV11.listRoutes(false,true)){
+      if(row.error)throw Error(row.error);if(row.cleaned)continue;
+      if(!values.has(row.key)||await wrpmStorageMaintenanceV11.digest(values.get(row.key))!==row.sourceDigest)throw Error('전체 백업에 정리할 기존 사본이 없거나 달라졌습니다.');
+      items.push({key:row.key,value:values.get(row.key),digest:row.sourceDigest});
+    }
+    cleanupProof=new Map();for(const kind of ['archives','rescues'])for(const row of payload.storageMaintenance[kind]||[])cleanupProof.set(row.key,row.digest);
+    return {format:'RPCM_STORAGE_ROLLBACK_V11',origin:ORIGIN,installation:owner,at:new Date().toISOString(),items};
+  }
+  async function requireCleanup(row,current){
+    if(!cleanupProof?.has(row.key)||await wrpmStorageMaintenanceV11.digest(current)!==cleanupProof.get(row.key))throw Error('정리 직전 현재 자료가 외부 전체 백업과 다릅니다. 최신 전체 백업을 다시 저장해 주세요.');
+  }
+  async function importOptions(payload,selection,onCommitted=null){
+    await validate(payload);const completed=[],rooms=new Set(selection.roomIds.map(String));
+    try{
+      if(selection.includeOptions){
+        for(const row of gmRows(payload)){
+          if(!portableGM(row.key)||selection.globalOnly&&optionRoomScope(row.key))continue;
+          const scope=row.key.match(/^(?:wish-rp-response-review-result-v1:chat:)(.+)$/)?.[1];if(scope&&!rooms.has(scope))continue;
+          const incoming=settingsRecord(row.key)?settingsWithoutCredentials(row.value).value:row.value;
+          const value=mergeExistingCredentials(incoming,await GM_getValue(row.key,undefined),payload,'GM',row.key);
+          await GM_setValue(row.key,clone(value));onCommitted?.({store:'GM',key:row.key});if(text(await GM_getValue(row.key,undefined))!==text(value))throw Error('GM 옵션 재읽기 불일치: '+row.key);completed.push({store:'GM',key:row.key});
+        }
+        for(const row of payload.storageSnapshot.sections.local){
+          if(!portableLocal(row.key)||selection.globalOnly&&!globalLocalOption(row.key))continue;
+          const scope=row.key.match(/^(?:RPCM_new_items_v1:|rpcm-person-selected:)(.+)$/)?.[1];if(scope&&!rooms.has(scope))continue;
+          const incoming=settingsRecord(row.key)?settingsWithoutCredentials(row.value).value:row.value;
+          const value=mergeExistingCredentials(incoming,localStorage.getItem(row.key),payload,'localStorage',row.key);
+          localStorage.setItem(row.key,value);onCommitted?.({store:'localStorage',key:row.key});if(localStorage.getItem(row.key)!==value)throw Error('localStorage 옵션 재읽기 불일치: '+row.key);completed.push({store:'localStorage',key:row.key});
+        }
+      }
+      const drafts=[];
+      for(const row of payload.storageSnapshot.sections.session||[]){
+        const id=JSON.parse(row.key.slice('wish-rpcm-result-draft:'.length));if(!rooms.has(id[0]))continue;
+        sessionStorage.setItem(row.key,row.value);onCommitted?.({store:'sessionStorage',key:row.key});if(sessionStorage.getItem(row.key)!==row.value)throw Error('현재 탭 작업 초안 재읽기 불일치');drafts.push(row);completed.push({store:'sessionStorage',key:row.key});
+      }
+      hooks.restoreTransientDrafts?.(drafts);
+      return {completed,skippedCredentials:true,optionsApplied:!!selection.includeOptions};
+    }catch(error){error.completed=completed;error.code='WRPM_RESTORE_PARTIAL';throw error;}
+  }
+  function mergeExistingCredentials(incoming,current,_payload,_store,key){
+    if(!settingsRecord(key)||current===undefined||current===null)return incoming;
+    let src=incoming,prior=current;const string=typeof incoming==='string';
+    try{if(string)src=JSON.parse(incoming);if(typeof prior==='string')prior=JSON.parse(prior);}catch{return incoming;}
+    if(!plain(src)||!plain(prior)||src.provider!==prior.provider)return incoming;
+    // Preserve existing browser credentials only; incoming credentials were removed before this merge.
+    const merge=(next,old,decode=false)=>{
+      if(decode&&typeof next==='string'&&typeof old==='string'){
+        let n,o;try{n=JSON.parse(next);o=JSON.parse(old);}catch{return next;}
+        if(!n||!o||typeof n!=='object'||typeof o!=='object')return next;
+        const restored=merge(n,o);return text(restored)===text(n)?next:JSON.stringify(restored);
+      }
+      if(Array.isArray(next)&&Array.isArray(old))return next.map((value,index)=>merge(value,old[index]));
+      if(!plain(next)||!plain(old))return next;
+      const out=clone(next);
+      for(const [name,value]of Object.entries(old)){
+        if(['__proto__','constructor','prototype'].includes(name))continue;
+        if(credentialField(name))Object.defineProperty(out,name,{value:clone(value),enumerable:true,writable:true,configurable:true});
+        else if(Object.prototype.hasOwnProperty.call(out,name))out[name]=merge(out[name],value,encodedSettingsField(name));
+      }return out;
+    };
+    const output=merge(src,prior);return string?JSON.stringify(output):output;
+  }
+  async function retainRecovery(payload,selection){
+    await validate(payload);
+    const all=payload.rooms.every(row=>selection.roomIds.includes(row.chatId))&&payload.characterLibraries.every(row=>selection.libraryIds.includes(row.scopeId));
+    if(!all||!selection.includeOptions)return {retained:0,scope:'Partial selection; raw recovery records remain in external backup.'};
+    let owner=await GM_getValue('RPCM_STORAGE_INSTALL_V11',null);
+    if(owner===null){owner=crypto.randomUUID();await GM_setValue('RPCM_STORAGE_INSTALL_V11',owner);if(await GM_getValue('RPCM_STORAGE_INSTALL_V11',null)!==owner)throw Error('복구 보관 설치 식별자 저장 실패');}
+    if(typeof owner!=='string'||!/^[\w-]{16,80}$/.test(owner))throw Error('복구 보관 설치 식별자 오류');
+    const records=[];
+    const retained=async(store,key,original)=>{
+      const value=store==='aux'&&key.startsWith('WRPM_RECOVERY_V2:')?original.value:[{format:'WRPM_RECOVERED_RAW_V2',sourceStore:store,sourceKey:key,sourceOrigin:ORIGIN,original}];
+      const sum=await digest({store,key,value}),recordKey=store==='aux'&&key.startsWith('WRPM_RECOVERY_V2:')?key:'WRPM_RECOVERY_V2:'+sum;
+      records.push({id:ORIGIN+':'+owner+':'+recordKey,origin:ORIGIN,installation:owner,key:recordKey,value,digest:await wrpmStorageMaintenanceV11.digest(value),at:new Date().toISOString()});
+    };
+    for(const row of gmRows(payload)){
+      if(portableGM(row.key)||secretKey(row.key))continue;
+      const value=settingsRecord(row.key)?settingsWithoutCredentials(row.value).value:row.value;
+      const current=await GM_getValue(row.key,undefined);if(current!==undefined&&text(current)===text(value))continue;
+      await retained('GM',row.key,value);
+    }
+    for(const row of payload.storageSnapshot.sections.local)if(!portableLocal(row.key)&&!secretKey(row.key))await retained('localStorage',row.key,settingsRecord(row.key)?settingsWithoutCredentials(row.value).value:row.value);
+    for(const row of payload.storageSnapshot.sections.sessionRetained||[])await retained('previous-sessionStorage',row.key,row.value);
+    for(const row of await credentialSafeAuxRows(auxRows(payload)))await retained('aux',row.key,row);
+    if(!records.length)return {retained:0};
+    const db=await new Promise((resolve,reject)=>{const req=indexedDB.open(AUX,1);req.onupgradeneeded=()=>{if(!req.result.objectStoreNames.contains('archives'))req.result.createObjectStore('archives',{keyPath:'id'});};req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);req.onblocked=()=>reject(Error('복구 보관 DB가 다른 탭에 막혔습니다.'));});
+    try{
+      await new Promise((resolve,reject)=>{const tx=db.transaction('archives','readwrite'),store=tx.objectStore('archives');for(const row of records){const req=store.get(row.id);req.onsuccess=()=>{const existing=req.result;if(existing&&existing.digest!==row.digest){tx.abort();return;}if(!existing)store.put(row);};}tx.oncomplete=resolve;tx.onabort=()=>reject(tx.error||Error('복구 보관 충돌/쓰기 중단'));tx.onerror=()=>reject(tx.error||Error('복구 보관 실패'));});
+    }finally{db.close();}
+    const actual=new Map((await readAux()).records.map(row=>[row.id,row]));
+    for(const row of records){const saved=actual.get(row.id);if(!saved||text(saved.value)!==text(row.value)||saved.digest!==row.digest)throw Error('복구 보관 원문 재읽기 불일치');}
+    return {retained:records.length,scope:'Inactive recovery archive. Legacy routes, locks and pending injections not activated.'};

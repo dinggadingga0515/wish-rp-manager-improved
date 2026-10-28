@@ -1,0 +1,1000 @@
+
+[검토 이유 작성]
+reason은 각 항목에서 무엇을 줄이거나 합쳤는지와 그 이유를 1~2문장으로 구체적으로 작성한다. 예: “같은 유기불안 설명이 fact와 evidence에 반복되어 fact를 줄임. 10/23 고백·11/10 책임 요구·현재 관계 미회복은 유지.” 실제 입력에 있는 내용을 사용하고, 삭제·보존 사실을 추측하지 않는다. “중복 서술을 줄이고 핵심 사실을 유지” 같은 공통 원칙만 모든 항목에 반복하지 않는다. 지침 전문·패킷 파일명·개발 정보는 reason에 넣지 않는다. 기존 출력 필드와 스키마는 그대로 유지한다.
+`;
+  const compressionRuntime={busy:false,files:new Map()};
+  function compressionStableSignatureSource(row,pack=null){
+    // 자동 감지로 변하는 사용 상태(enabled/autoChosenByRp)는 저장 본문 자체가 아닙니다.
+    // lastAuto* 메타는 기존 stable 규칙으로 제거하고, 실제 내용·구조·inject/mode·잠금/관리 주체는 유지합니다.
+    const stableRow=fullRebuildStableValue(row);
+    if(stableRow&&typeof stableRow==='object'&&!Array.isArray(stableRow)){
+      delete stableRow.enabled;
+      delete stableRow.autoChosenByRp;
+    }
+    return [stableRow,pack?{id:pack.id,enabled:pack.enabled,userLocked:pack.userLocked,managedBy:pack.managedBy}:null];
+  }
+  function compressionEntries(room){
+    const entries=[];
+    const add=(kind,row,pack=null)=>{
+      const id=String(kind==='timeline'?row.cardId:row.id||'');if(!id)return;
+      const fields=kind==='item'?['content']:kind==='knowledge'?['fact','actualFact','evidence']:kind==='relationship'?['official','stance','conflict','trajectory','evidence']:kind==='speech'?['address','tone','context','evidence']:kind==='timeline'?['title','content']:['full','compact','micro'];
+      const ref=JSON.stringify([kind,pack?String(pack.id):'',id]);
+      const stableV2Source=compressionStableSignatureSource(row,pack);
+      if(stableV2Source[1])delete stableV2Source[1].enabled;
+      const signatureSource=[row,pack&&{id:pack.id,enabled:pack.enabled,userLocked:pack.userLocked,managedBy:pack.managedBy}];
+      entries.push({ref,kind,row,pack,editableFields:fields,protected:fullRebuildProtected(row)||(pack&&(fullRebuildProtected(pack)||loreCardUserLocked(row,pack))),signature:semanticSourceHash(JSON.stringify(compressionStableSignatureSource(row,pack))),stableV2Signature:semanticSourceHash(JSON.stringify(stableV2Source)),stableV1Signature:semanticSourceHash(JSON.stringify(fullRebuildStableValue(signatureSource))),legacySignature:semanticSourceHash(JSON.stringify(signatureSource))});
+    };
+    for(const row of room.slots||[])if(row.group==='item')add('item',row);
+    for(const row of room.knowledgeCards||[])if(!row.archived)add('knowledge',row);
+    for(const row of room.personStateRecords||[])if(row.active!==false&&['relationship','speech'].includes(row.type))add(row.type,row);
+    for(const row of room.storyTimelineCards||[])add('timeline',row);
+    for(const pack of room.lorePacks||[])for(const row of pack.cards||[])add('lore',row,pack);
+    return entries;
+  }
+  function compressionEntryLabel(entry){const row=entry.row;return String(row.title||(entry.kind==='knowledge'?`${row.person||'인물'} · ${String(row.fact||'인지').slice(0,60)}`:`${row.person||''} → ${row.target||''}`));}
+  function compressionDisplay(entry,patch={}){const labels={content:'내용',fact:'인지 내용',actualFact:'실제 사실',evidence:'근거',official:'현재 관계',stance:'현재 태도',conflict:'미해결 조건',trajectory:'관계 변화',address:'호칭',tone:'말투',context:'사용 상황',title:'제목',full:'전체 내용',compact:'간략 내용',micro:'핵심 내용'};return entry.editableFields.map(key=>`${labels[key]||key}\n${String(patch[key]??entry.row[key]??'').trim()||'—'}`).join('\n\n');}
+  function compressionComparableGroup(entry){
+    const r=entry.row;
+    if(entry.kind==='knowledge')return JSON.stringify([r.person,r.key,r.status,r.actualFact,r.hiddenFrom||[],r.concealments||[],r.concealmentNote||'']);
+    if(['relationship','speech'].includes(entry.kind))return JSON.stringify([r.type,r.person,r.target,r.key]);
+    if(entry.kind==='timeline')return String(r.timelineLabel||'');
+    if(entry.kind==='lore')return JSON.stringify([entry.pack.id,r.type,r.exactQuote||'',r.speaker||'',r.target||'']);
+    return JSON.stringify([r.folderId||'',r.owner||'']);
+  }
+  function compressionExclude(entry){
+    if(entry.kind==='item'){entry.row.enabled=false;entry.row.autoExcluded=true;entry.row.manualInjectionOverride='off';}
+    else if(entry.kind==='lore')entry.row.mode='off';
+    else entry.row.inject=false;
+  }
+  function compressionPreview(room,data,selection=null){
+    const job=room.compressionJob;
+    if(!job||job.roomId!==String(room.chatId)||data?.format!=='WISH_COMPRESSION_V1'||data.jobId!==job.jobId||Object.keys(data).sort().join('|')!=='format|jobId|operations')throw new Error('현재 압축 패킷과 결과 format/jobId가 일치하지 않습니다.');
+    if(!Array.isArray(data.operations)||data.operations.length>10000)throw new Error('operations 배열을 확인해 주세요.');
+    const live=new Map(compressionEntries(room).map(row=>[row.ref,row])),baseline=new Map(job.entries.map(row=>[row.ref,row.signature])),signatureSchema=String(job.signatureSchema||'legacy'),touched=new Set(),rows=[];
+    for(const op of data.operations){
+      if(!op||Object.keys(op).some(key=>!['ref','action','reason','patch','sources'].includes(key))||!['compress','exclude','merge'].includes(op.action)||typeof op.reason!=='string'||!op.reason.trim()||op.reason.length>2000)throw new Error('압축 operation 또는 이유가 올바르지 않습니다.');
+      if(!op.patch||typeof op.patch!=='object'||Array.isArray(op.patch)||!Array.isArray(op.sources)||op.sources.some(ref=>typeof ref!=='string'))throw new Error('patch/sources 형식이 올바르지 않습니다.');
+      if(op.action!=='merge'&&op.sources.length||op.action==='merge'&&!op.sources.length||op.action==='exclude'&&Object.keys(op.patch).length)throw new Error('병합 원본 또는 제외 patch가 올바르지 않습니다.');
+      const refs=[op.ref,...op.sources],entry=live.get(op.ref);
+      for(const ref of refs){const row=live.get(ref),currentSignature=signatureSchema==='stable-v3'?row?.signature:signatureSchema==='stable-v2'?row?.stableV2Signature:signatureSchema==='stable-v1'?row?.stableV1Signature:row?.legacySignature;if(typeof ref!=='string'||!row||!baseline.has(ref)||baseline.get(ref)!==currentSignature)throw new Error('패킷 생성 후 변경되거나 사라진 항목입니다. 새 압축 패킷을 만들어 주세요.');if(row.protected)throw new Error(`${compressionEntryLabel(row)}: 사용자 작성·잠금 항목은 압축할 수 없습니다.`);if(touched.has(ref))throw new Error('같은 항목을 두 번 수정하거나 병합할 수 없습니다.');touched.add(ref);if(row.kind!==entry.kind||compressionComparableGroup(row)!==compressionComparableGroup(entry))throw new Error('다른 영역·인물·인지 상태·사실·시간선의 병합은 허용하지 않습니다.');}
+      if(Object.entries(op.patch).some(([key,value])=>!entry.editableFields.includes(key)||typeof value!=='string'||value.length>100000))throw new Error('수정할 수 없는 필드 또는 본문 크기입니다.');
+      const required=entry.kind==='knowledge'?['fact']:entry.kind==='timeline'?['title','content']:entry.kind==='item'?['content']:entry.kind==='lore'?['full']:[];if(op.action!=='exclude'&&required.some(key=>!String(op.patch[key]??entry.row[key]??'').trim()))throw new Error('필수 제목·본문·사실을 비울 수 없습니다.');
+      if(op.action==='merge'&&entry.kind==='timeline'&&op.sources.some(ref=>{const row=live.get(ref).row;return !row.dateStart||!row.dateEnd||!entry.row.dateStart||!entry.row.dateEnd||row.dateStart<entry.row.dateStart||row.dateEnd>entry.row.dateEnd;}))throw new Error('타임라인 병합은 유지할 카드의 날짜 범위 안에 있는 중복만 가능합니다.');
+      const oldSize=entry.editableFields.reduce((sum,key)=>sum+String(entry.row[key]||'').length,0),newSize=entry.editableFields.reduce((sum,key)=>sum+String(op.patch[key]??entry.row[key]??'').length,0);
+      const sourceSize=op.sources.reduce((sum,ref)=>sum+live.get(ref).editableFields.reduce((size,key)=>size+String(live.get(ref).row[key]||'').length,0),0);
+      if(op.action==='compress'&&(newSize>=oldSize||!newSize)||op.action==='merge'&&(!newSize||newSize>=oldSize+sourceSize))throw new Error('압축·병합은 핵심을 보존하며 실제 본문 길이를 줄여야 합니다.');
+      rows.push({ref:op.ref,label:compressionEntryLabel(entry),op,before:compressionDisplay(entry),after:compressionDisplay(entry,op.patch),charsBefore:oldSize+sourceSize,charsAfter:op.action==='exclude'?oldSize:newSize,sources:op.sources.map(ref=>({ref,label:compressionEntryLabel(live.get(ref)),before:compressionDisplay(live.get(ref))}))});
+    }
+    const candidate=structuredClone(room),targets=new Map(compressionEntries(candidate).map(row=>[row.ref,row])),chosen=new Set(selection||rows.map(row=>row.ref));
+    if([...chosen].some(ref=>!rows.some(row=>row.ref===ref)))throw new Error('없는 압축 변경을 선택했습니다.');
+    for(const {op}of rows){if(!chosen.has(op.ref))continue;const entry=targets.get(op.ref);Object.assign(entry.row,op.patch);if(entry.kind==='lore'){if('full'in op.patch)entry.row.content=op.patch.full;if('compact'in op.patch)entry.row.summary=op.patch.compact;}if(op.action==='exclude')compressionExclude(entry);for(const ref of op.sources)compressionExclude(targets.get(ref));}
+    return {candidate,rows,selected:[...chosen]};
+  }
+  function compressionContextSnapshot(room){
+    return {
+      memoHash:simpleHash(userCanonMemoBlock(room)),
+      currentStateHash:simpleHash(String(room.slots?.find(row=>row.id==='currentState')?.content||'')),
+      personGuideHash:simpleHash(effectivePersonGuide(room)),
+      timelineGuideHash:simpleHash(effectiveTimelineGuide(room)),
+      loreGuideHash:simpleHash(manualLoreGuideSlot(room).text),
+    };
+  }
+  function compressionContextHash(room){return simpleHash(JSON.stringify(compressionContextSnapshot(room)));}
+  function compressionSoftDrift(room,job){
+    const base=job?.context;if(!base)return [];
+    const current=compressionContextSnapshot(room),warnings=[];
+    if(base.memoHash!==current.memoHash)warnings.push('사용자 메모 변경');
+    if(base.currentStateHash!==current.currentStateHash)warnings.push('현재상태 변경');
+    if(base.personGuideHash!==current.personGuideHash)warnings.push('인물 지침 변경');
+    if(base.timelineGuideHash!==current.timelineGuideHash)warnings.push('타임라인 지침 변경');
+    if(base.loreGuideHash!==current.loreGuideHash)warnings.push('자료집 지침 변경');
+    return warnings;
+  }
+
+  async function createCompressionPacket(room){
+    if(state.currentRoom!==room||compressionRuntime.busy)throw new Error('다른 작업이 끝난 뒤 압축 패킷을 만들어 주세요.');
+    compressionRuntime.busy=true;
+    try{
+      if(!compressionEntries(room).length)throw new Error('압축할 저장 자료가 없습니다.');
+      const recent=(await fetchRecentMessages(apiChatIdOf(room),30)).filter(row=>['user','assistant'].includes(messageRoleOf(row))).slice(0,24).reverse();
+      if(state.currentRoom!==room)throw new Error('패킷 생성 중 다른 방으로 이동했습니다.');
+      // RP 조회가 끝난 시점의 최신 live room을 한 번에 snapshot한다. 자동감지 메타나
+      // 정상 저장값이 조회 중 바뀌었다는 이유만으로 패킷 전체를 폐기하지 않는다.
+      const entries=compressionEntries(room);
+      if(!entries.length)throw new Error('압축할 저장 자료가 없습니다.');
+      const memoBlock=userCanonMemoBlock(room),currentStateText=String(room.slots?.find(row=>row.id==='currentState')?.content||'');
+      const personGuide=effectivePersonGuide(room),timelineGuide=effectiveTimelineGuide(room),loreGuide=manualLoreGuideSlot(room).text;
+      const context={memoHash:simpleHash(memoBlock),currentStateHash:simpleHash(currentStateText),personGuideHash:simpleHash(personGuide),timelineGuideHash:simpleHash(timelineGuide),loreGuideHash:simpleHash(loreGuide)};
+      const job={jobId:'compress-'+Date.now().toString(36),at:nowIso(),roomId:String(room.chatId),signatureSchema:'stable-v3',context,entries:entries.map(row=>({ref:row.ref,signature:row.signature})),source:recent.map(row=>({id:String(messageIdOf(row)),hash:semanticSourceHash(messageTextOf(row))}))};
+      const text=externalChatTitleInstruction('compression')+'\n\n'+COMPRESSION_GUIDE+'\n[COMPRESSION_JOB]\n'+JSON.stringify({format:'WISH_COMPRESSION_V1',jobId:job.jobId,roomId:job.roomId},null,2)+'\n[/COMPRESSION_JOB]\n\n[USER_CANON_MEMO]\n'+memoBlock+'\n[/USER_CANON_MEMO]\n\n[READ_ONLY_CURRENT_STATE]\n'+currentStateText+'\n[/READ_ONLY_CURRENT_STATE]\n\n[RECENT_RP]\n'+recent.map(row=>`[${messageRoleOf(row)} id=${JSON.stringify(messageIdOf(row))}]\n${stripAutomationNoise(messageTextOf(row),true)}`).join('\n\n')+'\n[/RECENT_RP]\n\n[STORED_ENTRIES]\n'+JSON.stringify(entries.map(row=>({ref:row.ref,kind:row.kind,protected:!!row.protected,editableFields:row.editableFields,chars:row.editableFields.reduce((sum,key)=>sum+String(row.row[key]||'').length,0),lastMention:row.row.lastAutoDetectedAt||null,data:row.row})),null,2)+'\n[/STORED_ENTRIES]\n\n[PERSON_GUIDE]\n'+personGuide+'\n[/PERSON_GUIDE]\n\n[TIMELINE_GUIDE]\n'+timelineGuide+'\n[/TIMELINE_GUIDE]\n\n[LORE_GUIDE]\n'+loreGuide+'\n[/LORE_GUIDE]';
+      const previousJob=room.compressionJob;room.compressionJob=job;try{await saveRoom(room);}catch(error){if(previousJob)room.compressionJob=previousJob;else delete room.compressionJob;throw error;}compressionRuntime.files.set(job.jobId,text);
+      downloadText('\uFEFF'+text,'Wish_자료압축_'+job.jobId+'.txt','text/plain');return job;
+    }finally{compressionRuntime.busy=false;}
+  }
+
+  async function compressionAssertSource(room,job){
+    const chatId=apiChatIdOf(room),recent=await fetchRecentMessages(chatId,100),byId=new Map(recent.map(row=>[String(messageIdOf(row)),row]));
+    if(state.currentRoom!==room)throw new Error('방이 바뀌었습니다.');
+    const missing=job.source.filter(row=>!byId.has(row.id));
+    for(let offset=0;offset<missing.length;offset+=4){
+      const rows=await Promise.all(missing.slice(offset,offset+4).map(async row=>[row.id,await fetchMessage(chatId,row.id)]));
+      if(state.currentRoom!==room)throw new Error('방이 바뀌었습니다.');
+      for(const [id,message] of rows)if(message)byId.set(String(id),message);
+    }
+    if(job.source.some(row=>!byId.has(row.id)||semanticSourceHash(messageTextOf(byId.get(row.id)))!==row.hash))throw new Error('압축 근거 RP가 변경·삭제되었습니다. 새 패킷으로 다시 검토해 주세요.');
+  }
+  async function commitCompression(room,data,selection,options={}){
+    const key=String(room.chatId),job=room.compressionJob;
+    if(compressionRuntime.busy||manualUpdateRuntime.commitLocks.has(key)||manualUpdateRuntime.commits.has(key)||state.autoSaveTimers.has(key)||state.saveStatus==='saving'||state.saveStatus==='error')throw new Error('다른 로컬 저장이 끝난 뒤 적용해 주세요.');
+    let base=JSON.stringify(room),prepared=compressionPreview(room,data,selection);if(!prepared.selected.length)throw new Error('적용할 변경을 선택해 주세요.');
+    compressionRuntime.busy=true;let release;const lock=new Promise(resolve=>release=resolve);manualUpdateRuntime.commitLocks.set(key,lock);
+    try{
+      await compressionAssertSource(room,job);
+      if(options.approvedContextHash&&compressionContextHash(room)!==options.approvedContextHash)throw new Error('적용 확인 후 사용자 메모·현재상태 또는 지침이 다시 변경되었습니다. 현재 상태로 다시 확인해 주세요.');
+      if(JSON.stringify(room)!==base){base=JSON.stringify(room);prepared=compressionPreview(room,data,selection);if(!prepared.selected.length)throw new Error('적용할 변경을 선택해 주세요.');}
+      const stored=await readManualStoredRoom(room);
+      if(!stored||JSON.stringify(room)!==base||JSON.stringify(stored)!==base)throw new Error('로컬 저장본과 화면 데이터가 다릅니다. 저장이 끝난 뒤 다시 적용해 주세요.');
+      const storedSnapshot=base,candidate=prepared.candidate;
+      const backup={_rpContextManagerBackup:true,backupMode:'room-transfer',version:APP.version,exportedAt:nowIso(),sourceRoomId:key,rooms:[structuredClone(room)],characterLibraries:await getAllCharacterLibraries()};
+      downloadText(JSON.stringify(backup,null,2),'Wish_자료압축_적용전_'+Date.now()+'.json');
+      candidate.compressionLastApplied={at:nowIso(),jobId:job.jobId,changes:prepared.rows.filter(row=>prepared.selected.includes(row.ref)).map(row=>({ref:row.ref,label:row.label,action:row.op.action,reason:row.op.reason}))};delete candidate.compressionJob;
+      const receiptTasks=new Set(prepared.rows.filter(row=>prepared.selected.includes(row.ref)).map(row=>JSON.parse(row.ref)[0]).map(kind=>kind==='item'?'currentItems':['knowledge','relationship','speech'].includes(kind)?'personInfo':kind==='lore'?'lore':'timeline'));for(const task of receiptTasks)await stampVerifiedResult(candidate,task,'compression',{jobId:job.jobId});
+      await new Promise((resolve,reject)=>{const tx=state.db.transaction(APP.storeName,'readwrite'),store=tx.objectStore(APP.storeName),request=store.get(room.chatId);request.onsuccess=()=>{if(JSON.stringify(request.result)!==storedSnapshot||JSON.stringify(room)!==base){tx.abort();return;}candidate._rpcmRevision=Number(request.result?._rpcmRevision||0)+1;store.put(candidate);};request.onerror=()=>tx.abort();tx.oncomplete=resolve;tx.onabort=()=>reject(new Error('다른 저장과 충돌했습니다. 다시 비교해 주세요.'));tx.onerror=()=>reject(tx.error);});
+      const persisted=await readManualStoredRoom(room);if(JSON.stringify(persisted)!==JSON.stringify(candidate))throw new Error('실제 저장 결과가 압축 검토본과 다릅니다. 적용 전 백업을 확인해 주세요.');
+      const verified=await finalizeStoredResultReceipts(room,persisted,[...receiptTasks],'compression');
+      rpcmReplaceRoomObject(room,verified);delete room.compressionJob;rpcmRememberRoomBaseline(room);invalidateAiMemoryHistory();updateSaveStatusUi('saved');semanticClearQueries(room);queueSemanticIndexRefresh(room,'compression');
+      manualUpdateRuntime.commitLocks.delete(key);release();
+      let carrierError='';
+      if(room.pending){try{reconcilePendingSlotsWithCurrentSelection(room);refreshPendingLoreItems(room,room.autoRecallContextText||'');autoDetectPersonProfiles(room,room.autoRecallContextText||'');const current=storyTimelineInjectionItems(room);room.pending.items=(room.pending.items||[]).filter(row=>row.group!=='story-timeline').concat(current);await saveRoom(room);await syncPendingCarrier(room,'compression');}catch(error){carrierError=String(error?.message||error);}}
+      return {count:prepared.selected.length,carrierError};
+    }finally{manualUpdateRuntime.commitLocks.delete(key);release?.();compressionRuntime.busy=false;}
+  }
+  function compressionUiHtml(room){
+    const entries=compressionEntries(room),job=room.compressionJob;
+    return `<section id="rpcm-section-compression" class="rpcm-compression"><article class="rpcm-tool-card"><h3>자료 압축</h3><p>중요 물품 · 인물정보 · 타임라인 · 자료집의 반복 설명을 정리합니다. 외부 AI에 TXT 패킷을 전달한 뒤 결과를 가져와 원하는 변경만 적용하세요.</p><small>압축 대상 ${entries.length}개 · 현재상태·날짜로그는 변경하지 않습니다. 병합한 원본은 주입 제외로 보존됩니다.</small><aside class="rpcm-compression-help" aria-label="압축 사용 안내"><strong>자료가 쌓였을 때 한 번 점검하세요</strong><p>예를 들어 100~200턴 정도 진행한 뒤, 반복 설명이나 사소한 자료가 많아져 읽기 부담스러워졌을 때 압축을 검토해 보세요. 정해진 턴마다 할 필요는 없습니다.</p><small>TXT에 지침이 함께 들어 있습니다. 외부 AI에 파일 하나를 전달하고, 결과를 검토한 뒤 원하는 변경만 적용하세요.</small></aside><div class="rpcm-tool-actions"><button type="button" class="rpcm-btn primary" data-compression-export ${entries.length?'':'disabled'}>${job?'새 압축 패킷 받기':'압축 패킷 TXT 받기'}</button><button type="button" class="rpcm-btn secondary" data-compression-import ${job?'':'disabled'}>결과 가져오기</button>${job?'<button type="button" class="rpcm-btn secondary" data-compression-redownload>패킷 다시 받기</button>':''}</div><p data-compression-status>${job?'외부 결과 대기 · '+esc(new Date(job.at).toLocaleString('ko-KR')):entries.length?'패킷을 만들면 결과 가져오기가 활성화됩니다.':'먼저 중요 물품·인물정보·타임라인·자료집에 자료를 등록하거나 갱신해 주세요.'}</p></article>${room.compressionLastApplied?`<details class="rpcm-recheck-report"><summary>최근 압축 적용 ${room.compressionLastApplied.changes.length}개</summary>${room.compressionLastApplied.changes.map(row=>`<article><strong>${esc(row.label)}</strong><p>${esc(row.reason)}</p></article>`).join('')}</details>`:''}</section>`;
+  }
+  function parseCompressionResult(raw){
+    let text=String(raw||'').replace(/^\uFEFF/,'').trim(),repaired=0;
+    const fence=text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+    if(fence)text=fence[1].trim();
+    const parse=()=>JSON.parse(text);
+    try{return {data:parse(),text,repaired};}catch(first){
+      // Repair only an operation's serialized 3-part ref. Never repair prose or arbitrary JSON.
+      const pattern=/(\{\s*"ref"\s*:\s*)"(\[\s*"(?:knowledge|relationship|speech|timeline|item|lore)"\s*,\s*"[^"\\\r\n]*"\s*,\s*"[^"\\\r\n]+"\s*\])"(?=\s*,\s*"action"\s*:\s*"(?:compress|exclude|merge)")/g;
+      const fixed=text.replace(pattern,(whole,prefix,ref)=>{const parts=JSON.parse(ref);if(parts.length!==3||parts.some(part=>typeof part!=='string'))return whole;repaired++;return prefix+JSON.stringify(ref);});
+      if(repaired)text=fixed;
+      try{return {data:parse(),text,repaired};}catch(error){
+        const match=String(error.message).match(/position\s+(\d+)/i);
+        let position=match?Number(match[1]):null;
+        if(position===null){const lineColumn=String(error.message).match(/line\s+(\d+)\s+column\s+(\d+)/i);if(lineColumn){const lines=text.split('\n');position=lines.slice(0,Number(lineColumn[1])-1).reduce((sum,line)=>sum+line.length+1,0)+Number(lineColumn[2])-1;}}
+        const before=position===null?'':text.slice(0,position),line=before.split('\n').length,column=before.length-(before.lastIndexOf('\n')+1)+1;
+        const operations=text.indexOf('"operations"'),count=position===null||operations<0?0:(text.slice(operations,position).match(/\{\s*"ref"\s*:/g)||[]).length;
+        const message=(count?`압축 결과 ${count}번 항목: `:'압축 결과: ')+`JSON 형식이 올바르지 않습니다.${position===null?'':` ${line}행 ${column}열의 따옴표·쉼표·괄호를 확인해 주세요.`} 결과가 잘렸거나 본문 따옴표가 빠진 경우 외부 AI에 JSON 형식만 다시 고쳐 달라고 요청해 주세요.`;
+        const problem=new Error(message);problem.compressionParsePosition=position;problem.compressionParseText=text;throw problem;
+      }
+    }
+  }
+
+  const COMPRESSION_FIELD_LABELS={content:'내용',fact:'인지 내용',actualFact:'실제 사실',evidence:'근거',official:'현재 관계',stance:'현재 태도',conflict:'미해결 조건',trajectory:'관계 변화',address:'호칭',tone:'말투',context:'사용 상황',title:'제목',full:'전체 내용',compact:'간략 내용',micro:'핵심 내용'};
+  const COMPRESSION_REVIEW_GROUPS={person:'인물정보',lore:'자료집',timeline:'타임라인',item:'중요 물품'};
+  function compressionExcerpt(text,limit=96){const value=String(text||'').replace(/\s+/g,' ').trim();return value.length>limit?value.slice(0,limit)+'…':value;}
+  function compressionReviewInfo(entry,op){
+    const r=entry.row,kind=entry.kind,domain=['knowledge','relationship','speech'].includes(kind)?'person':kind;
+    const status={...KNOWLEDGE_STATUS_LABELS,unknown:'확인 안 됨'};
+    const title=kind==='knowledge'?`${r.person||'인물'}의 인지`:['relationship','speech'].includes(kind)?`${r.person||'인물'} ↔ ${r.target||'상대'}`:String(r.title|| (kind==='item'?'중요 물품':'제목 없는 기록'));
+    const context=kind==='knowledge'?'인지 상태 유지 · '+(status[r.status]||'인지'):kind==='relationship'?'양방향 중 해당 방향만 수정':kind==='speech'?'호칭·말투':kind==='lore'?String(entry.pack.title||entry.pack.name||'자료집'):kind==='timeline'?[r.dateStart,r.dateEnd&&r.dateEnd!==r.dateStart?r.dateEnd:''].filter(Boolean).join(' ~ '):String(r.owner||'');
+    const subject=kind==='knowledge'?compressionExcerpt(r.fact,56):['relationship','speech'].includes(kind)?`${r.person||'인물'} → ${r.target||'상대'}`:'';
+    const fields=entry.editableFields.filter(key=>Object.hasOwn(op.patch,key)&&op.patch[key]!==String(r[key]??'')).map(key=>({key,label:COMPRESSION_FIELD_LABELS[key]||key,before:String(r[key]??''),after:op.patch[key]}));
+    const main=fields.find(f=>!['evidence','title'].includes(f.key))||fields[0];
+    return {domain,title,context,subject,fields,excerpt:main?compressionExcerpt(main.after,125):''};
+  }
+  function compressionMarkedChange(before,after){
+    let start=0,end=0;while(start<before.length&&start<after.length&&before[start]===after[start])start++;
+    while(end<before.length-start&&end<after.length-start&&before[before.length-1-end]===after[after.length-1-end])end++;
+    const render=(value,cls)=>esc(value.slice(0,start))+(value.length-start-end?`<mark class="${cls}">${esc(value.slice(start,value.length-end))}</mark>`:'')+esc(end?value.slice(-end):'');
+    return {before:render(before,'rpcm-compression-removed'),after:render(after,'rpcm-compression-added')};
+  }
+  function compressionReviewHtml(room,rows){
+    const entries=new Map(compressionEntries(room).map(e=>[e.ref,e]));
+    const cards=rows.map((row,index)=>({row,index,info:compressionReviewInfo(entries.get(row.ref),row.op)}));
+    const reasons=new Map();for(const row of rows){const reason=row.op.reason.trim();reasons.set(reason,(reasons.get(reason)||0)+1);}
+    const common=[...reasons].filter(([,count])=>count>1);
+    const tabs=`<nav class="rpcm-compression-filters" aria-label="압축 영역"><button type="button" data-compression-filter="all" aria-pressed="true">전체 <span>${rows.length}</span></button>${Object.entries(COMPRESSION_REVIEW_GROUPS).map(([key,label])=>{const count=cards.filter(c=>c.info.domain===key).length;return count?`<button type="button" data-compression-filter="${key}" aria-pressed="false">${label} <span>${count}</span></button>`:'';}).join('')}</nav>`;
+    return tabs+`<p class="rpcm-compression-review-help">압축은 기본 선택되어 있습니다. 주입 제외·병합은 내용을 확인한 뒤 선택하세요.</p>`+common.map(([reason,count])=>`<details class="rpcm-compression-common-reason"><summary>공통 제안 이유 · ${count}개 항목: ${esc(compressionExcerpt(reason,100))}</summary><p>${esc(reason)}</p><small>각 카드의 수정 항목과 전후 비교에서 실제 변경 내용을 확인하세요.</small></details>`).join('')+Object.entries(COMPRESSION_REVIEW_GROUPS).map(([domain,label])=>{
+      const group=cards.filter(c=>c.info.domain===domain);if(!group.length)return '';
+      return `<section class="rpcm-compression-group" data-compression-group="${domain}" aria-label="${label}"><div class="rpcm-compression-group-heading"><h3>${label} <span>${group.length}개 제안</span></h3><label><input type="checkbox" data-compression-group-choice="${domain}"> 이 영역 전체 선택</label></div>${group.map(({row,index,info})=>{
+        const action={compress:'본문 압축',exclude:'주입 제외',merge:'중복 병합'}[row.op.action],reduction=row.charsBefore-row.charsAfter;
+        const change=row.op.action==='exclude'?'본문은 보존하고 자동 주입을 끕니다.':row.op.action==='merge'?`원본 ${row.sources.length}개를 이 카드에 합치고, 합쳐진 원본은 주입 제외로 보존합니다.`:`${info.fields.map(f=>f.label).join(' · ')} 수정`;
+        const reason=compressionExcerpt(row.op.reason,90);
+        const detail=info.fields.map(field=>{const marked=compressionMarkedChange(field.before,field.after);return `<div class="rpcm-compression-field"><h4>${esc(field.label)} <span>${field.before.length.toLocaleString()} → ${field.after.length.toLocaleString()}자</span></h4><div class="rpcm-compression-compare"><section><h5>현재</h5><pre>${marked.before||'비어 있음'}</pre></section><section><h5>적용 후</h5><pre>${marked.after||'비어 있음'}</pre></section></div></div>`;}).join('');
+        return `<article class="rpcm-compression-change" data-compression-card="${domain}"><div class="rpcm-compression-card-heading"><label><input type="checkbox" data-compression-choice="${esc(row.ref)}" ${row.op.action==='compress'?'checked':''} aria-label="${esc(info.title)} ${action} 선택"><strong>${esc(info.title)}</strong></label><span class="rpcm-compression-action">${action}</span></div><p class="rpcm-compression-context">${esc(info.context)}${info.subject?' · '+esc(info.subject):''}</p><div class="rpcm-compression-plan"><strong>${esc(change)}</strong><span>${row.op.action==='exclude'?'글자 수 유지':`${row.charsBefore.toLocaleString()} → ${row.charsAfter.toLocaleString()}자 · ${reduction.toLocaleString()}자 줄임`}</span></div>${reasons.get(row.op.reason.trim())>1?'':`<div class="rpcm-compression-reason"><span>AI 제안 이유</span><p>${esc(reason)}</p>${reason.endsWith('…')?`<details><summary>이유 전체 읽기</summary><p>${esc(row.op.reason)}</p></details>`:''}</div>`}${info.excerpt?`<p class="rpcm-compression-excerpt"><span>적용 후 ${esc((info.fields.find(f=>!['evidence','title'].includes(f.key))||info.fields[0]).label)}</span>${esc(info.excerpt)}</p>`:''}${detail?`<details class="rpcm-compression-full-diff"><summary>전후 비교 · 바뀌는 항목 ${info.fields.length}개</summary>${detail}</details>`:''}${row.sources.length?`<details class="rpcm-compression-full-diff"><summary>병합할 원본 ${row.sources.length}개 확인</summary>${row.sources.map(source=>`<h4>${esc(source.label)}</h4><pre>${esc(source.before)}</pre>`).join('')}</details>`:''}</article>`;
+      }).join('')}</section>`;
+    }).join('');
+  }
+  function openCompressionImport(room){
+    compressionStyles();document.getElementById('rpcm-compression-backdrop')?.remove();const box=document.createElement('div');box.id='rpcm-compression-backdrop';
+    box.innerHTML=`<section class="rpcm-update-dialog" role="dialog" aria-modal="true" aria-label="압축 결과 가져오기"><header><div><h2>압축 결과 검토</h2><p>영역별 수정 항목과 이유를 읽고, 적용할 변경을 선택하세요.</p></div><button type="button" class="rpcm-btn secondary" data-close aria-label="닫기">×</button></header><div class="rpcm-update-result-body"><details class="rpcm-compression-input" data-input-panel open><summary>입력 결과 · JSON 파일 또는 붙여넣기</summary><label>JSON 파일 <input type="file" accept=".json,.txt" data-file></label><textarea data-result aria-label="압축 JSON 결과" placeholder="외부 AI의 압축 결과를 붙여넣으세요"></textarea></details><p data-status role="status"></p><div data-preview></div></div><footer><p data-selection-summary aria-live="polite">먼저 결과를 검증해 주세요.</p><div><button type="button" class="rpcm-btn secondary" data-close>닫기</button><button type="button" class="rpcm-btn secondary" data-preview-button>검증·비교</button><button type="button" class="rpcm-btn primary" data-apply disabled>선택 적용</button></div></footer></section>`;
+    let data=null,reviewedText='',rows=[],saving=false;
+    const input=box.querySelector('[data-result]'),status=box.querySelector('[data-status]'),apply=box.querySelector('[data-apply]'),preview=box.querySelector('[data-preview]'),panel=box.querySelector('[data-input-panel]'),selectionSummary=box.querySelector('[data-selection-summary]');
+    const updateSelection=()=>{
+      const chosen=new Set([...preview.querySelectorAll('[data-compression-choice]:checked')].map(n=>n.dataset.compressionChoice));
+      const selected=rows.filter(row=>chosen.has(row.ref)),reduction=selected.reduce((n,row)=>n+row.charsBefore-row.charsAfter,0);
+      selectionSummary.textContent=`${rows.length}개 중 ${selected.length}개 선택${reduction?' · '+reduction.toLocaleString()+'자 줄임':''}`;
+      apply.disabled=saving||!data||!selected.length;apply.textContent=saving?'저장 중…':selected.length?`${selected.length}개 선택 적용`:'선택 적용';
+      preview.querySelectorAll('[data-compression-group-choice]').forEach(control=>{const choices=[...control.closest('[data-compression-group]').querySelectorAll('[data-compression-choice]')],count=choices.filter(c=>c.checked).length;control.checked=count===choices.length;control.indeterminate=count>0&&count<choices.length;});
+    };
+    box.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>{if(!saving&&!compressionRuntime.busy)box.remove();});
+    input.oninput=()=>{data=null;rows=[];preview.replaceChildren();apply.disabled=true;apply.textContent='선택 적용';selectionSummary.textContent='다시 비교한 뒤 변경을 선택해 주세요.';panel.open=true;status.textContent='결과가 바뀌었습니다. 다시 비교해 주세요.';};
+    box.querySelector('[data-file]').onchange=async event=>{const file=event.target.files[0];if(file){input.value=await file.text();input.oninput();}};
+    box.querySelector('[data-preview-button]').onclick=()=>{
+      try{
+        const parsed=parseCompressionResult(input.value),checked=compressionPreview(room,parsed.data);data=parsed.data;input.value=parsed.text;rows=checked.rows;reviewedText=input.value;
+        const drift=compressionSoftDrift(room,room.compressionJob);
+        status.textContent=(parsed.repaired?'식별값 따옴표 '+parsed.repaired+'곳 교정 · 본문 변경 없음 · ':'')+`${rows.length}개 수정 제안을 확인했습니다.${drift.length?` 패킷 생성 후 ${drift.join(' · ')} 감지 · 현재 저장본 기준으로 대상 항목을 다시 검증합니다.`:''}`;
+        preview.innerHTML=compressionReviewHtml(room,rows);panel.open=false;updateSelection();box.querySelector('.rpcm-update-result-body').scrollTop=0;
+      }catch(error){
+        data=null;rows=[];preview.replaceChildren();apply.disabled=true;apply.textContent='선택 적용';selectionSummary.textContent='결과 형식을 확인해 주세요.';panel.open=true;status.textContent=error.message;
+        if(Number.isInteger(error.compressionParsePosition)){input.value=error.compressionParseText;input.focus();input.setSelectionRange(Math.max(0,error.compressionParsePosition-12),Math.min(input.value.length,error.compressionParsePosition+48));}
+      }
+    };
+    preview.onchange=event=>{if(event.target.matches('[data-compression-group-choice]'))event.target.closest('[data-compression-group]').querySelectorAll('[data-compression-choice]').forEach(c=>c.checked=event.target.checked);updateSelection();};
+    preview.onclick=event=>{const button=event.target.closest('[data-compression-filter]');if(!button)return;const domain=button.dataset.compressionFilter;preview.querySelectorAll('[data-compression-filter]').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));preview.querySelectorAll('[data-compression-group]').forEach(group=>group.hidden=domain!=='all'&&group.dataset.compressionGroup!==domain);};
+    apply.onclick=async()=>{if(saving)return;saving=true;updateSelection();const controls=[...box.querySelectorAll('input,textarea,button')];controls.forEach(c=>c.disabled=true);try{if(!data||input.value!==reviewedText)throw new Error('먼저 결과를 비교해 주세요.');const chosen=[...preview.querySelectorAll('[data-compression-choice]:checked')].map(node=>node.dataset.compressionChoice),drift=compressionSoftDrift(room,room.compressionJob);if(drift.length&&!confirm(`압축 패킷 생성 후 ${drift.join(' · ')}이 감지되었습니다.\n대상 항목과 RP 원문은 현재 상태로 다시 검증합니다. 그래도 적용하시겠습니까?`))return;const approvedContextHash=compressionContextHash(room),result=await commitCompression(room,data,chosen,{approvedContextHash});box.remove();renderModalIfOpen();if(result.carrierError)notify(`압축 ${result.count}개 로컬 저장 완료 · 현재 주입 반영 미완료: ${result.carrierError}`,'warn',8000);else notify(`압축 ${result.count}개 변경 저장됨 · 적용 전 백업을 받았습니다.`,'success');}catch(error){status.textContent='적용 확인 필요: '+error.message;}finally{saving=false;if(box.isConnected){controls.forEach(c=>c.disabled=false);updateSelection();}}};
+    document.body.appendChild(box);
+  }
+
+  function bindCompressionTools(overlay,room){
+    const section=overlay.querySelector('#rpcm-section-compression');if(!section)return;
+    section.querySelector('[data-compression-export]').onclick=async event=>{event.currentTarget.disabled=true;try{await createCompressionPacket(room);renderModalIfOpen();}catch(error){section.querySelector('[data-compression-status]').textContent=error.message;event.currentTarget.disabled=false;}};
+    section.querySelector('[data-compression-import]').onclick=()=>openCompressionImport(room);
+    section.querySelector('[data-compression-redownload]')?.addEventListener('click',()=>{const text=compressionRuntime.files.get(room.compressionJob?.jobId);if(text)downloadText('\uFEFF'+text,'Wish_자료압축_'+room.compressionJob.jobId+'.txt','text/plain');else notify('패킷 본문이 메모리에 없습니다. 새 패킷을 받아 주세요.','warn');});
+  }
+
+  const RPCM_WORK_VIEWS = {
+    overview:['확인', '현재 주입 구성과 확인할 일을 한눈에 살펴봅니다.'],
+    compression:['압축', '저장 자료를 외부 AI로 정리하고 선택한 변경만 적용합니다.'],
+    update:['수동 업데이트', '수동 작업자료를 만들고 결과를 검증·비교한 뒤 저장합니다.'],
+    longterm:['장기기억', 'Crack 장기기억을 만들고 압축·검토합니다.'],
+    memory:['현재상태', '방 전체의 지속 상태를 관리합니다.'],
+    logs:['날짜로그', '날짜별 RP 기록과 주입 선택을 관리합니다.'],
+    timeline:['연속성 타임라인', '서사의 중요한 전환과 주입 상태를 확인합니다.'],
+    people:['인물', '인지·호칭·말투·관계선을 관리하고 외부 결과를 가져옵니다.'],
+    characters:['캐릭터 설정', '등장인물 설정과 자동 선택을 관리합니다.'],
+    items:['중요 물품', '폴더별 물품과 감지어를 관리합니다.'],
+    extra:['기타·OOC', 'OOC와 자주 사용하는 규칙을 관리합니다.'],
+    preferences:['일반·UI', 'RP Manager 화면과 Quick Monitor 표시를 관리합니다.'],
+    lore:['자료집', '세계관·장소·조직·규칙을 팩과 카드로 관리합니다.'],
+    tools:['자료 관리', '미리보기, 백업, 복사와 복원을 실행합니다.'],
+    ai:['AI', 'AI 어시스턴트와 AI 작업을 관리합니다.'],
+  };
+
+  const RPCM_TOP_NAV = Object.freeze({
+    overview:{ label:'확인', icon:'home', first:'overview' },
+    memory:{ label:'기억', icon:'memory', first:'memory' },
+    manage:{ label:'자료 관리', icon:'database', first:'update' },
+    lore:{ label:'자료집', icon:'book', first:'lore' },
+    people:{ label:'인물', icon:'people', first:'people' },
+    ai:{ label:'AI', icon:'sparkle', first:'ai' },
+    settings:{ label:'설정', icon:'settings', first:'preferences' },
+  });
+  function rpcmTopGroup(view) {
+    if (['memory','logs','timeline','items','characters','extra'].includes(view)) return 'memory';
+    if (['update','compression','tools','longterm'].includes(view)) return 'manage';
+    if (view === 'preferences') return 'settings';
+    return Object.hasOwn(RPCM_TOP_NAV, view) ? view : 'overview';
+  }
+  function rpcmUpdateNavIndicator(nav, selector, vertical = false) {
+    const indicator = nav?.querySelector('.rpcm-nav-indicator');
+    const button = nav?.querySelector(selector);
+    if (!indicator || !button) return;
+    indicator.style.height = vertical ? `${button.offsetHeight}px` : '';
+    indicator.style.width = vertical ? '' : `${button.offsetWidth}px`;
+    indicator.style.transform = vertical ? `translateY(${button.offsetTop}px)` : `translateX(${button.offsetLeft}px)`;
+  }
+  function showAiWorkTab(overlay, tab, assistantOptions = null) {
+    const key = ['assistant','tasks','context','folder'].includes(tab) ? tab : 'assistant';
+    state.aiWorkTab = key;
+    overlay.querySelectorAll('#rpcm-section-ai [data-ai-work-tab]').forEach(button => {
+      const selected = button.dataset.aiWorkTab === key;
+      button.classList.toggle('is-active', selected);
+      button.setAttribute('aria-selected', String(selected));
+      button.tabIndex = selected ? 0 : -1;
+    });
+    overlay.querySelectorAll('#rpcm-section-ai [data-ai-work-pane]').forEach(pane => { pane.hidden = pane.dataset.aiWorkPane !== key; });
+    if (key === 'assistant' && !isMobileManagerLayout()) {
+      const host = overlay.querySelector('#rpcm-ai-assistant-host');
+      if (host && (!host.firstElementChild || assistantOptions)) openMemoryAssistantDialog(state.currentRoom, { ...(assistantOptions || {}), inlineHost:host });
+    }
+  }
+  function showWorkView(overlay, view, resetScroll = false, aiAssistantOptions = null) {
+    const key = Object.hasOwn(RPCM_WORK_VIEWS, view) ? view : 'overview';
+    const shell = overlay.querySelector('.rpcm-workspace');
+    if (!shell) return;
+    // Temp16: allocate editor cards only when the corresponding tab is displayed.
+    // Data matching/injection never consults these UI-only card trees.
+    overlay._rpcmEnsureView?.(key);
+    const main = overlay.querySelector('.rpcm-work-content');
+    if (main && shell.dataset.view && shell.dataset.view !== key) state.modalScrollByView.set(`${state.currentRoom?.chatId || ''}:${shell.dataset.view}`, main.scrollTop);
+    if(noticeGuidance&&!noticeGuidance.root&&noticeGuidance.view!==key)noticeClearGuidance();
+    if (shell.dataset.view === 'people' && key !== 'people') {
+      const abandoned=overlay.querySelector('#rpcm-section-people');
+      // Keep a live editor intact; reader cards have no uncommitted form controls.
+      if (abandoned && !abandoned.querySelector('.rpcm-person-advanced')?.open) {
+        abandoned.querySelector('#rpcm-person-core')?.replaceChildren();
+        delete abandoned.dataset.rpcmUiRenderedRoom;
+      }
+    }
+    state.workView = key;
+    shell.dataset.view = key;
+    if (key === 'people' && state.currentRoom) {
+      const personSection=overlay.querySelector('#rpcm-section-people');
+      if (personSection && personSection.dataset.rpcmUiRenderedRoom !== String(state.currentRoom.chatId)) {
+        renderPersonPanel(state.currentRoom,overlay);
+        personSection.dataset.rpcmUiRenderedRoom=String(state.currentRoom.chatId);
+      }
+    }
+    // All navigation paths, including notice and overview actions, update the mobile visibility gate.
+    if (isMobileManagerLayout()) {
+      const sections = { overview:'rpcm-section-overview', compression:'rpcm-section-compression', update:'rpcm-section-update', longterm:'rpcm-section-longterm', memory:'rpcm-section-basic', logs:'rpcm-section-basic', timeline:'rpcm-section-timeline', people:'rpcm-section-people', characters:'rpcm-section-character', items:'rpcm-section-item', extra:'rpcm-section-extra', preferences:'rpcm-section-preferences', lore:'rpcm-section-lore', tools:'rpcm-section-tools', ai:'rpcm-section-ai' };
+      const wanted = sections[key];
+      state.mobileSectionId = wanted;
+      [...new Set(Object.values(sections))].forEach(id => overlay.querySelector(`#${id}`)?.classList.toggle('rpcm-mobile-section-active', id === wanted));
+      overlay.querySelectorAll('.rpcm-mobile-nav-strip [data-jump]').forEach(button => button.classList.toggle('is-active', button.dataset.jump === wanted));
+      overlay.querySelectorAll('.rpcm-mobile-header-nav [data-workview]').forEach(button => button.classList.toggle('is-active', button.dataset.workview === key));
+    }
+    if (key === 'memory' || key === 'logs') {
+      const pane = key === 'logs' ? 'logs' : 'state';
+      state.memoryPane = pane;
+      shell.querySelectorAll('.rpcm-memory-tabs [data-memory-pane]').forEach(button => {
+        const selected = button.dataset.memoryPane === pane;
+        button.setAttribute('aria-selected', String(selected)); button.tabIndex = selected ? 0 : -1;
+      });
+      shell.querySelectorAll('.rpcm-memory-pane').forEach(node => { node.hidden = node.dataset.memoryContent !== pane; });
+    }
+    const heading = shell.querySelector('.rpcm-view-head strong');
+    const subtitle = shell.querySelector('.rpcm-view-head span');
+    if (heading) heading.textContent = RPCM_WORK_VIEWS[key][0];
+    if (subtitle) subtitle.textContent = RPCM_WORK_VIEWS[key][1];
+    const group = rpcmTopGroup(key);
+    shell.dataset.topGroup = group;
+    shell.querySelectorAll('.rpcm-work-nav [data-topview]').forEach(button => {
+      const selected = button.dataset.topview === group;
+      button.classList.toggle('is-active', selected);
+      if (selected) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
+    });
+    shell.querySelectorAll('.rpcm-work-subnav [data-workview]').forEach(button => {
+      const selected = button.dataset.workview === key;
+      button.classList.toggle('is-active', selected);
+      if (selected) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
+    });
+    if (key === 'ai') showAiWorkTab(overlay, state.aiWorkTab, aiAssistantOptions);
+    rpcmUpdateNavIndicator(shell.querySelector('.rpcm-work-nav'), '[data-topview].is-active', true);
+    rpcmUpdateNavIndicator(shell.querySelector('.rpcm-work-subnav'), '[data-workview].is-active');
+    requestAnimationFrame(() => { if (overlay.isConnected) rpcmUpdateSegmentedTabs(overlay); });
+    if (resetScroll) {
+      if (main) main.scrollTop = 0;
+    } else if (main && !shell.dataset.scrollRestored) {
+      main.scrollTop = state.modalScrollByView.get(`${state.currentRoom?.chatId || ''}:${key}`) || 0;
+      shell.dataset.scrollRestored = 'true';
+    }
+    if (key === 'overview') { animateOverviewNumber(shell); refreshLoreOverviewStatus(overlay, state.currentRoom); }
+    // 인물정보로 바로 진입해도 전체 RP를 한 번 확인해 실제 등장 턴 빈도순을 곧바로 적용합니다.
+    if (resetScroll && key === 'update') void refreshManualUpdateCounts(overlay, state.currentRoom);
+    if(resetScroll&&key==='timeline')scheduleStoryReviewCountRefresh(state.currentRoom);
+    if (key === 'longterm' && state.currentRoom) void longTermRefreshData(state.currentRoom).catch(error => notify(`장기기억 조회 실패: ${error.message}`, 'error'));
+  }
+
+  function refreshLoreOverviewStatus(overlay, room) {
+    const card = overlay.querySelector('.rpcm-overview-card[data-lore-omitted]');
+    if (!card || !room) return;
+    const previous = Number(card.dataset.loreOmitted || 0);
+    const budget = loreBudgetInfoFor(room);
+    const omitted = Math.max(0, Number(budget?.candidates || 0) - Number(budget?.included || 0));
+    if (previous === omitted) return;
+    const count = card.querySelector('strong');
+    if (count) count.textContent = `${Math.max(0, Number(count.textContent.replace(/[^0-9]/g, '') || 0) - (previous > 0 ? 1 : 0) + (omitted > 0 ? 1 : 0))}건`;
+    let issues = card.querySelector('.rpcm-overview-issues');
+    const oldButton = issues?.querySelector('[data-overview-issue="lore"]');
+    if (omitted) {
+      if (!issues) { issues = document.createElement('div'); issues.className = 'rpcm-overview-issues'; card.appendChild(issues); }
+      const button = oldButton || document.createElement('button');
+      button.type = 'button'; button.dataset.overviewIssue = 'lore'; button.textContent = `자료집 용량 제외 ${omitted}개`;
+      if (!oldButton) issues.appendChild(button);
+      button.onclick = () => showWorkView(overlay, 'lore', true);
+    } else oldButton?.remove();
+    const summary = card.querySelector(':scope > span');
+    if (summary) {
+      const parts = summary.textContent.split(' · ').map(part => part.trim()).filter(part => part && part !== '현재 표시할 검토 알림 없음' && !part.startsWith('자료집 용량 제외'));
+      if (omitted) parts.push('자료집 용량 제외');
+      summary.textContent = parts.join(' · ') || '현재 표시할 검토 알림 없음';
+    }
+    card.dataset.loreOmitted = String(omitted);
+  }
+
+  function animateOverviewNumber(shell) {
+    const count = shell?.querySelector('.rpcm-overview-card:nth-child(2)>strong');
+    if (!count) return;
+    const target = Number(count.dataset.target || count.textContent.replace(/[^0-9]/g, ''));
+    if (!Number.isFinite(target)) return;
+    if (state.modalOpening) { state.lastOverviewCapacity = target; return; }
+    const previous = state.lastOverviewCapacity;
+    state.lastOverviewCapacity = target;
+    if (previous === undefined || previous === target || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const duration = 420, begin = performance.now();
+    const token = (shell._rpcmCountToken || 0) + 1;
+    shell._rpcmCountToken = token;
+    const tick = now => {
+      if (!count.isConnected || shell._rpcmCountToken !== token || shell.dataset.view !== 'overview') return;
+      const t = Math.min(1, (now - begin) / duration);
+      count.textContent = `${formatCount(Math.round(previous + (target - previous) * (1 - (1 - t) ** 3)))}자`;
+      if (t < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+
+  function rpcmUpdateSegmentedTabs(overlay) {
+    for (const tabs of overlay.querySelectorAll('.rpcm-memory-tabs,.rpcm-person-tabs')) {
+      let indicator = tabs.querySelector('.rpcm-tab-indicator');
+      if (!indicator) { indicator = document.createElement('span'); indicator.className = 'rpcm-tab-indicator'; indicator.setAttribute('aria-hidden', 'true'); tabs.prepend(indicator); }
+      const selected = tabs.querySelector('button[aria-selected="true"]') || tabs.querySelector('button');
+      if (!selected) continue;
+      indicator.style.width = `${selected.offsetWidth}px`;
+      indicator.style.transform = `translateX(${selected.offsetLeft}px)`;
+    }
+  }
+  function rpcmInstallTabIndicator(overlay) {
+    rpcmUpdateSegmentedTabs(overlay);
+    if (overlay._rpcmTabIndicatorWired) return;
+    overlay._rpcmTabIndicatorWired = true;
+    if (!overlay._rpcmSegmentedClickBound) {
+      overlay._rpcmSegmentedClickBound = true;
+      overlay.addEventListener('click', event => {
+        if (event.target.closest('.rpcm-memory-tabs button,.rpcm-person-tabs button')) requestAnimationFrame(() => rpcmUpdateSegmentedTabs(overlay));
+      });
+    }
+  }
+
+  function compressionStyles(){if(document.getElementById('rpcm-compression-style'))return;const node=document.createElement('style');node.id='rpcm-compression-style';node.textContent="#rpcm-modal #rpcm-section-compression{display:none;min-width:0}\n#rpcm-modal .rpcm-workspace[data-view=\"compression\"] #rpcm-section-compression{display:grid;gap:16px}\nhtml.rpcm-mobile-layout #rpcm-modal #rpcm-section-compression.rpcm-mobile-section-active{display:grid}\n#rpcm-modal .rpcm-compression .rpcm-tool-card{width:100%;box-sizing:border-box}\n#rpcm-modal .rpcm-compression .rpcm-tool-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}\n#rpcm-modal .rpcm-compression .rpcm-tool-actions details{padding:8px}\n#rpcm-modal .rpcm-context-refresh-shortcut{margin:0 0 10px;min-width:0}\n#rpcm-modal .rpcm-recheck-report{margin-bottom:18px;padding:14px 16px;border-radius:16px;background:var(--wish-card);color:var(--wish-fg);border:1px solid var(--wish-line)}\n#rpcm-modal .rpcm-recheck-report summary{cursor:pointer;font-weight:500;display:flex;gap:12px;flex-wrap:wrap}\n#rpcm-modal .rpcm-recheck-report summary small{margin-left:auto}\n#rpcm-modal .rpcm-recheck-report article{padding:12px 0;border-top:1px solid var(--wish-line)}\n#rpcm-modal .rpcm-recheck-report article header{display:flex;gap:12px;justify-content:space-between}\n#rpcm-modal .rpcm-recheck-report p{line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere}\n#rpcm-modal .rpcm-recheck-empty{font-size:12px;color:var(--wish-muted);margin:0 0 16px}\n#rpcm-compression-backdrop{position:fixed;inset:0;z-index:2147483646;background:#0008;display:grid;place-items:center;padding:16px;box-sizing:border-box;color:var(--wish-fg)}\n#rpcm-compression-backdrop>section{width:min(1180px,100%);max-height:92dvh;display:flex;flex-direction:column;overflow:hidden;border-radius:20px;background:var(--wish-card);box-sizing:border-box}\n#rpcm-compression-backdrop header,#rpcm-compression-backdrop footer{display:flex;gap:12px;justify-content:space-between;align-items:center;padding:18px 22px;border-bottom:1px solid var(--wish-line)}\n#rpcm-compression-backdrop footer{border-bottom:0;border-top:1px solid var(--wish-line);justify-content:flex-end}\n#rpcm-compression-backdrop h2{font-size:20px;font-weight:500;margin:0}\n#rpcm-compression-backdrop h4{font-size:14px;font-weight:500}\n#rpcm-compression-backdrop .rpcm-update-result-body{padding:20px;overflow:auto;min-height:0}\n#rpcm-compression-backdrop textarea{width:100%;height:160px;box-sizing:border-box;padding:14px;margin-top:12px;background:var(--wish-card-2);color:var(--wish-fg);border:1px solid var(--wish-line);border-radius:12px}\n#rpcm-compression-backdrop .rpcm-compression-change{padding:18px 0;border-top:1px solid var(--wish-line)}\n#rpcm-compression-backdrop label{display:flex;gap:10px;align-items:center;flex-wrap:wrap}\n#rpcm-compression-backdrop .rpcm-compression-compare{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px}\n#rpcm-compression-backdrop pre{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.7;font-size:13px;max-height:360px;overflow:auto;background:var(--wish-card-2);padding:14px;border-radius:12px}\n#rpcm-compression-backdrop .rpcm-btn{padding:10px 16px;border:0;border-radius:12px;background:var(--wish-card-2);color:var(--wish-fg);cursor:pointer}\n#rpcm-compression-backdrop .rpcm-btn.primary{background:var(--wish-accent);color:white}\n#rpcm-compression-backdrop button:disabled{opacity:.45;cursor:default}\n@media(max-width:680px){#rpcm-compression-backdrop{padding:8px}#rpcm-compression-backdrop .rpcm-compression-compare{grid-template-columns:1fr}#rpcm-compression-backdrop footer{flex-wrap:wrap}#rpcm-modal .rpcm-context-refresh-shortcut{flex-wrap:wrap}}\n#rpcm-modal .rpcm-workspace[data-view=\"compression\"] .rpcm-work-content>:not(.rpcm-work-subnav):not(.rpcm-view-head):not(#rpcm-section-compression){display:none!important}\n#rpcm-modal .rpcm-workspace[data-view=\"compression\"] #rpcm-section-compression{display:grid!important;gap:16px}\n#rpcm-modal #rpcm-section-compression .rpcm-tool-card{padding:22px;border:1px solid var(--wish-line);background:var(--wish-card);border-radius:16px}\n#rpcm-modal #rpcm-section-compression h3{font-size:20px;font-weight:500;margin:0 0 10px}\n#rpcm-modal #rpcm-section-compression p{line-height:1.8}\n#rpcm-modal #rpcm-section-compression .rpcm-tool-actions{margin-top:20px}\n#rpcm-modal #rpcm-section-compression .rpcm-tool-card h3{color:var(--wish-fg)!important}\n#rpcm-modal #rpcm-section-compression .rpcm-tool-card p{color:var(--wish-fg-2)!important;font-size:14px}\n#rpcm-modal #rpcm-section-compression .rpcm-tool-card small{color:var(--wish-muted)!important;line-height:1.7}\n#rpcm-compression-backdrop .rpcm-btn.primary{color:var(--wish-accent-ink)}\n#rpcm-modal #rpcm-section-compression .rpcm-update-more,#rpcm-modal #rpcm-section-compression .rpcm-update-more[open]{position:relative;display:block;flex:0 0 auto!important;width:auto!important;min-width:85px;max-width:none;margin:0!important;padding:0!important;border:0!important;outline:0!important;box-shadow:none!important;background:transparent!important;overflow:visible!important}\n#rpcm-modal #rpcm-section-compression .rpcm-update-more>summary,#rpcm-modal #rpcm-section-compression .rpcm-update-more[open]>summary{display:flex!important;align-items:center;justify-content:center!important;box-sizing:border-box;width:auto!important;min-height:38px;padding:8px 12px!important;border:0!important;border-radius:11px;background:var(--wish-hi)!important;color:var(--wish-fg-2)!important;font-size:13px;font-weight:500;outline:0!important;box-shadow:none!important;white-space:nowrap;cursor:pointer}\n#rpcm-modal #rpcm-section-compression .rpcm-update-more>summary:focus-visible{box-shadow:0 0 0 2px var(--wish-accent-line)!important}\n#rpcm-modal #rpcm-section-compression .rpcm-update-more[open]>summary{color:var(--wish-accent-strong)!important;background:var(--wish-accent-soft)!important}\n#rpcm-modal #rpcm-section-compression .rpcm-update-more>.rpcm-update-more-actions{position:fixed!important;visibility:hidden;z-index:2147483646;display:grid!important;grid-template-columns:minmax(0,1fr);justify-content:stretch;gap:3px!important;width:max-content;min-width:174px;max-width:calc(100vw - 16px);max-height:min(420px,70vh);box-sizing:border-box;margin:0!important;padding:6px!important;border:1px solid var(--wish-line)!important;border-radius:13px;background:var(--wish-card)!important;box-shadow:var(--wish-lift,0 8px 26px rgba(0,0,0,.18))!important;overflow:auto}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-section-compression .rpcm-update-more-actions>.rpcm-btn{display:flex!important;justify-content:flex-start;align-items:center;width:100%;min-height:36px;padding:9px 11px!important;margin:0!important;border:0!important;outline:0!important;border-radius:8px;background:transparent!important;color:var(--wish-fg)!important;box-shadow:none!important;font-size:13px;font-weight:400;white-space:normal;text-align:left}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-section-compression .rpcm-update-more-actions>.rpcm-btn:hover,html body #rpcm-overlay #rpcm-modal #rpcm-section-compression .rpcm-update-more-actions>.rpcm-btn:focus-visible{background:var(--wish-accent-soft)!important;color:var(--wish-accent-strong)!important}\nhtml body #rpcm-overlay #rpcm-modal #rpcm-section-compression .rpcm-update-more-actions>[hidden]{display:none!important}\n\n#rpcm-modal #rpcm-section-compression .rpcm-tool-actions>.rpcm-compression-more{padding:0!important;align-self:center}\n#rpcm-modal #rpcm-section-compression .rpcm-compression-more>summary{gap:8px;list-style:none;user-select:none;-webkit-user-select:none}\n#rpcm-modal #rpcm-section-compression .rpcm-compression-more>summary::-webkit-details-marker{display:none}\n#rpcm-modal #rpcm-section-compression .rpcm-compression-more>summary::after{content:'';display:block;width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg);margin-top:-3px}\n#rpcm-modal #rpcm-section-compression .rpcm-compression-more[open]>summary::after{transform:rotate(225deg);margin-top:3px}\n#rpcm-modal #rpcm-section-compression .rpcm-tool-actions>.rpcm-btn{min-height:38px;box-sizing:border-box}\n#rpcm-modal #rpcm-section-compression .rpcm-compression-help{margin:20px 0 0;padding:16px 18px;border-radius:12px;background:var(--wish-hi);border:0;color:var(--wish-fg);box-sizing:border-box}\n#rpcm-modal #rpcm-section-compression .rpcm-compression-help strong{font-size:13px;font-weight:500;color:var(--wish-fg)}\n#rpcm-modal #rpcm-section-compression .rpcm-compression-help p{font-size:13px!important;margin:6px 0 9px;color:var(--wish-fg-2)!important;line-height:1.7}\n#rpcm-modal #rpcm-section-compression .rpcm-compression-help small{display:block;font-size:12px}\n\n#rpcm-compression-backdrop{font-family:-apple-system,BlinkMacSystemFont,\"Apple SD Gothic Neo\",\"Noto Sans KR\",sans-serif;font-size:14px}\n#rpcm-compression-backdrop header p{font-size:13px;line-height:1.6;margin:6px 0 0;color:var(--wish-muted)}\n#rpcm-compression-backdrop footer{gap:16px}\n#rpcm-compression-backdrop footer>div{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}\n#rpcm-compression-backdrop [data-selection-summary]{margin:0 auto 0 0;font-size:13px;color:var(--wish-fg-2)}\n#rpcm-compression-backdrop [hidden]{display:none!important}\n#rpcm-compression-backdrop summary{cursor:pointer;user-select:none;-webkit-user-select:none;font-size:13px;line-height:1.6}\n#rpcm-compression-backdrop input[type=checkbox]{accent-color:var(--wish-accent);width:16px;height:16px;flex-shrink:0;margin:0;cursor:pointer}\n#rpcm-compression-backdrop .rpcm-compression-input{border:1px solid var(--wish-line);border-radius:12px;padding:12px 16px}\n#rpcm-compression-backdrop .rpcm-compression-input[open]>summary{margin-bottom:14px}\n#rpcm-compression-backdrop [data-status]{font-size:12px;color:var(--wish-fg-2);line-height:1.6;margin:12px 0}\n#rpcm-compression-backdrop .rpcm-compression-filters{display:flex;gap:8px;flex-wrap:wrap;position:sticky;top:-20px;z-index:2;background:var(--wish-card);padding:14px 0}\n#rpcm-compression-backdrop .rpcm-compression-filters button{display:flex;gap:8px;align-items:center;border:1px solid var(--wish-line);border-radius:12px;padding:9px 14px;background:var(--wish-card);color:var(--wish-fg-2);font:inherit;font-size:13px;cursor:pointer}\n#rpcm-compression-backdrop .rpcm-compression-filters button[aria-pressed=true]{background:var(--wish-accent-soft);color:var(--wish-accent-strong);border-color:var(--wish-accent-line)}\n#rpcm-compression-backdrop .rpcm-compression-filters span{font-size:11px;color:inherit}\n#rpcm-compression-backdrop .rpcm-compression-review-help{font-size:12px;color:var(--wish-muted);margin:0 0 16px;line-height:1.6}\n#rpcm-compression-backdrop .rpcm-compression-common-reason{background:var(--wish-hi);border-radius:12px;padding:12px 16px;margin-bottom:12px;font-size:12px;color:var(--wish-fg-2);line-height:1.7}\n#rpcm-compression-backdrop .rpcm-compression-common-reason p{white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0}\n#rpcm-compression-backdrop .rpcm-compression-group{margin-top:24px}\n#rpcm-compression-backdrop .rpcm-compression-group-heading{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-bottom:12px}\n#rpcm-compression-backdrop .rpcm-compression-group-heading h3{margin:0;font-size:17px;font-weight:600;color:var(--wish-fg)}\n#rpcm-compression-backdrop .rpcm-compression-group-heading h3 span{font-size:12px;font-weight:400;color:var(--wish-muted);margin-left:8px}\n#rpcm-compression-backdrop .rpcm-compression-group-heading label{font-size:12px;color:var(--wish-muted)}\n#rpcm-compression-backdrop .rpcm-compression-change{border:1px solid var(--wish-line);border-radius:16px;padding:18px 20px;margin:0 0 12px;background:var(--wish-card)}\n#rpcm-compression-backdrop .rpcm-compression-card-heading{display:flex;gap:12px;align-items:center;justify-content:space-between}\n#rpcm-compression-backdrop .rpcm-compression-card-heading label{min-width:0;flex-wrap:nowrap;font-size:15px;line-height:1.5}\n#rpcm-compression-backdrop .rpcm-compression-card-heading strong{font-weight:600;overflow-wrap:anywhere}\n#rpcm-compression-backdrop .rpcm-compression-action{flex-shrink:0;font-size:11px;border-radius:20px;padding:5px 10px;background:var(--wish-accent-soft);color:var(--wish-accent-strong)}\n#rpcm-compression-backdrop .rpcm-compression-context{font-size:12px;color:var(--wish-muted);line-height:1.6;margin:7px 0 16px;overflow-wrap:anywhere}\n#rpcm-compression-backdrop .rpcm-compression-plan{display:flex;gap:8px 18px;justify-content:space-between;flex-wrap:wrap;font-size:13px;line-height:1.6}\n#rpcm-compression-backdrop .rpcm-compression-plan strong{font-weight:500}\n#rpcm-compression-backdrop .rpcm-compression-plan>span{font-size:12px;color:var(--wish-muted)}\n#rpcm-compression-backdrop .rpcm-compression-reason{display:grid;grid-template-columns:82px minmax(0,1fr);gap:3px 12px;font-size:12px;line-height:1.7;margin-top:10px;color:var(--wish-fg-2)}\n#rpcm-compression-backdrop .rpcm-compression-reason>span{color:var(--wish-muted)}\n#rpcm-compression-backdrop .rpcm-compression-reason p{margin:0;overflow-wrap:anywhere;white-space:pre-wrap}\n#rpcm-compression-backdrop .rpcm-compression-reason details{grid-column:2}\n#rpcm-compression-backdrop .rpcm-compression-reason details p{margin:8px 0}\n#rpcm-compression-backdrop .rpcm-compression-excerpt{background:var(--wish-hi);border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.7;margin:14px 0 0;color:var(--wish-fg-2);overflow-wrap:anywhere}\n#rpcm-compression-backdrop .rpcm-compression-excerpt span{display:block;color:var(--wish-muted);font-size:11px;margin-bottom:4px}\n#rpcm-compression-backdrop .rpcm-compression-full-diff{border-top:1px solid var(--wish-line);margin-top:14px;padding-top:12px}\n#rpcm-compression-backdrop .rpcm-compression-full-diff>summary{color:var(--wish-accent-strong);font-size:12px}\n#rpcm-compression-backdrop .rpcm-compression-field{margin-top:18px}\n#rpcm-compression-backdrop .rpcm-compression-field h4{font-size:13px;font-weight:500;margin:0 0 10px;display:flex;gap:12px;align-items:center}\n#rpcm-compression-backdrop .rpcm-compression-field h4 span{font-size:11px;color:var(--wish-muted);font-weight:400}\n#rpcm-compression-backdrop .rpcm-compression-compare h5{font-size:12px;font-weight:500;margin:0 0 6px;color:var(--wish-muted)}\n#rpcm-compression-backdrop pre{margin:0;font-family:inherit;background:var(--wish-hi);color:var(--wish-fg-2);line-height:1.8}\n#rpcm-compression-backdrop mark{color:inherit;border-radius:3px;background:transparent}\n#rpcm-compression-backdrop mark.rpcm-compression-removed{background:var(--wish-accent-soft);text-decoration:line-through;text-decoration-color:var(--wish-muted)}\n#rpcm-compression-backdrop mark.rpcm-compression-added{background:var(--wish-accent-soft);box-shadow:inset 0 -2px var(--wish-accent-line)}\n#rpcm-compression-backdrop button:focus-visible,#rpcm-compression-backdrop summary:focus-visible{outline:2px solid var(--wish-accent-line);outline-offset:3px}\n@media(max-width:680px){#rpcm-compression-backdrop>section{max-height:95dvh}#rpcm-compression-backdrop header,#rpcm-compression-backdrop footer{padding:14px}#rpcm-compression-backdrop h2{font-size:18px}#rpcm-compression-backdrop .rpcm-update-result-body{padding:14px}#rpcm-compression-backdrop .rpcm-compression-filters{top:-14px;padding:10px 0;gap:6px}#rpcm-compression-backdrop .rpcm-compression-filters button{padding:8px 10px;font-size:12px}#rpcm-compression-backdrop .rpcm-compression-group-heading{align-items:flex-start;flex-wrap:wrap}#rpcm-compression-backdrop .rpcm-compression-change{padding:16px 14px}#rpcm-compression-backdrop .rpcm-compression-reason{grid-template-columns:1fr}#rpcm-compression-backdrop .rpcm-compression-reason details{grid-column:1}#rpcm-compression-backdrop footer{display:block}#rpcm-compression-backdrop [data-selection-summary]{margin-bottom:12px}#rpcm-compression-backdrop footer>div{justify-content:space-between}}\n";document.head.appendChild(node);}
+  function assembleWorkSpace(overlay) {
+    compressionStyles();
+    const body = overlay.querySelector('.rpcm-body');
+    const legacyNav = body?.querySelector('.rpcm-work-nav');
+    if (!body || !legacyNav) return;
+    legacyNav.className = 'rpcm-work-subnav';
+    legacyNav.querySelectorAll('[data-workview]').forEach(button => { button.dataset.act = 'workview'; button.dataset.arg = button.dataset.workview; });
+    const nav = document.createElement('nav');
+    nav.className = 'rpcm-work-nav';
+    nav.setAttribute('aria-label', 'RP 매니저 주 메뉴');
+    nav.innerHTML = '<span class="rpcm-nav-indicator" aria-hidden="true"></span>' + Object.entries(RPCM_TOP_NAV).map(([key, item]) => `<button type="button" class="rpcm-jump" data-topview="${key}" data-act="workview" data-arg="${item.first}" data-workview="${item.first}" data-jump="${({overview:'rpcm-section-overview',memory:'rpcm-section-basic',lore:'rpcm-section-lore',people:'rpcm-section-people',manage:'rpcm-section-update',settings:'rpcm-section-preferences',ai:'rpcm-section-ai'})[key]}">${rpcmUiIcon(item.icon)}<span>${item.label}</span></button>`).join('');
+    const status = body.querySelector('.rpcm-pending');
+    if (status) overlay.querySelector('.rpcm-global-status')?.appendChild(status);
+    const nodes = [...body.children];
+    const shell = document.createElement('div');
+    shell.className = 'rpcm-workspace';
+    const sidebar = document.createElement('aside');
+    sidebar.className = 'rpcm-side-surface';
+    sidebar.appendChild(nav);
+    const subIndicator = document.createElement('span');
+    subIndicator.className = 'rpcm-nav-indicator';
+    subIndicator.setAttribute('aria-hidden', 'true');
+    legacyNav.prepend(subIndicator);
+    const main = document.createElement('div');
+    main.className = 'rpcm-work-content';
+    main.innerHTML = '<div class="rpcm-view-head"><strong></strong><span></span></div>';
+    main.appendChild(legacyNav);
+    for (const node of nodes) if (node !== legacyNav) main.appendChild(node);
+    main.querySelectorAll('.rpcm-mobile-nav-strip [data-jump]').forEach(button => { button.dataset.act = 'mobileview'; button.dataset.arg = button.dataset.jump; });
+    main.insertAdjacentHTML('beforeend',compressionUiHtml(state.currentRoom));
+    const timeline=main.querySelector('#rpcm-section-timeline');
+    if (timeline) main.appendChild(timeline);
+    const aiExtras=main.querySelector('#rpcm-ai-extras');
+    if (aiExtras) main.querySelectorAll('.rpcm-ai-launchbar').forEach(node=>aiExtras.appendChild(node));
+    const overview=main.querySelector('.rpcm-overview');
+    const logShortcut=main.querySelector('.rpcm-log-count-shortcut');
+    if (overview && logShortcut) overview.prepend(logShortcut);
+    if(overview){const panel=document.createElement('section');panel.id='rpcm-section-overview';overview.before(panel);[main.querySelector('.rpcm-summary'),overview,main.querySelector('.rpcm-update-overview'),main.querySelector('.rpcm-warnings'),main.querySelector('.rpcm-auto-active')].filter(Boolean).forEach(node=>panel.appendChild(node));const aiStatus=document.createElement('div');aiStatus.className='rpcm-pref-card rpcm-ai-memory-overview';aiStatus.innerHTML=aiMemoryOverview(state.currentRoom);panel.appendChild(aiStatus);const refresh=main.querySelector('.rpcm-context-refresh-shortcut');if(refresh){panel.prepend(refresh);refresh.insertAdjacentHTML('afterend',renderInjectionRecheckReport(state.currentRoom));}aiStatus.querySelector('[data-ai-memory-open-settings]')?.addEventListener('click',()=>showWorkView(overlay,'tools',true));}
+    bindRpcm74Controls(overlay,state.currentRoom);
+    const tools = main.querySelector('#rpcm-section-tools');
+    if (tools) {
+      const startCard=document.createElement('section');startCard.id='rpcm-first-use';startCard.className='rpcm-tool-card';
+      startCard.innerHTML='<h3>처음 시작·자료 이사</h3><p>백업이 있으면 가져오고, 없으면 RP 로그와 재구축 지침을 함께 준비하세요.</p><div class="rpcm-tool-actions"><button type="button" class="rpcm-btn primary" data-first-backup title="원작 .14/.15와 기존 위시 백업 JSON을 선택해 방·설정집을 복원합니다. 파일에 없는 전역 설정과 현재 API 키는 유지합니다.">백업 JSON으로 이사</button><button type="button" class="rpcm-btn secondary" data-first-rebuild>백업 없이 처음 시작</button></div><small>기존 기억을 자동으로 지우거나 합치지 않습니다. 가져오기와 재구축 결과는 확인 후 선택한 자료만 반영합니다.</small>';
+      tools.prepend(startCard);
+      startCard.querySelector('[data-first-backup]').onclick=()=>overlay.querySelector('#rpcm-import').click();
+      startCard.querySelector('[data-first-rebuild]').onclick=()=>rpcmOpenFirstRebuildGuide(state.currentRoom,overlay);
+      const firstHome=main.querySelector('#rpcm-section-overview');
+      if(firstHome){const entry=document.createElement('section');entry.id='rpcm-first-use-entry';entry.className='rpcm-pref-card';entry.innerHTML='<strong>처음 시작·자료 이사</strong><p>기존 백업 JSON을 가져오거나, 백업 없이 RP 로그로 기억을 준비할 수 있습니다.</p><button type="button" class="rpcm-btn secondary" data-first-open>시작 방법 선택</button>';firstHome.prepend(entry);entry.querySelector('[data-first-open]').onclick=()=>{showWorkView(overlay,'tools',true);startCard.scrollIntoView({block:'start'});};}
+      const sections = [
+        ['주입 확인', '현재 주입 후보와 원문을 확인합니다.', ['rpcm-preview-btn']],
+        ['자료 이동·보관', '전체 백업·파일 확인·저장 상태 점검과 선택 복구를 관리합니다.', ['rpcm-room-transfer-backup', 'rpcm-backup', 'rpcm-full-verify', 'rpcm-import', 'rpcm-full-diagnostics', 'rpcm-storage-recovery']],
+        ['초기화', '선택한 영역의 내용·기준점·대기 초안을 함께 초기화할 수 있습니다.', ['rpcm-reset-area', 'rpcm-reset']],
+      ];
+      for (const [title, description, buttonIds] of sections) {
+        const card = document.createElement('section');
+        card.className = 'rpcm-tool-card';
+        card.innerHTML = `<h3>${title}</h3><p>${description}</p><div class="rpcm-tool-actions"></div>`;
+        const actions = card.querySelector('.rpcm-tool-actions');
+        for (const id of buttonIds) {
+          const button = tools.querySelector('#' + id);
+          if (button) actions.appendChild(button);
+        }
+        tools.appendChild(card);
+      }
+      const rebuildCard=document.createElement('section');
+      rebuildCard.id='rpcm-full-rebuild-card';
+      rebuildCard.className='rpcm-tool-card rpcm-full-rebuild-card';
+      rebuildCard.innerHTML='<h3>전체 기억 재구축</h3><p>처음에는 ‘RP 로그·지침 받기’로 모든 파일을 준비해 외부 AI에 전달하세요. 받은 전체재구축 JSON은 ‘최종 JSON 가져오기’에서 확인 후 원하는 영역만 반영합니다. 외부 AI를 직접 사용하면 매니저용 API 키 없이 진행할 수 있습니다.</p><small data-rebuild-status></small><div class="rpcm-tool-actions"><button type="button" class="rpcm-btn primary" data-rebuild-export>RP 로그·지침 받기</button><button type="button" class="rpcm-btn secondary" data-rebuild-import>최종 JSON 가져오기</button><button type="button" class="rpcm-btn secondary" data-rebuild-guide>지침</button></div>';
+      tools.insertBefore(rebuildCard,tools.querySelector('.rpcm-tool-card:last-of-type'));
+      const issueCard=document.createElement('section');
+      issueCard.className='rpcm-tool-card';
+      issueCard.innerHTML='<h3>처리·오류 기록</h3><p>작업 검증·저장 실패를 확인합니다. RP 원문 전체는 기록하지 않습니다.</p><div class="rpcm-tool-actions"><button type="button" class="rpcm-btn secondary" data-rpcm-issue-open>기록 보기</button></div>';
+      tools.appendChild(issueCard);
+      const shortcuts = tools.querySelector('.rpcm-shortcuts');
+      if (shortcuts) tools.appendChild(shortcuts);
+    }
+    main.insertAdjacentHTML('beforeend', longTermUiHtml(state.currentRoom));
+    longTermFilterList(main.querySelector('#rpcm-section-longterm'),state.currentRoom);
+    shell.append(sidebar, main);
+    body.replaceChildren(shell);
+    showWorkView(overlay, state.workView || 'overview');
+  }
+
+
+  function fixedSlotReadBlocks(slot, originalText) {
+    const raw = String(originalText || '');
+    if (!raw.trim()) return { type:'empty', blocks:[] };
+    if (slot.id === 'currentState') {
+      const sections = parseCurrentStateSections(raw);
+      if (sections.length) return {
+        type:'sections',
+        blocks:sections.map(section => ({
+          title:section.title,
+          body:section.body,
+          raw:`${CURRENT_STATE_SECTION_RULE}\n${section.number}. ${section.title}\n${CURRENT_STATE_SECTION_RULE}\n${section.body}`,
+          nested:parseCurrentStateSubblocks(section.body),
+        })),
+      };
+    }
+    if (slot.id === 'logSummary') {
+      const blocks = parseDatedLogBlocks(raw);
+      if (blocks.length) return {
+        type:'dates',
+        blocks:blocks.map(block => ({ title:block.titleText || block.heading, body:block.body, raw:block.raw, key:String(block.key), timeline:logTimelineLabelOfBlock(block), year:block.year, month:block.month })),
+      };
+    }
+    return { type:'plain', blocks:[{ title:'원문', body:raw, raw }] };
+  }
+
+  function renderFixedSlotReadView(slot, originalText, room = null) {
+    const parsed = fixedSlotReadBlocks(slot, originalText);
+    if (parsed.type === 'empty') return '<div class="rpcm-read-empty">저장된 내용이 없습니다. ‘원문 편집’에서 내용을 붙여넣으세요.</div>';
+    const cards = parsed.blocks.map((block, index) => {
+      let body = esc(block.body);
+      if (parsed.type === 'sections' && block.nested?.blocks.length) {
+        body = (block.nested.intro ? '<pre class="rpcm-read-text">' + esc(block.nested.intro) + '</pre>' : '')
+          + block.nested.blocks.map(sub => '<div class="rpcm-read-sub"><strong>[' + esc(sub.title) + ']</strong><pre class="rpcm-read-text">' + esc(sub.body) + '</pre></div>').join('');
+      } else body = '<pre class="rpcm-read-text">' + body + '</pre>';
+      const logStatus=parsed.type==='dates' && room ? [
+        (room.autoLogPinnedKeys || []).includes(block.key) ? '📌 고정' : '',
+        (room.manualLogSelectedKeys || []).includes(block.key) ? '직접 선택' : '',
+        (room.autoLogExcludedKeys || []).includes(block.key) ? '자동 제외' : '',
+        activePendingItems(room.pending).some(item=>String(item.sourceKey || '')===block.key) ? '현재 주입 중' : '',
+      ].filter(Boolean).join(' · ') : '';
+      const meta=parsed.type==='dates' ? `<small>${esc(block.timeline || DEFAULT_LOG_TIMELINE)}${logStatus?' · '+esc(logStatus):''}</small>` : '';
+      return '<details class="rpcm-read-card"' + (index === 0 ? ' open' : '') + '><summary><span class="rpcm-read-index">' + String(index + 1).padStart(2,'0') + '</span><strong>' + esc(block.title) + '</strong>' + meta + '<small>' + formatCount(block.body.length) + '자</small><button type="button" class="rpcm-read-copy" data-read-copy="' + index + '">복사</button><span class="rpcm-read-chevron">▾</span></summary><div class="rpcm-read-card-body">' + body + '</div></details>';
+    }).join('');
+    return '<div class="rpcm-read-card-list">' + cards + '</div>';
+  }
+
+  function switchInlineTimelineView(section, room, view) {
+    if(!['vertical','horizontal'].includes(view))return;
+    state.timelineViewByRoom ||= new Map();
+    const key=String(room.chatId);
+    if((state.timelineViewByRoom.get(key)||'vertical')===view)return;
+    const months=[...section.querySelectorAll('.rpcm-inline-story-month[data-month-key]')];
+    if(months.length)state.timelineMonthOpenByRoom.set(key,new Map(months.map(node=>[node.dataset.monthKey,node.open])));
+    const oldList=section.querySelector('.rpcm-inline-story-list');
+    const existing=new Map([...oldList.querySelectorAll('[data-inline-story-id]')].map(node=>[node.dataset.inlineStoryId,node]));
+    section.querySelector('.rpcm-story-popover')?.remove();
+    state.timelineViewByRoom.set(key,view);
+    const template=document.createElement('template');template.innerHTML=renderInlineTimelineHtml(room);
+    const nextList=template.content.querySelector('.rpcm-inline-story-list');
+    for(const next of nextList.querySelectorAll('[data-inline-story-id]')){
+      const previous=existing.get(next.dataset.inlineStoryId);
+      if(previous){if(view==='horizontal'){previous.dataset.verticalOpen=String(previous.open);previous.open=false;}else if(previous.dataset.verticalOpen==='true')previous.open=true;next.replaceWith(previous);}
+    }
+    oldList.replaceWith(nextList);
+    section.querySelectorAll('[data-story-view]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.storyView===view)));
+    if(view==='horizontal')nextList.scrollLeft=0;
+  }
+
+  function renderInlineTimelineHtml(room) {
+    const list=storyTimelineCardsFor(room);
+    const diff=new Map((room.storyTimelineLastDiff||[]).map(item=>[String(item.cardId),item.type]));
+    const settings=room.storyTimelineReviewSettings||{};
+    state.timelineViewByRoom ||= new Map();
+    const view=state.timelineViewByRoom.get(String(room.chatId))||'vertical';
+    const monthKey=card=>/^\d{4}-\d{2}/.test(card.dateStart||'')?card.dateStart.slice(0,7):'날짜 미정';
+    const cardHtml=card=>`<details class="rpcm-inline-story-card" name="rpcm-story-node" data-inline-story-id="${esc(card.cardId)}">
+      <summary class="rpcm-inline-story-top"><i class="rpcm-story-node" aria-hidden="true"></i><span>${esc(storyCardDateLabel(card))}</span><strong>${esc(card.title||'제목 없음')}</strong>${diff.get(String(card.cardId))==='updated'?'<em>UPDATED</em>':''}${card.userLocked?'<em>잠금</em>':''}${card.inject?'<em>주입</em>':''}<small>${esc(card.timelineLabel||DEFAULT_LOG_TIMELINE)}</small></summary>
+      <div class="rpcm-story-detail"><button type="button" class="rpcm-btn secondary" data-inline-story-action="edit">편집</button>
+      <div class="rpcm-inline-story-read"><p>${esc(card.content||'본문 없음')}</p><small>${esc(card.timelineLabel||DEFAULT_LOG_TIMELINE)}${card.tags?.length?' · '+esc(card.tags.map(tag=>'#'+tag).join(' ')):''}${card.userLocked?' · 잠금':''}</small></div>
+      <div class="rpcm-inline-story-edit" hidden><label>출처 시간선<select data-field="timelineLabel">${[...new Set([card.timelineLabel,...normalizeRoomLogTimelines(room)])].map(label=>`<option value="${esc(label)}" ${label===card.timelineLabel?'selected':''}>${esc(label)}</option>`).join('')}</select></label><label>시작일<input data-field="dateStart" value="${esc(card.dateStart||'')}" placeholder="YYYY-MM-DD"></label><label>종료일<input data-field="dateEnd" value="${esc(card.dateEnd||'')}" placeholder="YYYY-MM-DD"></label><label>제목<input data-field="title" value="${esc(card.title||'')}"></label><label>태그<input data-field="tags" value="${esc((card.tags||[]).join(', '))}"></label><label class="wide">본문<textarea data-field="content">${esc(card.content||'')}</textarea></label><label><input type="checkbox" data-field="userLocked" ${card.userLocked?'checked':''}> 사용자 잠금</label><div><button type="button" data-inline-story-action="cancel">취소</button><button type="button" data-inline-story-action="delete">삭제</button><button type="button" data-inline-story-action="save">저장</button></div></div>
+      <label class="rpcm-inline-story-inject"><input type="checkbox" data-inline-story-inject ${card.inject?'checked':''}> 주입 포함</label>
+      </div></details>`;
+    const groups=[];
+    for (const card of list) {
+      const key=monthKey(card);let group=groups.at(-1);
+      if(!group||group.key!==key){group={key,cards:[]};groups.push(group);}
+      group.cards.push(card);
+    }
+    const monthly=settings.monthlyFold!==false&&list.length>=Number(settings.monthlyFoldMin||8);
+    const savedMonthOpen = state.timelineMonthOpenByRoom.get(String(room.chatId));
+    const cardsHtml=view==='vertical'&&monthly?groups.map((group,index)=>`<details class="rpcm-inline-story-month" data-month-key="${esc(group.key)}:${index}" ${isMobileManagerLayout() || (savedMonthOpen ? savedMonthOpen.get(`${group.key}:${index}`) === true : true) ? 'open' : ''}><summary>${esc(group.key)} · ${group.cards.length}개</summary><div class="rpcm-story-month-spine">${group.cards.map(cardHtml).join('')}</div></details>`).join(''):list.map((card,index)=>`${index===0||monthKey(card)!==monthKey(list[index-1])?`<div class="rpcm-story-month-label">${esc(monthKey(card))}</div>`:''}${cardHtml(card)}`).join('');
+    const nav=settings.dateIndicator!==false&&list.length>1?`<details class="rpcm-inline-story-date-nav"><summary>날짜별 이동 · ${list.length}개</summary><div>${list.map(card=>`<button type="button" data-inline-story-jump="${esc(card.cardId)}">${esc(storyCardDateLabel(card))} · ${esc(card.title||'제목 없음')}</button>`).join('')}</div></details>`:'';
+    return `<div class="rpcm-inline-story-toolbar"><div class="rpcm-story-view-toggle" role="group" aria-label="타임라인 보기"><button type="button" data-story-view="vertical" aria-pressed="${view==='vertical'}">세로 보기</button><button type="button" data-story-view="horizontal" aria-pressed="${view==='horizontal'}">가로 보기</button></div><div class="rpcm-story-stepper" aria-label="가로 타임라인 이동"><button type="button" data-story-step="-1" aria-label="이전 카드">‹</button><button type="button" data-story-step="1" aria-label="다음 카드">›</button></div><button type="button" class="rpcm-btn secondary" id="rpcm-inline-story-add">＋ 수동 카드</button>${room.storyTimelineBackup?'<button type="button" class="rpcm-btn secondary" id="rpcm-inline-story-undo">직전 타임라인 되돌리기</button>':''}<button type="button" class="rpcm-btn secondary rpcm-guide-entry" data-rpcm-guide="timeline">${esc(commonGuideButtonLabel(room, 'timeline'))}</button><span>전체 ${list.length}개 · 마지막 검토 이후 RP ${Number(room.storyTimelineUnreviewedTurnCount||0)}턴</span></div>
+      ${(room.storyTimelineLastDiff||[]).length?`<div class="rpcm-inline-story-diff">최근 변경 · 추가 ${(room.storyTimelineLastDiff||[]).filter(x=>x.type==='new').length} · 수정 ${(room.storyTimelineLastDiff||[]).filter(x=>x.type==='updated').length} · 제거 ${(room.storyTimelineLastDiff||[]).filter(x=>x.type==='removed').length}</div>`:''}
+      <details class="rpcm-inline-story-settings"><summary>표시·검토 설정</summary><label><input type="checkbox" data-inline-story-setting="dateIndicator" ${settings.dateIndicator!==false?'checked':''}> 날짜별 카드 이동</label><label><input type="checkbox" data-inline-story-setting="monthlyFold" ${settings.monthlyFold!==false?'checked':''}> 월별 접기</label><label>월별 접기 시작 <input type="number" min="2" max="100" data-inline-story-setting="monthlyFoldMin" value="${Number(settings.monthlyFoldMin||8)}">개</label><label>검토 권장 기준 <input type="number" min="1" max="1000" data-inline-story-setting="threshold" value="${Number(settings.threshold||50)}">턴</label></details>
+      ${nav}<div class="rpcm-inline-story-list rpcm-story-${view}">${cardsHtml||'<p>저장된 카드가 없습니다. 수동 카드를 추가할 수 있습니다.</p>'}</div>`;
+  }
+
+  function openInlineStoryPopover(section, card) {
+    section.querySelector('.rpcm-story-popover')?.remove();
+    const summary=card.querySelector('.rpcm-inline-story-top');
+    const detail=card.querySelector('.rpcm-story-detail');
+    if(!summary||!detail)return;
+    card.open=false;
+    const pop=document.createElement('aside');
+    pop.className='rpcm-story-popover';
+    pop.dataset.inlineStoryId=card.dataset.inlineStoryId;
+    pop.setAttribute('role','dialog');
+    pop.setAttribute('aria-label',`${summary.querySelector('strong')?.textContent||'타임라인'} 상세`);
+    pop.innerHTML=`<div class="rpcm-story-popover-head"><strong>${esc(summary.querySelector('strong')?.textContent||'타임라인')}</strong><button type="button" data-story-popover-close aria-label="상세 닫기" data-rpcm-close="icon">×</button></div><div class="rpcm-story-detail">${detail.innerHTML}</div>`;
+    section.appendChild(pop);
+    // Keep the detail in the timeline's coordinate system. A fixed child of the
+    // scrolling Manager can be positioned against a transformed ancestor and
+    // appear far to the right of the node that opened it.
+    const rect=summary.getBoundingClientRect(),bounds=section.getBoundingClientRect();
+    const width=Math.max(220,Math.min(520,bounds.width-24,window.innerWidth-24));
+    pop.style.width=`${width}px`;
+    const height=pop.getBoundingClientRect().height;
+    const left=Math.max(12,Math.min(Math.max(12,bounds.width-width-12),rect.left-bounds.left));
+    const below=rect.bottom+height+10 <= Math.min(window.innerHeight-12,section.closest('.rpcm-work-content')?.getBoundingClientRect().bottom||window.innerHeight);
+    const top=below ? rect.bottom-bounds.top+8 : rect.top-bounds.top-height-8;
+    pop.style.left=`${left}px`;
+    pop.style.top=`${Math.max(0,top)}px`;
+    pop.querySelector('[data-story-popover-close]').onclick=()=>pop.remove();
+  }
+
+  function openWishLogCalendar(room) {
+    if(!document.getElementById('rpcm-log-calendar-style')){
+      const style=document.createElement('style');style.id='rpcm-log-calendar-style';style.textContent=`
+        #rpcm-log-calendar-backdrop{position:fixed;inset:0;z-index:2147483646;display:grid;place-items:center;padding:12px;background:var(--wish-scrim,rgba(38,23,32,.4));color:var(--wish-fg)}
+        #rpcm-log-calendar-backdrop *{box-sizing:border-box}
+        #rpcm-log-calendar-backdrop .rpcm-log-calendar{width:min(950px,100%);height:min(740px,calc(100dvh - 24px));display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--wish-line);border-radius:16px;background:var(--wish-sheet);box-shadow:var(--wish-shell-shadow)}
+        #rpcm-log-calendar-backdrop header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 19px;border-bottom:1px solid var(--wish-line)}
+        #rpcm-log-calendar-backdrop header>div{display:grid;gap:3px}#rpcm-log-calendar-backdrop header strong{font-size:17px}#rpcm-log-calendar-backdrop header span{font-size:12px;color:var(--wish-muted)}
+        #rpcm-log-calendar-backdrop button,#rpcm-log-calendar-backdrop select{font:inherit;cursor:pointer;color:var(--wish-fg);background:var(--wish-card);border:1px solid var(--wish-line);border-radius:8px}
+        #rpcm-log-calendar-backdrop button:disabled{opacity:.35;cursor:default}#rpcm-log-calendar-backdrop header button{width:31px;height:31px;font-size:23px;line-height:1}
+        #rpcm-log-calendar-backdrop .rpcm-cal-columns{display:grid;grid-template-columns:minmax(330px,1fr) minmax(0,1fr);min-height:0;flex:1}
+        #rpcm-log-calendar-backdrop .rpcm-cal-left,#rpcm-log-calendar-backdrop .rpcm-cal-right{min-width:0;overflow:auto;padding:16px;scrollbar-width:thin}
+        #rpcm-log-calendar-backdrop .rpcm-cal-right{border-left:1px solid var(--wish-line);background:var(--wish-card-2)}
+        #rpcm-log-calendar-backdrop .rpcm-cal-box{position:relative;padding:12px;border:1px solid var(--wish-line);border-radius:12px;background:var(--wish-card)}
+        #rpcm-log-calendar-backdrop .rpcm-cal-year{display:flex;align-items:center;gap:5px;margin-bottom:12px}#rpcm-log-calendar-backdrop .rpcm-cal-year span{flex:1}#rpcm-log-calendar-backdrop .rpcm-cal-year button,#rpcm-log-calendar-backdrop .rpcm-cal-year select{padding:5px 8px;white-space:nowrap}
+        #rpcm-log-calendar-backdrop .rpcm-cal-months{display:grid;grid-template-columns:repeat(12,1fr);gap:3px;margin-bottom:14px}#rpcm-log-calendar-backdrop .rpcm-cal-months button{border:0;padding:7px 0;font-size:11px;color:var(--wish-muted)}#rpcm-log-calendar-backdrop .rpcm-cal-months button:not(:disabled){color:var(--wish-fg)}
+        #rpcm-log-calendar-backdrop .rpcm-cal-months .is-selected,#rpcm-log-calendar-backdrop .rpcm-cal-grid .is-selected{background:var(--wish-accent-soft);color:var(--wish-accent-strong);font-weight:700}
+        #rpcm-log-calendar-backdrop .rpcm-cal-week,#rpcm-log-calendar-backdrop .rpcm-cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}#rpcm-log-calendar-backdrop .rpcm-cal-week span{text-align:center;font-size:11px;color:var(--wish-muted);padding:5px}
+        #rpcm-log-calendar-backdrop .rpcm-cal-grid button{position:relative;aspect-ratio:1/.83;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;border:0;font-size:12px;color:var(--wish-muted)}#rpcm-log-calendar-backdrop .rpcm-cal-grid button.has{background:var(--wish-accent-soft);color:var(--wish-fg)}#rpcm-log-calendar-backdrop .rpcm-cal-grid button.is-selected{box-shadow:inset 0 0 0 2px var(--wish-accent)}#rpcm-log-calendar-backdrop .rpcm-cal-grid button span{font-size:8px;letter-spacing:1px;color:var(--wish-accent)}#rpcm-log-calendar-backdrop .rpcm-cal-grid button.is-live::after,#rpcm-log-calendar-backdrop .rpcm-cal-grid button.is-chosen::after{content:'';position:absolute;width:5px;height:5px;border-radius:50%;background:var(--wish-success);transform:translate(14px,-15px)}#rpcm-log-calendar-backdrop .rpcm-cal-grid button.is-chosen::after{background:var(--wish-accent)}
+        #rpcm-log-calendar-backdrop .rpcm-cal-legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px;padding-top:9px;border-top:1px solid var(--wish-line);font-size:11px;color:var(--wish-muted)}#rpcm-log-calendar-backdrop .rpcm-cal-legend span:nth-child(2){color:var(--wish-success)}#rpcm-log-calendar-backdrop .rpcm-cal-legend span:nth-child(3){color:var(--wish-accent)}
+        #rpcm-log-calendar-backdrop .rpcm-cal-year-stats{margin:11px 4px;color:var(--wish-fg-2);font-size:12px}#rpcm-log-calendar-backdrop .rpcm-cal-right h3{font-size:16px;margin:2px 0 12px}
+        #rpcm-log-calendar-backdrop .rpcm-cal-card{border:1px solid var(--wish-line);border-radius:10px;background:var(--wish-card);margin-bottom:8px;overflow:hidden}#rpcm-log-calendar-backdrop .rpcm-cal-card summary{display:grid;grid-template-columns:1fr auto;gap:5px;padding:11px 13px;cursor:pointer}#rpcm-log-calendar-backdrop .rpcm-cal-card summary strong{font-size:13px}#rpcm-log-calendar-backdrop .rpcm-cal-card summary span{font-size:11px;color:var(--wish-accent-strong)}#rpcm-log-calendar-backdrop .rpcm-cal-card summary small{grid-column:1/-1;color:var(--wish-muted)}#rpcm-log-calendar-backdrop .rpcm-cal-card p{white-space:pre-wrap;line-height:1.65;margin:0;padding:10px 13px;color:var(--wish-fg-2);border-top:1px solid var(--wish-line)}#rpcm-log-calendar-backdrop .rpcm-cal-card>small{display:block;padding:0 13px 10px;color:var(--wish-muted)}
+        #rpcm-log-calendar-backdrop .rpcm-cal-other{margin-top:18px;border:1px dashed var(--wish-line);border-radius:10px}#rpcm-log-calendar-backdrop .rpcm-cal-other>summary{padding:11px;cursor:pointer;color:var(--wish-fg-2)}#rpcm-log-calendar-backdrop [data-cal-other]{padding:0 10px}#rpcm-log-calendar-backdrop .rpcm-cal-empty{color:var(--wish-muted);font-size:13px}
+        @media(max-width:720px){#rpcm-log-calendar-backdrop .rpcm-cal-columns{display:flex;flex-direction:column;overflow:auto}#rpcm-log-calendar-backdrop .rpcm-cal-left,#rpcm-log-calendar-backdrop .rpcm-cal-right{overflow:visible}#rpcm-log-calendar-backdrop .rpcm-cal-right{border-left:0;border-top:1px solid var(--wish-line)}}
+      `;document.head.appendChild(style);
+    }
+    document.querySelector('#rpcm-log-calendar-backdrop')?.remove();
+    const rows=parseDatedLogBlocks((room.slots||[]).find(slot=>slot.id==='logSummary')?.content||'');
+    const valid=row=>!row.isUnknown&&!row.isSpecialDate&&Number.isInteger(row.year)&&row.year>0&&Number.isInteger(row.month)&&Number.isInteger(row.day);
+    const years=[...new Set(rows.filter(valid).map(row=>row.year))].sort((a,b)=>a-b);
+    const dated=rows.filter(valid).sort((a,b)=>a.year-b.year||a.month-b.month||a.day-b.day);
+    const other=rows.filter(row=>!valid(row));
+    const active=new Set(room.pending?activePendingItems(room.pending).filter(item=>item.group==='log-auto'||item.sourceSlotId==='logSummary').map(item=>String(item.sourceKey||'').replace(/^auto-log:/,'')):[]);
+    const selected=new Set((room.manualLogSelectedKeys||[]).map(String));
+    const pinned=new Set((room.autoLogPinnedKeys||[]).map(String));
+    const candidates=new Set(room.autoLogRecallEnabled?selectTimelineAwareRecentLogBlocks(rows,room,recentLogInjectionCount(room)).map(row=>String(row.key)):[]);
+    const status=row=>active.has(row.key)?'주입 중':pinned.has(row.key)?'항상 주입':selected.has(row.key)?'직접 선택':candidates.has(row.key)?'자동 후보':'보관 중';
+    const card=row=>`<details class="rpcm-cal-card"><summary><strong>${esc(row.events||row.fullDate||'제목 없음')}</strong><span>${esc(status(row))}</span><small>${esc(row.fullDate||'날짜 미정')} · ${esc(String(row.body||'본문 없음').slice(0,110))}</small></summary><p>${esc(row.body||'본문 없음')}</p><small>${esc(row.timelineLabel||DEFAULT_LOG_TIMELINE)}</small></details>`;
+    const backdrop=document.createElement('div');backdrop.id='rpcm-log-calendar-backdrop';
+    backdrop.innerHTML=`<section class="rpcm-log-calendar" role="dialog" aria-modal="true" aria-label="날짜로그 달력"><header><div><strong>날짜로그 달력</strong><span>저장된 날짜로그 ${rows.length}개 · CORE 달력의 탐색 방식</span></div><button type="button" data-cal-close aria-label="달력 닫기" data-rpcm-close="icon">×</button></header><div class="rpcm-cal-columns"><div class="rpcm-cal-left"><div class="rpcm-cal-box"><div class="rpcm-cal-year"><button type="button" data-cal-prev aria-label="이전 연도">‹</button><select data-cal-year aria-label="연도 선택"></select><button type="button" data-cal-next aria-label="다음 연도">›</button><span></span><button type="button" data-cal-first>처음</button><button type="button" data-cal-last>최신</button></div><div class="rpcm-cal-months" data-cal-months></div><div class="rpcm-cal-week">${'일월화수목금토'.split('').map(day=>`<span>${day}</span>`).join('')}</div><div class="rpcm-cal-grid" data-cal-grid></div><div class="rpcm-cal-legend"><span>● 기록 양</span><span>● 주입 중</span><span>● 직접·항상 선택</span></div></div><div class="rpcm-cal-year-stats" data-cal-stats></div></div><div class="rpcm-cal-right"><h3 data-cal-heading></h3><div data-cal-cards></div><details class="rpcm-cal-other"><summary>정확한 연·월·일 외 기록 ${other.length}개</summary><div data-cal-other></div></details></div></div></section>`;
+    document.body.appendChild(backdrop);
+    const q=selector=>backdrop.querySelector(selector);
+    const last=dated.at(-1),draft={year:last?.year||years.at(-1)||0,month:last?.month||1,day:last?.day||0};
+    const dateRows=(year,month,day)=>dated.filter(row=>row.year===year&&row.month===month&&row.day===day);
+    const chooseYear=(year,edge='last')=>{const subset=dated.filter(row=>row.year===year),row=edge==='first'?subset[0]:subset.at(-1);draft.year=year;draft.month=row?.month||1;draft.day=row?.day||0;render();};
+    const render=()=>{
+      q('[data-cal-year]').innerHTML=years.map(year=>`<option value="${year}" ${year===draft.year?'selected':''}>${year}년 · ${dated.filter(row=>row.year===year).length}개</option>`).join('');
+      q('[data-cal-prev]').disabled=years.indexOf(draft.year)<=0;q('[data-cal-next]').disabled=years.indexOf(draft.year)>=years.length-1;
+      const yearRows=dated.filter(row=>row.year===draft.year),monthRows=yearRows.filter(row=>row.month===draft.month);
+      q('[data-cal-months]').innerHTML=Array.from({length:12},(_,i)=>{const month=i+1,has=yearRows.some(row=>row.month===month);return `<button type="button" data-cal-month="${month}" class="${month===draft.month?'is-selected':''}" ${has?'':'disabled'}>${month}</button>`;}).join('');
+      if(!years.length){q('[data-cal-grid]').innerHTML='<p>연·월·일이 모두 적힌 날짜로그가 없습니다.</p>';q('[data-cal-heading]').textContent='날짜 기록 없음';q('[data-cal-cards]').innerHTML='';q('[data-cal-stats]').textContent='';q('.rpcm-cal-other').open=true;return;}
+      const start=new Date(0);start.setUTCFullYear(draft.year,draft.month-1,1);const firstDay=start.getUTCDay();start.setUTCFullYear(draft.year,draft.month,0);const days=start.getUTCDate();
+      q('[data-cal-grid]').innerHTML=Array.from({length:firstDay},()=>'<span aria-hidden="true"></span>').join('')+Array.from({length:days},(_,i)=>{const day=i+1,list=dateRows(draft.year,draft.month,day),has=list.length,live=list.some(row=>active.has(row.key)),chosen=list.some(row=>pinned.has(row.key)||selected.has(row.key)||candidates.has(row.key));return `<button type="button" data-cal-day="${day}" class="${has?'has':''} ${live?'is-live':chosen?'is-chosen':''} ${day===draft.day?'is-selected':''}" ${has?'':'disabled'} aria-label="${draft.year}년 ${draft.month}월 ${day}일 · 기록 ${has}개"><b>${day}</b><span>${'●'.repeat(Math.min(has,3))}</span></button>`;}).join('');
+      q('[data-cal-stats]').textContent=`${draft.year}년 기록 ${new Set(yearRows.map(row=>`${row.month}-${row.day}`)).size}일 · 카드 ${yearRows.length}개 · 주입 중 ${yearRows.filter(row=>active.has(row.key)).length}개`;
+      q('[data-cal-heading]').textContent=draft.day?`${draft.year}년 ${draft.month}월 ${draft.day}일 · ${dateRows(draft.year,draft.month,draft.day).length}개`:`${draft.year}년 ${draft.month}월`;
+      q('[data-cal-cards]').innerHTML=dateRows(draft.year,draft.month,draft.day).map(card).join('')||'<p class="rpcm-cal-empty">이 날짜의 카드가 없습니다.</p>';
+    };
+    q('[data-cal-other]').innerHTML=other.map(row=>card(row)).join('')||'<p class="rpcm-cal-empty">다른 형식의 날짜 기록이 없습니다.</p>';
+    q('[data-cal-close]').onclick=()=>backdrop.remove();backdrop.onclick=event=>{if(event.target===backdrop)backdrop.remove();};backdrop.onkeydown=event=>{if(event.key==='Escape')backdrop.remove();};
+    q('[data-cal-year]').onchange=event=>chooseYear(Number(event.target.value));
+    q('[data-cal-prev]').onclick=()=>chooseYear(years[years.indexOf(draft.year)-1]);q('[data-cal-next]').onclick=()=>chooseYear(years[years.indexOf(draft.year)+1]);
+    q('[data-cal-first]').onclick=()=>chooseYear(years[0],'first');q('[data-cal-last]').onclick=()=>chooseYear(years.at(-1),'last');
+    q('[data-cal-months]').onclick=event=>{const button=event.target.closest('[data-cal-month]');if(!button)return;draft.month=Number(button.dataset.calMonth);draft.day=dated.find(row=>row.year===draft.year&&row.month===draft.month)?.day||0;render();};
+    q('[data-cal-grid]').onclick=event=>{const button=event.target.closest('[data-cal-day]');if(!button)return;draft.day=Number(button.dataset.calDay);render();};
+    render();q('[data-cal-close]').focus();
+  }
+
+  function allImportantItemRawText(room) {
+    return (room?.slots || []).filter(slot => slot.group === 'item').map(slot => {
+      const title = cleanImportantItemTitle(slot.title || '제목 없음');
+      const content = String(slot.content || '').trim();
+      return '- **' + title + '**' + (content ? '\n' + content.split('\n').map(line => '  ' + line).join('\n') : '');
+    }).join('\n\n');
+  }
+
+  function ui2TransientKey(node) {
+    if (!node) return '';
+    if (node.id) return `id:${node.id}`;
+    const owner = node.closest('[data-inline-story-id],[data-person-record],[data-knowledge-id],[data-slot-id],[data-lore-pack],[data-lore-card],[data-person-name],[data-month-key],[data-pending-key],[id]');
+    const ownerId = owner?.id || ['inlineStoryId','personRecord','knowledgeId','slotId','lorePack','loreCard','personName','monthKey','pendingKey'].map(name => owner?.dataset?.[name]).find(Boolean) || 'root';
+    const field = node.dataset?.field || node.dataset?.personField || node.dataset?.inlineStoryAction || [...node.classList].filter(name => name.startsWith('rpcm-')).slice(0, 2).join('.') || node.tagName.toLowerCase();
+    const peers = [...(node.parentElement?.children || [])].filter(peer => peer.tagName === node.tagName && (peer.dataset?.field || peer.dataset?.personField || peer.dataset?.inlineStoryAction || [...peer.classList].filter(name => name.startsWith('rpcm-')).slice(0, 2).join('.') || peer.tagName.toLowerCase()) === field);
+    return `${ownerId}/${node.tagName.toLowerCase()}:${field}:${peers.indexOf(node)}`;
+  }
+
+  function ui2ControlBaseline(node) {
+    if (node.type === 'checkbox' || node.type === 'radio') return String(node.defaultChecked);
+    if (node.tagName === 'SELECT') return String([...node.options].find(option => option.defaultSelected)?.value || '');
+    return String(node.defaultValue || '');
+  }
+
+  function captureUi2TransientState(overlay, room) {
+    if (isMobileManagerLayout() || !overlay?.querySelector('#rpcm-modal')) return null;
+    const details = new Map();
+    overlay.querySelectorAll('#rpcm-modal details').forEach(node => details.set(ui2TransientKey(node), node.open));
+    const controls = new Map();
+    overlay.querySelectorAll('#rpcm-modal :is(input:not([type=checkbox]):not([type=radio]):not([type=file]):not([type=hidden]),textarea)').forEach(node => {
+      if (node.readOnly) return;
+      controls.set(ui2TransientKey(node), { value:String(node.value || ''), baseline:ui2ControlBaseline(node) });
+    });
+    const scrolls = new Map();
+    overlay.querySelectorAll('#rpcm-modal :is(textarea,.rpcm-read-preview,.rpcm-item-read-preview,.rpcm-inline-story-list,.rpcm-person-profiles)').forEach(node => {
+      if (node.scrollTop > 0 || node.scrollLeft > 0) scrolls.set(ui2TransientKey(node), [node.scrollTop, node.scrollLeft]);
+    });
+    const draftPanels = [...overlay.querySelectorAll('#rpcm-modal :is(.rpcm-inline-story-edit,.rpcm-knowledge-fields,.rpcm-person-fields):not([hidden])')].map(panel => ({
+      key:ui2TransientKey(panel),
+      fields:[...panel.querySelectorAll('input,select,textarea')].map(field => ({ key:ui2TransientKey(field), value:field.value, baseline:ui2ControlBaseline(field), checked:field.type === 'checkbox' ? field.checked : null })),
+    }));
+    const childEditors = [...overlay.querySelectorAll('#rpcm-modal .rpcm-item-child-editor')].map(editor => ({
+      slotId:editor.closest('[data-slot-id]')?.dataset.slotId || '',
+      index:editor.closest('.rpcm-item-child')?.querySelector('[data-item-child-edit]')?.dataset.itemChildEdit || '',
+      slotBaseline:String(editor.closest('.rpcm-slot')?.querySelector('.rpcm-textarea')?.defaultValue || ''),
+      name:editor.querySelector('.rpcm-child-name')?.value || '', keeper:editor.querySelector('.rpcm-child-keeper')?.value || '', description:editor.querySelector('.rpcm-child-description')?.value || '',
+    }));
+    const active = overlay.contains(document.activeElement) ? document.activeElement : null;
+    let selection = null;
+    try { if (active && typeof active.selectionStart === 'number') selection = [active.selectionStart, active.selectionEnd]; } catch (_) {}
+    return {
+      roomId:String(room.chatId || ''), details, controls, scrolls, draftPanels, childEditors,
+      focusKey:active ? ui2TransientKey(active) : '', selection,
+      searchOpen:overlay.querySelector('#rpcm-header-search-pop')?.hidden === false,
+      searchResultsOpen:overlay.querySelector('#rpcm-search-results')?.hidden === false,
+      searchIndex:overlay.querySelector('#rpcm-search-input')?.dataset.searchIndex || '',
+      headerMenuOpen:!!overlay.querySelector('.rpcm-header-menu[open]'),
+    };
+  }
+
+  function restoreUi2TransientState(overlay, room, snapshot) {
+    if (!snapshot || snapshot.roomId !== String(room.chatId || '') || isMobileManagerLayout()) return;
+    const keyed = selector => new Map([...overlay.querySelectorAll(selector)].map(node => [ui2TransientKey(node), node]));
+    const details = keyed('#rpcm-modal details');
+    snapshot.details.forEach((open, key) => { const node = details.get(key); if (node) node.open = open; });
+    for (const draft of snapshot.childEditors) {
+      if (!draft.slotId || draft.index === '') continue;
+      const slot = [...overlay.querySelectorAll('.rpcm-slot[data-slot-id]')].find(node => node.dataset.slotId === draft.slotId);
+      if (String(slot?.querySelector('.rpcm-textarea')?.defaultValue || '') !== draft.slotBaseline) continue;
+      const button = [...(slot?.querySelectorAll('[data-item-child-edit]') || [])].find(node => node.dataset.itemChildEdit === draft.index);
+      if (!button) continue;
+      button.click();
+      const editor = button.closest('.rpcm-item-child')?.querySelector('.rpcm-item-child-editor');
+      if (!editor) continue;
+      editor.querySelector('.rpcm-child-name').value = draft.name;
+      editor.querySelector('.rpcm-child-keeper').value = draft.keeper;
+      editor.querySelector('.rpcm-child-description').value = draft.description;
+    }
+    const panels = keyed('#rpcm-modal :is(.rpcm-inline-story-edit,.rpcm-knowledge-fields,.rpcm-person-fields)');
+    for (const draft of snapshot.draftPanels) {
+      const panel = panels.get(draft.key);
+      if (!panel) continue;
+      const fields = new Map([...panel.querySelectorAll('input,select,textarea')].map(node => [ui2TransientKey(node), node]));
+      if (draft.fields.some(value => { const field=fields.get(value.key); return field && ui2ControlBaseline(field) !== value.baseline; })) continue;
+      panel.hidden = false;
+      const read = panel.parentElement?.querySelector(':scope > :is(.rpcm-inline-story-read,.rpcm-knowledge-read,.rpcm-person-read)');
+      if (read) read.hidden = true;
+      for (const value of draft.fields) {
+        const field = fields.get(value.key);
+        if (!field) continue;
+        if (value.checked !== null) field.checked = value.checked;
+        else field.value = value.value;
+      }
+    }
+    const controls = keyed('#rpcm-modal :is(input:not([type=checkbox]):not([type=radio]):not([type=file]):not([type=hidden]),textarea)');
+    snapshot.controls.forEach(({ value, baseline }, key) => { const node = controls.get(key); if (node && !node.readOnly && ui2ControlBaseline(node) === baseline && node.value !== value) node.value = value; });
+    const searchPop = overlay.querySelector('#rpcm-header-search-pop');
+    const searchToggle = overlay.querySelector('#rpcm-header-search-toggle');
+    if (searchPop && searchToggle && snapshot.searchOpen) {
+      searchPop.hidden = false;
+      searchToggle.setAttribute('aria-expanded', 'true');
+      searchToggle.setAttribute('aria-label', '통합 검색 닫기');
+      searchToggle.innerHTML = rpcmUiIcon('close');
+    }
+    const search = overlay.querySelector('#rpcm-search-input');
+    if (search?.value) {
+      if (snapshot.searchIndex !== '') search.dataset.restoreIndex = snapshot.searchIndex;
+      search.dispatchEvent(new Event('input', { bubbles:true }));
+      if (!snapshot.searchOpen || !snapshot.searchResultsOpen) overlay.querySelector('#rpcm-search-results').hidden = true;
+    }
+    const menu = overlay.querySelector('.rpcm-header-menu');
+    if (menu && !snapshot.searchOpen) menu.open = snapshot.headerMenuOpen;
+    requestAnimationFrame(() => {
+      if (state.modal !== overlay || state.currentRoom !== room) return;
+      const scrollers = keyed('#rpcm-modal :is(textarea,.rpcm-read-preview,.rpcm-item-read-preview,.rpcm-inline-story-list,.rpcm-person-profiles)');
+      snapshot.scrolls.forEach(([top, left], key) => { const node = scrollers.get(key); if (node) { node.scrollTop = top; node.scrollLeft = left; } });
+      const focus = keyed('#rpcm-modal :is(input,textarea,select,button,summary)').get(snapshot.focusKey);
+      if (focus && isElementVisible(focus)) {
+        try { focus.focus({ preventScroll:true }); } catch (_) { focus.focus(); }
+        if (snapshot.selection && typeof focus.setSelectionRange === 'function') { try { focus.setSelectionRange(...snapshot.selection); } catch (_) {} }
+      }
+    });
+  }
+
+
+  // CORE 1.0.6's single anchored help popover, adapted to Wish colors and view names.
+  const RPCM_HELP = {
+    overview:['확인','현재 방의 저장·주입 상태와 미처리 작업을 요약합니다. 화면을 여는 것만으로 RP나 기준점은 바뀌지 않습니다.'],
+    memory:['기억','현재상태와 날짜로그의 저장 내용을 편집합니다. 주입은 별도 ON/OFF와 용량 규칙을 따릅니다.'],
+    items:['중요 물품','물품의 현재 소유·보관·상태를 기록합니다. AI 폴더 정리는 제안 후 선택 적용합니다.'],
+    people:['인물정보','인지·호칭·말투·관계 카드를 관리합니다. 전체 비교와 인물별 상세는 같은 저장 데이터를 읽습니다.'],
+    lore:['자료집','팩과 카드의 지속 설정을 관리합니다. 사용자 관리·잠금 카드는 AI 결과로 덮어쓰지 않습니다.'],
+    timeline:['연속성 타임라인','장기 Story Spine을 기록합니다. 날짜별 사건 로그와 역할이 다릅니다.'],
+    update:['수동 업데이트','범위 선택 → 작업자료 → 결과 가져오기 → Diff → 확인 후 저장 순서입니다. 생성만으로 기준점은 이동하지 않습니다.'],
+    ai:['AI','API 작업은 실제 호출 시 사용량이 기록됩니다. AI 기억정리는 항목별 자동 반영을 선택할 수 있습니다. OFF면 초안 검토 후 저장하고, ON이어도 검증 실패·수동 편집 중에는 보류합니다.'],
+    preferences:['설정','Manager 동작을 조절합니다. 각 항목의 적용 범위를 확인하세요. 기억 콘텐츠 자체는 여기서 수정하지 않습니다.'],
+    recall:['날짜로그 회수','활성 시간선의 최근 날짜로그와 관련 로그를 설정한 개수만큼 용량 안에서 선택합니다. 직접 선택과 제외는 기억 화면에서 관리합니다.'],
+    context:['AI 맥락 검토','관련 날짜로그 후보를 API로 다시 검토합니다. 실패하면 기본 검색을 사용합니다. 현재 방 설정입니다.'],
+    guide:['지침','현재 방의 사용자 수정 지침을 우선합니다. 지침 보기나 복사는 저장값을 변경하지 않습니다.'],
+  };
+  function rpcmHelpSections(key) {
+    const sections={
+      update:[['생성','완료된 USER+AI 턴만 작업자료에 넣습니다. 범위를 직접 지정해 이미 처리한 턴도 재검토할 수 있습니다.'],['검토·저장','결과를 먼저 파싱하고 Diff를 보여줍니다. 사용자 확인과 로컬 저장 성공 후에만 해당 수동 기준점이 이동합니다.']],
+      ai:[['AI 기억정리','여섯 영역의 자동 생성과 자동 반영을 각각 켜고 주기를 정합니다. 자동 반영은 이후 생성한 유효 결과에만 적용하며, 기존 초안은 직접 검토합니다. 수동 작업 대기 중에는 자동 작업이 기다립니다.'],['사용량','호출 시 입력·출력 사용량이 기록됩니다. 실패한 결과는 기억에 저장하지 않습니다.']],
+      recall:[['연속성','활성 시간선의 최근 날짜로그를 우선합니다.'],['관련 로그','관련도 기준과 남은 용량을 통과한 후보만 추가합니다.']],
+      preferences:[['범위','AI 연결은 이 기기, 기억 회수와 AI 기억정리는 현재 방에 적용됩니다.'],['저장','토글과 주기를 바꾸면 해당 저장소에 즉시 기록합니다.']],
+      lore:[['소유권','사용자 관리·잠금 자료는 AI 결과가 바꾸지 않습니다.'],['주입','카드의 포함 방식과 상세·압축 본문은 기억 회수 단계에서 선택합니다.']],
+    };
+    return sections[key]||[];
+  }
+  function rpcmHelpButton(key) {
+    if (!RPCM_HELP[key]) return '';
+    return `<button type="button" class="rpcm-core-help" data-rpcm-help="${key}" aria-label="${esc(RPCM_HELP[key][0])} 도움말" aria-expanded="false" aria-describedby="rpcm-core-tip">?</button>`;
+  }
+  let rpcmTipAnchor = null, rpcmTipPinned = false;
+  function rpcmHideTip() {
+    rpcmTipAnchor?.setAttribute('aria-expanded','false');
+    rpcmTipAnchor = null; rpcmTipPinned = false;
+    document.getElementById('rpcm-core-tip')?.remove();
+  }
+  function rpcmShowTip(button, pinned = false) {
+    const detail = RPCM_HELP[button?.dataset?.rpcmHelp];
+    if (!detail) return;
+    if (rpcmTipAnchor !== button) rpcmHideTip();
+    rpcmTipAnchor = button; rpcmTipPinned = pinned;
+    const tip = document.getElementById('rpcm-core-tip') || document.createElement('aside');
+    tip.id='rpcm-core-tip';tip.className='rpcm-core-tip';tip.setAttribute('role','tooltip');
+    tip.innerHTML=`<strong>${esc(detail[0])}</strong><p>${esc(detail[1])}</p>${rpcmHelpSections(button.dataset.rpcmHelp).map(([title,body])=>`<section><h4>${esc(title)}</h4><p>${esc(body)}</p></section>`).join('')}`;
+    if (!tip.isConnected) document.body.appendChild(tip);
+    const theme=getComputedStyle(state.modal||button);
+    for(const token of ['--wish-card','--wish-fg','--wish-fg-2','--wish-line','--wish-accent-line','--wish-accent-strong']){
+      const value=theme.getPropertyValue(token).trim();if(value)tip.style.setProperty(token,value);
+    }
+    tip.onpointerleave=()=>{if(!rpcmTipPinned)rpcmHideTip();};
+    button.setAttribute('aria-expanded','true');
+    const rect=button.getBoundingClientRect(), width=Math.min(350,window.innerWidth-24);
+    tip.style.width=`${width}px`;
+    const x=Math.max(12,Math.min(window.innerWidth-width-12,rect.left-12));
+    const height=tip.getBoundingClientRect().height;
+    const y=rect.bottom+8+height>window.innerHeight-12 ? Math.max(12,rect.top-height-8) : rect.bottom+8;
+    tip.style.left=`${x}px`;tip.style.top=`${y}px`;
+  }
+  function bindRpcmHelp(overlay) {
+    for (const [id,key] of Object.entries({'rpcm-section-overview':'overview','rpcm-section-basic':'memory','rpcm-section-item':'items','rpcm-section-people':'people','rpcm-section-lore':'lore','rpcm-section-timeline':'timeline','rpcm-section-update':'update','rpcm-section-longterm':'longterm','rpcm-section-ai':'ai','rpcm-section-preferences':'preferences'})) {
+      const heading=overlay.querySelector(`#${id} h2`);
+      if (heading && !heading.querySelector('.rpcm-core-help')) heading.insertAdjacentHTML('beforeend',rpcmHelpButton(key));
+    }
+    if (overlay._rpcmCoreHelpBound) return;
+    overlay._rpcmCoreHelpBound=true;
+    overlay.addEventListener('pointerover',event=>{const button=event.target.closest?.('[data-rpcm-help]');if(button && event.pointerType!=='touch' && !rpcmTipPinned)rpcmShowTip(button);});
+    overlay.addEventListener('pointerout',event=>{if(rpcmTipAnchor && !rpcmTipPinned && !rpcmTipAnchor.contains(event.relatedTarget) && !document.getElementById('rpcm-core-tip')?.contains(event.relatedTarget))rpcmHideTip();});
+    overlay.addEventListener('focusin',event=>{const button=event.target.closest?.('[data-rpcm-help]');if(button && !rpcmTipPinned)rpcmShowTip(button);});
+    overlay.addEventListener('focusout',event=>{if(rpcmTipAnchor && !rpcmTipPinned && !rpcmTipAnchor.contains(event.relatedTarget))rpcmHideTip();});
+    overlay.addEventListener('click',event=>{const button=event.target.closest?.('[data-rpcm-help]');if(!button)return;event.preventDefault();event.stopPropagation();if(rpcmTipAnchor===button&&rpcmTipPinned)rpcmHideTip();else rpcmShowTip(button,true);},true);
+    overlay.addEventListener('keydown',event=>{if(event.key==='Escape')rpcmHideTip();});
+  }
+  function addRpcmCoreStyles() {
+    if(document.getElementById('rpcm-core-components'))return;
+    const style=document.createElement('style');style.id='rpcm-core-components';style.textContent=`
+      #rpcm-modal .rpcm-core-help{display:inline-grid;place-items:center;width:22px;height:22px;min-width:22px;margin-left:8px;padding:0;border:1px solid var(--wish-line);border-radius:50%;background:var(--wish-card);color:var(--wish-muted);font-size:13px;font-weight:600;vertical-align:middle;cursor:pointer}
+      #rpcm-modal .rpcm-core-help:hover,#rpcm-modal .rpcm-core-help:focus-visible{border-color:var(--wish-accent-strong);color:var(--wish-accent-strong);outline:none}
+      .rpcm-core-tip{position:fixed;z-index:2147483646;box-sizing:border-box;max-height:min(360px,65vh);padding:13px 15px;overflow:auto;border:1px solid var(--wish-accent-line,#9b6382);border-radius:10px;background:var(--wish-card,#28232a);color:var(--wish-fg,#f5e9ee);box-shadow:0 18px 45px #000a;font:13px/1.55 system-ui,sans-serif;overflow-wrap:anywhere}
+      .rpcm-core-tip strong{color:var(--wish-accent-strong,#e6a3c5)}.rpcm-core-tip p{margin:5px 0 0;color:var(--wish-fg-2,#c7b7c0)}
+      .rpcm-core-tip section{margin-top:10px;padding-top:9px;border-top:1px solid var(--wish-line,#54424d)}.rpcm-core-tip h4{margin:0;color:var(--wish-accent-strong,#e6a3c5);font-size:12px}
+      #rpcm-modal .rpcm-pref-grid{display:grid;gap:12px;max-width:1000px}
+      /* Shared control rhythm for settings; content and action locations are retained. */
+      #rpcm-modal #rpcm-section-preferences .rpcm-settings-card{border-radius:16px!important;padding:20px!important;box-shadow:var(--wish-shadow);border-color:var(--wish-line)!important}
+      #rpcm-modal #rpcm-section-preferences .rpcm-settings-card>h2{font-size:17px!important;font-weight:750!important;margin:0 0 5px!important;letter-spacing:-.25px}
+      #rpcm-modal #rpcm-section-preferences .rpcm-settings-card>p{font-size:12px!important;line-height:1.6;color:var(--wish-fg-2)!important;margin:0 0 18px!important}
+      #rpcm-modal #rpcm-section-preferences .rpcm-settings-grid{max-width:none;gap:12px}
+      #rpcm-modal #rpcm-section-preferences .rpcm-pref-card{border-radius:12px!important;padding:16px 18px!important;box-shadow:none;background:var(--wish-card)!important}
+      #rpcm-modal #rpcm-section-preferences .rpcm-pref-card>header{margin-bottom:12px!important;padding-bottom:10px;border-bottom:1px solid var(--wish-line-2);align-items:center}
+      #rpcm-modal #rpcm-section-preferences .rpcm-pref-card h3{font-size:14px!important;font-weight:750!important;letter-spacing:-.2px;line-height:1.4}
+      #rpcm-modal #rpcm-section-preferences .rpcm-pref-card p{font-size:12px!important;line-height:1.65;color:var(--wish-fg-2)!important;margin:8px 0 13px!important}
+      #rpcm-modal #rpcm-section-preferences .rpcm-pref-row{padding:11px 0!important;border-top:1px solid var(--wish-line-2)}
+      #rpcm-modal #rpcm-section-preferences .rpcm-pref-row:first-of-type{border-top:0}
+      #rpcm-modal #rpcm-section-preferences .rpcm-pref-row>span{font-size:13px!important;font-weight:550!important;line-height:1.5}
+      #rpcm-modal #rpcm-section-preferences .rpcm-pref-row small{font-size:11px!important;color:var(--wish-fg-2)!important;font-weight:400;line-height:1.55;margin-top:3px}
+      #rpcm-modal #rpcm-section-preferences .rpcm-btn{min-height:34px!important;border-radius:9px!important;padding:7px 12px!important;font-size:12px!important;line-height:1.4}
+      #rpcm-modal #rpcm-section-preferences :is(select,input[type=number]){min-height:34px!important;border:1px solid var(--wish-line)!important;border-radius:9px!important;background:var(--wish-card)!important;color:var(--wish-fg)!important;padding:6px 9px!important;font:inherit;font-size:12px!important;box-sizing:border-box}
+      #rpcm-modal #rpcm-section-preferences .rpcm-pref-scope{padding:4px 8px!important;border-color:var(--wish-line-2)!important;background:var(--wish-card-2)!important;color:var(--wish-fg-2)!important;font-size:10px!important}
+      #rpcm-modal :is(#rpcm-section-preferences .rpcm-pref-row,.rpcm-ltm-native-settings .rpcm-pref-row) input[type=checkbox]{appearance:none!important;-webkit-appearance:none!important;position:relative;flex:none;width:34px!important;height:20px!important;min-width:34px;margin:0!important;border:1px solid var(--wish-line)!important;border-radius:99px!important;background:var(--wish-line-2)!important;cursor:pointer;transition:background .16s ease}
+      #rpcm-modal :is(#rpcm-section-preferences .rpcm-pref-row,.rpcm-ltm-native-settings .rpcm-pref-row) input[type=checkbox]::before{content:'';position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:color-mix(in srgb,var(--wish-card) 50%,var(--wish-fg-2));box-shadow:0 1px 2px color-mix(in srgb,var(--wish-fg) 18%,transparent);transition:transform .16s ease}
+      #rpcm-modal :is(#rpcm-section-preferences .rpcm-pref-row,.rpcm-ltm-native-settings .rpcm-pref-row) input[type=checkbox]:checked{background:var(--wish-accent)!important;border-color:var(--wish-accent)!important}
+      #rpcm-modal :is(#rpcm-section-preferences .rpcm-pref-row,.rpcm-ltm-native-settings .rpcm-pref-row) input[type=checkbox]:checked::before{transform:translateX(14px);background:var(--wish-accent-ink)}
+      #rpcm-modal :is(#rpcm-section-preferences .rpcm-pref-row,.rpcm-ltm-native-settings .rpcm-pref-row) input[type=checkbox]:focus-visible{outline:2px solid var(--wish-accent-strong);outline-offset:3px}
+      #rpcm-modal #rpcm-section-preferences .rpcm-pref-controls{display:flex!important;align-items:center;gap:8px;flex:0 0 auto!important}
+      #rpcm-modal #rpcm-notification-preferences .rpcm-pref-row>span:not(.rpcm-pref-controls){flex:1 1 110px}
+      #rpcm-modal #rpcm-section-preferences .rpcm-pref-controls input[type=number]{width:68px}
+      #rpcm-modal #rpcm-section-preferences .rpcm-pref-controls small{margin:0;white-space:nowrap}
+      #rpcm-modal #rpcm-section-preferences .rpcm-notice-pref-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:24px}
+      #rpcm-modal #rpcm-section-preferences .rpcm-notice-area-grid{border-top:1px solid var(--wish-line-2);margin-top:12px;padding-top:8px}
+      @media(max-width:720px){#rpcm-modal #rpcm-section-preferences .rpcm-notice-pref-grid{grid-template-columns:minmax(0,1fr)}}
+      #rpcm-modal #rpcm-section-preferences details>summary{padding:10px 0;cursor:pointer;color:var(--wish-fg-2);font-size:12px;font-weight:650}
+      #rpcm-section-longterm .rpcm-ltm-origin-tabs{display:flex;gap:6px;overflow-x:auto;overscroll-behavior-inline:contain;padding:5px 0 9px;scrollbar-width:thin}
+      #rpcm-section-longterm .rpcm-ltm-origin-tabs button{flex:none;white-space:nowrap;border:1px solid var(--wish-line);border-radius:9px;background:var(--wish-card);color:var(--wish-fg-2);padding:7px 10px;font-size:12px;cursor:pointer;min-height:34px}
+      #rpcm-section-longterm .rpcm-ltm-origin-tabs button[aria-pressed=true]{background:var(--wish-accent-soft);border-color:var(--wish-accent-line);color:var(--wish-accent-strong);font-weight:750}
+      #rpcm-section-longterm .rpcm-ltm-origin-tabs button small{margin-left:7px;color:inherit;font-size:11px}
+      #rpcm-section-longterm .rpcm-ltm-list-status{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;margin:8px 0 10px;font-size:11px;color:var(--wish-fg-2)}
+      #rpcm-section-longterm .rpcm-ltm-empty{padding:22px;text-align:center;border:1px dashed var(--wish-line);border-radius:12px;background:var(--wish-card-2);color:var(--wish-fg-2)}
+      #rpcm-section-longterm .rpcm-ltm-empty[hidden]{display:none!important}
+      #rpcm-section-longterm .rpcm-ltm-native-settings>header{padding-bottom:12px;border-bottom:1px solid var(--wish-line-2);margin-bottom:4px}
+      #rpcm-section-longterm .rpcm-ltm-native-settings h3{font-size:16px!important;font-weight:750;margin:4px 0 0!important}
+      #rpcm-section-longterm .rpcm-ltm-native-settings .rpcm-pref-row{border-top:0;margin:0 0 10px;padding:10px 0;align-items:center}
+      #rpcm-section-longterm .rpcm-ltm-native-settings .rpcm-pref-row small{display:block;font-size:11px;color:var(--wish-fg-2);line-height:1.6;margin-top:4px}
+      #rpcm-section-longterm .rpcm-ltm-output-link{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:13px 14px;border:1px solid var(--wish-accent-line);border-radius:11px;background:var(--wish-accent-soft);margin:14px 0}
+      #rpcm-section-longterm .rpcm-ltm-output-link>div{display:grid;gap:4px}#rpcm-section-longterm .rpcm-ltm-output-link small{font-size:11px;color:var(--wish-fg-2)}
+      #rpcm-section-longterm .rpcm-ltm-status-line{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--wish-fg-2);margin-bottom:10px}
+      #rpcm-section-longterm .rpcm-ltm-native-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:12px 0}
+      #rpcm-section-longterm .rpcm-ltm-native-fields label{display:grid;gap:6px;min-width:0;color:var(--wish-fg-2);font-size:12px}
+      #rpcm-section-longterm .rpcm-ltm-native-fields input{width:100%!important;background:var(--wish-card)!important}
+      #rpcm-section-longterm :is(.rpcm-ltm-advanced,.rpcm-ltm-error-detail)>summary{padding:10px 0;border-top:1px solid var(--wish-line-2);font-size:12px;font-weight:650;color:var(--wish-fg-2);cursor:pointer}
+      @media(max-width:600px){#rpcm-modal #rpcm-section-preferences .rpcm-settings-card{padding:15px!important}#rpcm-modal #rpcm-section-preferences .rpcm-pref-card{padding:13px!important}#rpcm-section-longterm .rpcm-ltm-native-fields{grid-template-columns:minmax(0,1fr)}}
+      @media(prefers-reduced-motion:reduce){#rpcm-modal :is(#rpcm-section-preferences,.rpcm-ltm-native-settings) input[type=checkbox],#rpcm-modal :is(#rpcm-section-preferences,.rpcm-ltm-native-settings) input[type=checkbox]::before{transition:none!important}}
+
+      #rpcm-modal .rpcm-pref-card{padding:16px;border:1px solid var(--wish-line);border-radius:12px;background:var(--wish-card)}
+      #rpcm-modal .rpcm-pref-card>header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
+      #rpcm-modal .rpcm-pref-card h3{display:flex;align-items:center;margin:0;color:var(--wish-fg);font-size:16px}
+      #rpcm-modal .rpcm-pref-card p{margin:5px 0 10px;color:var(--wish-fg-2);font-size:12px;line-height:1.6}
+      #rpcm-modal .rpcm-pref-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0;border-top:1px solid var(--wish-line-2)}
+      #rpcm-modal .rpcm-pref-row>span{display:grid;gap:3px;min-width:0;color:var(--wish-fg);font-size:13px}
+      #rpcm-modal .rpcm-pref-row small{color:var(--wish-muted);font-size:11px}
+      #rpcm-modal .rpcm-pref-row select{max-width:180px;min-height:34px}
+      #rpcm-modal .rpcm-pref-row input[type=checkbox]{width:20px;height:20px;accent-color:var(--wish-accent-strong)}
+      #rpcm-modal .rpcm-pref-scope{padding:3px 7px;border:1px solid var(--wish-line);border-radius:99px;color:var(--wish-muted);font-size:10px;white-space:nowrap}
+      #rpcm-modal .rpcm-ai-memory-shortcut{display:flex;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap;color:var(--wish-fg)}

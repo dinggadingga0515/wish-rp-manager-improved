@@ -1,0 +1,1000 @@
+  }
+
+  async function selectManualPacketSource(room, checkpoint, selection = { mode:'checkpoint' }) {
+    const rangeMode = String(selection?.mode || 'checkpoint');
+    if (!['checkpoint','full','custom'].includes(rangeMode)) throw new Error('RP 범위 선택이 올바르지 않습니다.');
+    let turns, anchorIndex = -1, historyTurns = null;
+    if (rangeMode === 'checkpoint') {
+      turns = selection.loadedTurns || await loadRpcmCompletedRange(room,checkpoint.endMessageId?[checkpoint.endMessageId]:[],{allowMissingAnchor:true});
+      const resolution=rpcmResolveManualCheckpoint(room,checkpoint,turns);
+      if(resolution.error)throw new Error(resolution.error);
+      anchorIndex=resolution.index;
+
+    } else {
+      turns = selection.loadedTurns || await loadManualCompletedTurns(room);
+      historyTurns = turns.map(turn => [String(turn.key), String(turn.text)]);
+      const resolution=rpcmResolveManualCheckpoint(room,checkpoint,turns);
+      anchorIndex=resolution.index;
+      if(resolution.error && checkpoint.endMessageId!==selection.priorCheckpoint)throw new Error(resolution.error);
+    }
+    let startIndex = anchorIndex + 1, endIndex = turns.length - 1;
+    if (rangeMode === 'full') startIndex = 0;
+    if (rangeMode === 'custom') {
+      startIndex = rpcmFindTurnIndex(turns,String(selection.startKey || ''));
+      endIndex = rpcmFindTurnIndex(turns,String(selection.endKey || ''));
+      if (startIndex < 0 || endIndex < 0 || startIndex > endIndex) throw new Error('시작·종료 RP를 다시 선택해 주세요. 종료는 시작보다 앞설 수 없습니다.');
+    }
+    const fresh = turns.slice(startIndex, endIndex + 1);
+    if (!fresh.length) throw new Error(rangeMode === 'checkpoint' ? '기준점 이후 완료된 새 RP 턴이 없습니다.' : '선택한 범위에 완료된 RP 턴이 없습니다.');
+    return { rangeMode, turns, fresh, anchorIndex, startIndex, endIndex, historyTurns, checkpointIndex:anchorIndex };
+  }
+
+  function nextManualCheckpoint(room, task, draft, appliedAt) {
+    const current = room.manualUpdateCheckpoints?.[task] || {};
+    const forward = manualRangeMovesForward(draft);
+    if (!forward) return { ...current };
+    return { ...current, startMessageId:draft.startMessageId,
+      endMessageId:String(draft.endAnchorEvidence?.userId||draft.endMessageId),
+      sourceMessageId:String(draft.endMessageId||''),anchorEvidence:draft.endAnchorEvidence||null,
+      turnCount:draft.turnCount, appliedAt, ...(task === 'lore' ? { sourceHash:draft.sourceHash } : {}) };
+  }
+
+  function manualRangeMovesForward(draft) {
+    if(draft.recovery)return false;
+    if (draft.fullBuild && draft.fullBuild.endIndex < draft.fullBuild.totalTurns - 1) return false;
+    return draft.rangeMode === 'checkpoint' || draft.checkpointIndex < 0 || draft.endIndex > draft.checkpointIndex;
+  }
+
+  function manualFullBuildFor(room, task) { return room?.manualFullBuilds?.[task] || null; }
+
+  async function manualFullHistoryHash(turns) {
+    const source = JSON.stringify(turns.map(turn => [String(turn.key), String(turn.text)]));
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(source));
+    return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+  }
+
+  async function assertManualFullBuildHistory(room, task, progress) {
+    const turns = await loadManualCompletedTurns(room,{finalFresh:true});
+    const scope=turns.slice(0,progress.totalTurns);
+    const hash = await manualFullHistoryHash(scope);
+    if (scope.length !== progress.totalTurns || String(turns[0]?.key || '') !== progress.startKey || String(scope.at(-1)?.key || '') !== progress.endKey || hash !== progress.historyHash) {
+      throw new Error('RP 원문이 변경되었습니다. 전체 구축 범위를 다시 확인해 주세요. 기존 저장 결과는 유지됩니다.');
+    }
+    if (manualFullBuildFor(room, task)?.historyHash !== progress.historyHash) throw new Error('전체 구축 진행 상태가 바뀌었습니다. 다시 확인해 주세요.');
+    return scope;
+  }
+
+  async function planManualFullBuildPart(room, task, packetMode, turns, startIndex) {
+    if (startIndex < 0 || startIndex >= turns.length) throw new Error('처리할 전체 구축 RP 범위가 없습니다.');
+    const startKey = String(turns[startIndex].key);
+    let low = startIndex, high = turns.length - 1, best = null;
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      let candidate = null;
+      try { candidate = await buildManualUpdatePacket(room, task, packetMode, { mode:'custom', startKey, endKey:String(turns[mid].key), loadedTurns:turns, dryRun:true }); }
+      catch (error) { if (!/안전 표시 한도/.test(error.message)) throw error; }
+      // Leave room for the final split metadata and notice added after planning.
+      if (candidate && candidate.draft.packet.length <= 495000) { best = { endIndex:mid, length:candidate.draft.packet.length }; low = mid + 1; }
+      else high = mid - 1;
+    }
+    if (!best) throw new Error('지침·기존 결과·단일 RP 턴만으로 안전 목표 500,000자를 넘습니다. 자동 분할할 수 없어 직접 범위를 확인해야 합니다.');
+    return { startIndex, endIndex:best.endIndex, packetLength:best.length };
+  }
+
+  async function makeManualFullBuildPart(room, task, packetMode, startNew = false) {
+    if (state.currentRoom !== room) throw new Error('현재 방이 바뀌었습니다.');
+    const roomKey = String(room.chatId || '');
+    if (manualUpdateRuntime.commits.has(roomKey) || state.autoSaveTimers.has(roomKey) || state.saveStatus === 'saving' || state.saveStatus === 'error') throw new Error('로컬 저장이 완료된 뒤 전체 구축을 진행해 주세요.');
+    const before = JSON.stringify(room);
+    let progress = manualFullBuildFor(room, task);
+    if (startNew && progress) throw new Error('진행 중인 전체 구축을 먼저 이어가거나 취소해 주세요.');
+    if (!startNew && !progress) throw new Error('이어갈 전체 구축 진행 상태가 없습니다.');
+    const turns = startNew ? await loadManualCompletedTurns(room) : await assertManualFullBuildHistory(room, task, progress);
+    if (JSON.stringify(room) !== before) throw new Error('RP 조회 중 저장 데이터가 바뀌었습니다. 다시 시도해 주세요.');
+    if (!turns.length) throw new Error('완료된 RP 턴이 없습니다.');
+    const historyHash = startNew ? await manualFullHistoryHash(turns) : progress.historyHash;
+    const startIndex = startNew ? 0 : progress.lastAppliedIndex + 1;
+    const plan = await planManualFullBuildPart(room, task, packetMode, turns, startIndex);
+    if (startNew) {
+      progress = { task, startKey:String(turns[0].key), endKey:String(turns.at(-1).key), totalTurns:turns.length, lastAppliedEndKey:'', lastAppliedIndex:-1, completedParts:0, startedAt:nowIso(), historyHash, packetMode, estimatedParts:Math.ceil(turns.length / (plan.endIndex + 1)) };
+      const candidate = structuredClone(room);
+      candidate.manualFullBuilds = { ...(candidate.manualFullBuilds || {}), [task]:progress };
+      if (candidate.manualFullBuildCompleted) {
+        delete candidate.manualFullBuildCompleted[task];
+        if (!Object.keys(candidate.manualFullBuildCompleted).length) delete candidate.manualFullBuildCompleted;
+      }
+      if (JSON.stringify(room) !== before) throw new Error('전체 구축 시작 전 저장 데이터가 바뀌었습니다.');
+      await saveRoom(candidate);
+      if (state.currentRoom !== room) throw new Error('저장 중 방이 바뀌었습니다.');
+      rpcmReplaceRoomObject(room,candidate);
+      if (!candidate.manualFullBuildCompleted) delete room.manualFullBuildCompleted;
+    }
+    const fullBuild = { task, historyHash, startIndex:plan.startIndex, endIndex:plan.endIndex, totalTurns:turns.length, part:progress.completedParts + 1, estimatedParts:progress.estimatedParts };
+    const selection = { mode:'custom', startKey:String(turns[plan.startIndex].key), endKey:String(turns[plan.endIndex].key), loadedTurns:turns, fullBuild };
+    const result = await buildManualUpdatePacket(room, task, packetMode, selection);
+    if (result.draft.packet.length > 500000) throw new Error('최종 작업자료가 안전 목표를 넘었습니다. 전체 구축 진행 상태를 취소하고 범위를 확인해 주세요.');
+    return { ...result, part:progress.completedParts + 1, totalTurns:turns.length, startIndex:plan.startIndex, endIndex:plan.endIndex, estimatedParts:progress.estimatedParts };
+  }
+
+  function advanceManualFullBuild(candidate, room, draft) {
+    const part = draft.fullBuild;
+    if (!part) return;
+    const progress = manualFullBuildFor(room, part.task);
+    if (!progress || progress.historyHash !== part.historyHash || progress.totalTurns !== part.totalTurns || progress.lastAppliedIndex + 1 !== part.startIndex || part.endIndex !== draft.endIndex) throw new Error('전체 구축 진행 상태가 변경됐습니다. 작업자료를 다시 만들어 주세요.');
+    candidate.manualFullBuilds = { ...(candidate.manualFullBuilds || {}) };
+    if (part.endIndex >= progress.totalTurns - 1) {
+      delete candidate.manualFullBuilds[part.task];
+      candidate.manualFullBuildCompleted = { ...(candidate.manualFullBuildCompleted || {}), [part.task]:{ totalTurns:progress.totalTurns, completedParts:progress.completedParts + 1, endKey:draft.endMessageId, completedAt:nowIso() } };
+    }
+    else candidate.manualFullBuilds[part.task] = { ...progress, lastAppliedIndex:part.endIndex, lastAppliedEndKey:draft.endMessageId, completedParts:progress.completedParts + 1, partRanges:[...(progress.partRanges||[]),{part:part.part,startIndex:part.startIndex,endIndex:part.endIndex}] };
+    if (!Object.keys(candidate.manualFullBuilds).length) delete candidate.manualFullBuilds;
+  }
+
+  async function cancelManualFullBuild(room, task) {
+    const progress = manualFullBuildFor(room, task);
+    if (!progress) return;
+    const roomKey = String(room.chatId || '');
+    if (manualUpdateRuntime.commits.has(roomKey) || state.autoSaveTimers.has(roomKey)) throw new Error('저장이 끝난 뒤 전체 구축을 취소해 주세요.');
+    const candidate = structuredClone(room);
+    candidate.manualFullBuilds = { ...(candidate.manualFullBuilds || {}) };
+    delete candidate.manualFullBuilds[task];
+    if (!Object.keys(candidate.manualFullBuilds).length) delete candidate.manualFullBuilds;
+    await saveRoom(candidate);
+    rpcmReplaceRoomObject(room,candidate);
+    if (!candidate.manualFullBuilds) delete room.manualFullBuilds;
+    manualUpdateRuntime.packets.delete(manualPacketKey(room, task));
+    refreshManualUpdateCards(state.modal, room);
+  }
+
+  async function setManualTaskStartpoint(room, mode, target, selectedKey = '') {
+    if (!room || state.currentRoom !== room) throw new Error('현재 방이 바뀌었습니다.');
+    const roomKey = String(room.chatId || '');
+    if (manualUpdateRuntime.commits.has(roomKey) || manualUpdateRuntime.commitLocks.has(roomKey) || state.autoSaveTimers.has(roomKey) || state.saveStatus === 'saving' || state.saveStatus === 'error') throw new Error('기존 로컬 저장이 완료된 뒤 시작점을 설정해 주세요.');
+    const baseSnapshot = JSON.stringify(room);
+    if (!['now','beginning','selected'].includes(mode)) throw new Error('시작점 방식을 선택해 주세요.');
+    const includeLongTerm = target === 'all' || target === 'longTermFirst';
+    const targets = target === 'all' ? Object.keys(MANUAL_UPDATE_TASKS) : target === 'longTermFirst' ? [] : [target];
+    if ((!targets.length && !includeLongTerm) || targets.some(task => !MANUAL_UPDATE_TASKS[task])) throw new Error('적용할 작업을 선택해 주세요.');
+    const turns = await loadManualCompletedTurns(room);
+    if (manualUpdateRuntime.commits.has(roomKey) || manualUpdateRuntime.commitLocks.has(roomKey) || state.autoSaveTimers.has(roomKey) || JSON.stringify(room) !== baseSnapshot) throw new Error('RP 조회 중 저장 데이터가 바뀌었습니다. 시작점을 다시 확인해 주세요.');
+    const index = mode === 'selected' ? rpcmFindTurnIndex(turns,selectedKey) : -1;
+    if (mode === 'selected' && index < 0) throw new Error('선택한 RP 턴을 찾지 못했습니다. 목록을 다시 불러와 주세요.');
+    if (mode === 'now' && !turns.length) throw new Error('완료된 RP 턴이 없어 지금부터로 설정할 수 없습니다.');
+    const anchorTurn=mode==='now'?turns.at(-1):mode==='selected'&&index>0?turns[index-1]:null;
+    const evidence=rpcmManualAnchorEvidence(room,anchorTurn);
+    if(anchorTurn&&!evidence)throw new Error('선택한 RP의 USER 메시지 ID를 확인하지 못했습니다. 불안정한 기준점을 저장하지 않습니다.');
+    const key=anchorTurn?String(evidence.userId):'';
+    const now = nowIso();
+    const candidate = structuredClone(room);
+    candidate.manualUpdateCheckpoints = { ...(candidate.manualUpdateCheckpoints || {}) };
+    for (const task of targets) {
+      candidate.manualUpdateCheckpoints[task] = { ...(candidate.manualUpdateCheckpoints[task] || {}),
+        endMessageId:key,sourceMessageId:String(anchorTurn?.key||''),anchorEvidence:evidence,baselineAt:now };
+      if (task === 'timeline') {
+        candidate.storyTimelineLastReviewedMessageId = key;
+        const checkpointIndex = key ? rpcmFindTurnIndex(turns,key) : -1;
+        candidate.storyTimelineUnreviewedTurnCount = turns.length - checkpointIndex - 1;
+        candidate.storyTimelineCountCheckedAt = Date.now();
+        candidate.storyTimelineCarryoverTurnKeys = checkpointIndex < 0 ? [] : turns.slice(Math.max(0, checkpointIndex - 39), checkpointIndex + 1).map(turn => String(turn.key));
+      }
+    }
+    let clearedLongTermPending = 0;
+    if (includeLongTerm) {
+      const longTerm = longTermState(candidate);
+      const previousBaseline = String(longTerm.firstStage.manualBaseline || '');
+      longTerm.firstStage.manualBaseline = key;
+      if (previousBaseline !== key) clearedLongTermPending = longTermClearManualPending(candidate);
+    }
+    await saveRoom(candidate);
+    if (state.currentRoom !== room) throw new Error('저장 중 채팅방이 바뀌었습니다.');
+    rpcmReplaceRoomObject(room,candidate);
+    manualUpdateRuntime.counts.delete(roomKey);
+    for (const task of targets) manualUpdateRuntime.packets.delete(manualPacketKey(room, task));
+    if (includeLongTerm && clearedLongTermPending) {
+      longTermRuntime.externalText = '';
+      if (longTermRuntime.draftView === 'first') longTermRuntime.draftView = '';
+    }
+    refreshManualUpdateCards(state.modal, room);
+    void refreshManualUpdateCounts(state.modal, room, true);
+    return { count:targets.length + (includeLongTerm ? 1 : 0), mode, key, clearedLongTermPending };
+  }
+
+  function openAutoStartDialog(room) {
+    document.querySelector('#rpcm-auto-start-backdrop')?.remove();
+    const previousFocus = document.activeElement;
+    const backdrop = document.createElement('div');
+    backdrop.id = 'rpcm-auto-start-backdrop';
+    backdrop.innerHTML = `<section class="rpcm-auto-start-dialog" role="dialog" aria-modal="true" aria-labelledby="rpcm-auto-start-title"><h2 id="rpcm-auto-start-title">시작점 설정</h2><p>선택한 작업의 다음 기본 업데이트 범위만 바꿉니다. 이미 저장된 기억은 유지되며, 시작점이 바뀐 작업의 미저장 작업자료·결과 대기는 취소됩니다.</p><label>시작 방식 <select data-start-mode><option value="" selected disabled>방식 선택</option><option value="now">지금부터 (이전 미처리 RP 제외)</option><option value="beginning">처음부터 (전체 재검토)</option><option value="selected">특정 RP부터 (기준점 복구)</option></select></label><label>적용 대상 <select data-start-target><option value="" selected disabled>작업 선택</option><option value="all">전체 6작업</option>${Object.entries(MANUAL_UPDATE_TASKS).map(([task, info]) => `<option value="${task}">${esc(info.title)}</option>`).join('')}<option value="longTermFirst">장기기억 1차 생성</option></select></label><label data-start-turn-wrap hidden>시작할 RP 턴 <select data-start-turn></select></label><p data-start-note>특정 RP부터를 선택하면 선택한 턴을 다음 작업자료에 포함합니다.</p><footer><button type="button" class="rpcm-btn secondary" data-auto-start-cancel>취소</button><button type="button" class="rpcm-btn primary" data-auto-start-confirm>시작점 저장</button></footer></section>`;
+    let loadedTurns = null;
+    const modeSelect = backdrop.querySelector('[data-start-mode]');
+    const targetSelect = backdrop.querySelector('[data-start-target]');
+    const turnSelect = backdrop.querySelector('[data-start-turn]');
+    modeSelect.addEventListener('change', async () => {
+      backdrop.querySelector('[data-start-turn-wrap]').hidden = modeSelect.value !== 'selected';
+      if (modeSelect.value !== 'selected' || loadedTurns) return;
+      const note = backdrop.querySelector('[data-start-note]');
+      note.textContent = '완료된 RP 턴을 불러오는 중…';
+      try {
+        loadedTurns = await loadManualCompletedTurns(room);
+        if (!backdrop.isConnected) return;
+        if (!loadedTurns.length) throw new Error('완료된 RP 턴이 없습니다.');
+        turnSelect.innerHTML = loadedTurns.map((turn, index) => `<option value="${esc(String(turn.key))}">${esc(manualTurnOption(turn, index))}</option>`).join('');
+        note.textContent = '선택한 턴부터 다음 작업자료에 포함합니다.';
+      } catch (error) { loadedTurns = null; note.textContent = `목록 조회 실패: ${error.message}`; }
+    });
+    const close = () => { backdrop.remove(); if (previousFocus?.isConnected) previousFocus.focus(); };
+    backdrop.querySelector('[data-auto-start-cancel]').onclick = close;
+    backdrop.querySelector('[data-auto-start-confirm]').onclick = async event => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      button.textContent = '시작점 확인 중…';
+      try {
+        if (!modeSelect.value || !targetSelect.value) throw new Error('시작 방식과 적용 대상을 선택해 주세요.');
+        if (modeSelect.value === 'selected' && !turnSelect.value) throw new Error('시작할 RP 턴을 선택해 주세요.');
+        const result = await setManualTaskStartpoint(room, modeSelect.value, targetSelect.value, turnSelect.value);
+        close();
+        const label = state.modal?.querySelector('#rpcm-auto-start-status');
+        if (label) label.textContent = `${result.count}개 작업 시작점 저장됨 · ${new Date().toLocaleString('ko-KR')}`;
+        notify(`${result.count}개 작업의 시작점을 저장했습니다.${result.clearedLongTermPending ? ' 장기기억 1차의 이전 결과 대기도 정리했습니다.' : ''} 저장된 기억은 유지됩니다.`, 'success', 5000);
+      } catch (error) {
+        notify(`시작점을 변경하지 않았습니다: ${error.message}`, 'error', 6500);
+        button.disabled = false;
+        button.textContent = '시작점 저장';
+      }
+    };
+    backdrop.onclick = event => { if (event.target === backdrop) close(); };
+    backdrop.onkeydown = event => {
+      if (event.key === 'Escape') { event.preventDefault(); close(); }
+      else if (event.key === 'Tab') {
+        const buttons = [...backdrop.querySelectorAll('button:not(:disabled)')];
+        if (event.shiftKey && document.activeElement === buttons[0]) { event.preventDefault(); buttons.at(-1).focus(); }
+        else if (!event.shiftKey && document.activeElement === buttons.at(-1)) { event.preventDefault(); buttons[0].focus(); }
+      }
+    };
+    document.body.appendChild(backdrop);
+    backdrop.querySelector('[data-auto-start-cancel]').focus();
+  }
+
+  function manualExistingResult(room, task, timelineRun = null) {
+    const slot = id => String((room.slots || []).find(item => item.id === id)?.content || '').trim();
+    if (task === 'currentItems') return `[CURRENT_STATE]\n${slot('currentState')}\n[/CURRENT_STATE]\n\n[IMPORTANT_ITEMS]\n${allImportantItemRawText(room).trim()}\n[/IMPORTANT_ITEMS]`;
+    if (task === 'logSummary') return `[DATE_LOGS]\n${slot('logSummary')}\n[/DATE_LOGS]`;
+    if (task === 'personInfo') {
+      const rows = personStateExportText(room).split('\n').map(line => {
+        if (!line.startsWith('{')) return line;
+        try { return JSON.stringify({ op:'upsert', ...JSON.parse(line) }); } catch (_) { return line; }
+      });
+      return rows.join('\n');
+    }
+    return serializeStoryTimelineRefMaster(timelineRun.masterSnapshot, timelineRun, true);
+  }
+
+function rpcmUnknownKnowledgeMatches(room,raw){
+  if(!room||!raw||raw.type!=='knowledge'||raw.op!=='upsert'||KNOWLEDGE_STATUSES.includes(raw.status))return false;
+  const same=(a,b)=>{if(a===b)return true;if(!a||!b||typeof a!=='object'||typeof b!=='object'||Array.isArray(a)!==Array.isArray(b))return false;const keys=Object.keys(a).sort(),other=Object.keys(b).sort();return keys.length===other.length&&keys.every((key,i)=>key===other[i]&&same(a[key],b[key]));};
+  const exported=personStateExportText(structuredClone(room)).split('\n').filter(line=>line.startsWith('{')).map(line=>JSON.parse(line));
+  return exported.some(row=>!KNOWLEDGE_STATUSES.includes(row.status)&&same(row,raw));
+}
+function rpcmAssertPreservedUnknown(room,entry){if(!rpcmUnknownKnowledgeMatches(room,entry.preservedUnknownRow))throw new Error('미지원 인지 상태는 기존 카드와 완전히 같은 내보내기 행으로만 보존할 수 있습니다. 변경된 카드는 유지했습니다.');}
+function rpcmRestorePendingBranchItems(candidate,entry){
+  if(!candidate.pending||!rpcmBranchAreas(entry.scope).some(area=>['importantItems','currentState'].includes(area)))return;
+  const before=new Set(entry.before.slots.map(row=>String(row.slot.id))),removed=new Set(entry.after.slots.filter(row=>!before.has(String(row.slot.id))).map(row=>String(row.slot.id)));
+  if(!removed.size)return;
+  const pending=candidate.pending;
+  // Preserve the verified server snapshot/context until guarded sync succeeds.
+  for(const field of ['items','quickRemovedItems'])if(Array.isArray(pending[field]))pending[field]=pending[field].filter(item=>!removed.has(String(item.slotId||'')));
+  pending.verified=false;
+}
+function rpcmLoreReadPacket(packet,refs,sourceTurns,maxChars){
+  const policy={version:1,full:refs.cards.map(row=>row.ref),index:[],unsent:[]};
+  if(packet.length<=maxChars)return {packet,readSet:policy};
+  const begin=packet.indexOf('[REF_SNAPSHOT]\n'),end=packet.indexOf('\n[/REF_SNAPSHOT]',begin);if(begin<0||end<0)throw new Error('자료 전송 범위를 확인하지 못했습니다.');
+  const before=packet.slice(0,begin),after=packet.slice(end+'\n[/REF_SNAPSHOT]'.length),query=sourceTurns.map(row=>String(row[1])).join('\n').toLocaleLowerCase();
+  const ranked=refs.cards.map((row,index)=>({row,index,mentioned:[row.title,...(row.aliases||[])].filter(Boolean).some(name=>query.includes(String(name).toLocaleLowerCase()))})).sort((a,b)=>Number(b.mentioned)-Number(a.mentioned)||b.index-a.index);
+  const selected=[],indexed=[];policy.full=[];
+  const render=()=>before+'[REF_SNAPSHOT]\n'+JSON.stringify({packs:refs.packs,cards:selected},null,2)+'\n[/REF_SNAPSHOT]\n\n[REFERENCE_READ_SET]\n'+JSON.stringify({version:1,full:policy.full,index:indexed,unsentCount:refs.cards.length-selected.length-indexed.length})+'\n본문을 보낸 full REF만 수정할 수 있습니다. 목차·미전송 카드는 수정/이동/종료하지 마세요. NEW로 기존 카드를 재생성하지 마세요.\n[/REFERENCE_READ_SET]'+after;
+  if(render().length>maxChars)throw Object.assign(new Error('지침·RP 원문·자료팩 목차만으로 입력 한도를 넘습니다. 원문을 자르지 않았습니다. 범위를 나누어 주세요.'),{code:'RPCM_FULL_SPLIT_REQUIRED'});
+  // Reserve a small, bounded index without truncating any card body or title.
+  const baseSize=render().length,indexReserve=Math.min(6000,Math.floor((maxChars-baseSize)*0.15));let used=baseSize+24;
+  for(const {row} of ranked){const raw=JSON.stringify(row,null,2),cost=raw.length+4*(raw.split('\n').length+1)+JSON.stringify(row.ref).length+5;if(used+cost>maxChars-indexReserve)continue;selected.push(row);policy.full.push(row.ref);used+=cost;}
+  const sent=new Set(policy.full);
+  for(const row of refs.cards){if(sent.has(row.ref))continue;const entry={ref:row.ref,packRef:row.packRef,type:row.type||'',title:row.title||''},cost=JSON.stringify(entry).length+1;if(used+cost>maxChars)continue;indexed.push(entry);policy.index.push(row.ref);used+=cost;}
+  const visible=new Set([...policy.full,...policy.index]);policy.unsent=refs.cards.filter(row=>!visible.has(row.ref)).map(row=>row.ref);
+  const result=render();if(result.length>maxChars)throw new Error('자료 요청 예산을 확인하지 못했습니다.');return {packet:result,readSet:policy};
+}
+function rpcmAssertLoreReadSet(parsed,draft){
+  const read=draft?.loreReadSet;if(!read)return;
+  const full=new Set(read.full||[]);
+  for(const op of parsed.operations||[]){
+    if(op.op!=='card_upsert')continue;
+    if(!String(op.ref).startsWith('NEW_')&&!full.has(op.ref))throw new Error(op.ref+': 본문을 보내지 않은 기존 자료는 수정할 수 없습니다.');
+    if(String(op.ref).startsWith('NEW_')){
+      const unreadMatch=(draft.loreRefs?.cards||[]).some(row=>manualLoreDuplicateKey(row)===manualLoreDuplicateKey(op)&&!full.has(row.ref));
+      if(unreadMatch)throw new Error(op.ref+': 미전송 기존 자료와 같은 제목·유형입니다. 새 카드로 우회하지 않고 기존 자료를 포함해 다시 검토해 주세요.');
+    }
+  }
+}
+function rpcmValidateRebuildProvenance(data,job){
+  const p=data?.provenance;if(p===undefined)return {provided:false,rows:0,receipts:0};
+  const bad=message=>{throw new Error('재구축 근거표: '+message);};
+  if(!p||p.version!==1||!Array.isArray(p.receipts)||!Array.isArray(p.rows)||p.rows.length>50000||JSON.stringify(p).length>4000000)bad('형식 또는 안전 크기가 올바르지 않습니다.');
+  const keys=(job.sourceKeys||[]).map(String),positions=new Map(keys.map((key,index)=>[key,index])),parts=new Map((job.parts||[]).map(part=>[part.index,part])),seen=new Set(),linked=new Set();
+  if(p.receipts.length!==parts.size)bad('처리 영수증에 빠진 PART가 있습니다.');
+  for(const receipt of p.receipts){const part=parts.get(receipt?.partIndex);if(!part||seen.has(receipt.partIndex)||receipt.completed!==true||receipt.sha256!==part.sha256)bad('PART 중복·미완료·hash 불일치');seen.add(receipt.partIndex);}
+  const outputKeys={currentItems:['currentStateText','importantItemsText'],logSummary:['dateLogsText'],personInfo:['personInfoText'],timeline:['timelineText'],lore:['lore']},catalog=[];
+  for(const [domain,names] of Object.entries(outputKeys))for(const outputKey of names){
+    const value=data.outputs?.[outputKey];if(value===undefined||value===null)continue;
+    const add=(item,path,lineIndex=null,rowText=null)=>{const ids=item&&typeof item==='object'&&!Array.isArray(item)?['id','key','ref','cardId'].filter(key=>typeof item[key]==='string'&&item[key]).map(key=>item[key]):[];catalog.push({domain,outputKey,path,lineIndex,rowText,ids});};
+    const walk=(item,path)=>{if(Array.isArray(item)){item.forEach((row,index)=>walk(row,path+'/'+index));return;}if(!item||typeof item!=='object')return;const hasId=['id','key','ref','cardId'].some(key=>typeof item[key]==='string'&&item[key]),children=Object.entries(item).filter(([,row])=>row&&typeof row==='object');if(hasId||!children.length)add(item,path);for(const [key,row] of children)walk(row,path+'/'+key);};
+    if(typeof value!=='string'){walk(value,'');continue;}
+    let whole;try{whole=JSON.parse(value);}catch(_){}
+    if(whole&&typeof whole==='object'){walk(whole,'');continue;}
+    const lines=value.replace(/\r\n?/g,'\n').split('\n');
+    lines.forEach((raw,index)=>{const line=raw.trim();if(!line||/^\[{1,2}\/?(?:WISH_PERSON_V1|TIMELINE|CURRENT_STATE|IMPORTANT_ITEMS|DATE_LOGS)\]{1,2}$/.test(line)||/^VERSION\s*=/.test(line))return;let row;try{row=JSON.parse(line);}catch(_){}if(row&&typeof row==='object')add(row,'line/'+(index+1),index+1,raw);else add(null,'line/'+(index+1),index+1,raw);});
+  }
+  const byIdentity=new Map(),byLine=new Map();
+  const index=(map,key,item)=>{const values=map.get(key)||[];values.push(item);map.set(key,values);};
+  for(const item of catalog){for(const id of new Set(item.ids.length?item.ids:item.rowText!==null?[item.rowText.trim()]:[]))index(byIdentity,item.domain+'\u0000'+id,item);if(item.lineIndex!==null){index(byLine,item.domain+'\u0000'+item.lineIndex,item);index(byLine,item.domain+'\u0000'+item.outputKey+'\u0000'+item.lineIndex,item);}}
+  for(const row of p.rows){
+    if(!row||!Object.prototype.hasOwnProperty.call(outputKeys,row.domain)||!String(row.rowKey||'').trim()||!Array.isArray(row.turnKeys)||!row.turnKeys.length||row.turnKeys.length>200||!Array.isArray(row.partIndexes)||!row.partIndexes.length)bad('행의 영역·식별값·근거 목록이 올바르지 않습니다.');
+    const candidates=((Number.isInteger(row.lineIndex)?byLine.get(row.domain+'\u0000'+(row.outputKey?row.outputKey+'\u0000':'')+row.lineIndex):byIdentity.get(row.domain+'\u0000'+String(row.rowKey)))||[]).filter(item=>(!row.outputKey||item.outputKey===row.outputKey)&&(!Number.isInteger(row.lineIndex)||(typeof row.rowText==='string'&&item.rowText===row.rowText)));
+    if(candidates.length!==1)bad('실제 결과 행을 유일하게 식별하지 못했습니다. key/ID 또는 outputKey·lineIndex·rowText를 확인하세요.');
+    const identity=candidates[0].outputKey+'\u0000'+candidates[0].path;if(linked.has(identity))bad('같은 결과 행의 근거가 중복됐습니다.');linked.add(identity);
+    const ranges=row.partIndexes.map(index=>{const part=parts.get(index);if(!part)bad('존재하지 않는 PART 근거입니다.');const first=positions.get(String(part.firstTurnKey)),last=positions.get(String(part.lastTurnKey));if(first===undefined||last===undefined||last<first)bad('PART 원문 경계를 찾지 못했습니다.');return [first,last];});
+    for(const key of row.turnKeys){const at=positions.get(String(key));if(at===undefined||!ranges.some(([first,last])=>at>=first&&at<=last))bad('없는 턴 또는 다른 PART의 턴을 근거로 사용했습니다.');}
+  }
+  return {provided:true,rows:p.rows.length,receipts:p.receipts.length,totalRows:catalog.length,unlinkedRows:catalog.length-linked.size,coverage:catalog.length===linked.size?'complete':'partial'};
+}
+function rpcmKnowledgeGroups(){return [{label:'앎',values:['knows','knows-part']},{label:'모름',values:['does-not-know','forgot']},{label:'확인 안 됨',values:['unconfirmed']},{label:'의심',values:['suspects']},{label:'오해',values:['mistaken']},{label:'전달 경로',values:['heard-only']},{label:'부정',values:['denies']}];}
+function rpcmKnowledgeOptions(selected){
+  const unknown=selected&&!KNOWLEDGE_STATUSES.includes(selected)?'<option value="'+esc(selected)+'" selected>미지원 상태 · '+esc(selected)+'</option>':'';
+  return unknown+rpcmKnowledgeGroups().map(group=>'<optgroup label="'+group.label+'">'+group.values.map(status=>'<option value="'+status+'"'+(selected===status?' selected':'')+'>'+KNOWLEDGE_STATUS_LABELS[status]+'</option>').join('')+'</optgroup>').join('');
+}
+function rpcmKnowledgeCanInject(card){return KNOWLEDGE_STATUSES.includes(card.status)&&card.status!=='unconfirmed'&&(card.status!=='mistaken'||!!String(card.actualFact||'').trim())&&(card.status!=='knows-part'||!!String(card.knownPart||'').trim());}
+function rpcmKnowledgeLine(card,name){
+  const fact=String(card.fact||'').trim(),part=String(card.knownPart||'').trim();
+  let line='- ['+(KNOWLEDGE_STATUS_LABELS[card.status]||'미지원 상태')+'] '+fact;
+  if(card.status==='mistaken')line+=' (객관적 사실: '+String(card.actualFact||'').trim()+')';
+  if(card.status==='knows-part')line+='\n  이 인물이 실제로 아는 부분: '+part+'\n  이 범위 밖의 인지를 추정하지 않는다.';
+  if(card.status==='heard-only')line+='\n  전해 들었다는 근거만 있다. 직접 확인·믿음·확신 여부를 임의로 보충하지 않는다.';
+  if(card.status==='denies')line+='\n  부정하는 상태다. 모름·오해·은폐와 같은 뜻으로 바꾸거나 실제 인지 여부를 추정하지 않는다.';
+  if(card.status==='forgot')line+='\n  이전에 알았으나 현재 잊었다는 근거가 있다. 현재 알고 있는 사실로 사용하지 않는다.';
+  if(['knows','knows-part'].includes(card.status)&&card.hiddenFrom?.length)line+=' · '+name+'이(가) '+card.hiddenFrom.join('·')+'에게 숨김'+(card.concealmentNote?' ('+card.concealmentNote+')':'');
+  return line;
+}
+function rpcmKnowledgeContract(){return 'CHIMERA_KNOWLEDGE_V2. 이 확장 계약은 기존 지침의 knowledge 5상태 enum 제한만 다음 9상태로 확장합니다. 나머지 사실·표현·근거·보존 규칙은 그대로 유지합니다. status는 knows,does-not-know,suspects,mistaken,unconfirmed,knows-part,heard-only,denies,forgot 중 최종값 하나만 저장합니다. 부모 분류는 화면용이며 parent/statusDetail을 중복 저장하지 않습니다. knows-part는 실제로 아는 부분을 knownPart 문자열에 반드시 기록합니다. heard-only는 전해 들은 근거만, denies는 부정만, forgot는 이전에 알았고 현재 잊었다는 명시 근거가 있을 때만 사용합니다. 전해 들음/부정으로 실제 인지·확신·은폐를 추정하지 않습니다. 기존 mistaken의 fact=믿는 내용, actualFact=실제 사실을 보존합니다. 기존 상태·카드 ID·key·수동 근거는 자동 재판정하지 않습니다.';}
+
+const rpcmRecallComparisons=new WeakMap();
+const rpcmMemoLogCache=new WeakMap();
+function rpcmContinuitySettings(room){const saved=room?.chimeraFeaturesV1||{};return {memoHooks:true,memoPeople:true,recallCompare:saved.recallCompare===true,dateHints:saved.dateHints===true};}
+function rpcmExplicitDateHints(turns){
+  const result=[],seen=new Set();
+  for(const row of turns||[]){const key=String(Array.isArray(row)?row[0]:row.key),text=String(Array.isArray(row)?row[1]:row.text||'');let panel=0,offset=0;
+    for(const [lineIndex,line] of text.split(/\r?\n/).entries()){
+      if(/\[(?:INFO|상태창|상태|HUD)\]|<(?:info|status|hud)\b/i.test(line))panel=12;
+      if(/\[\/(?:INFO|상태창|상태|HUD)\]|<\/(?:info|status|hud)>/i.test(line))panel=0;
+      const explicit=/(?:날짜|일시|작중\s*(?:날짜|일시)|\bdate\b|📅|🗓)/i.test(line),field=panel&&/^\s*(?:[|│•*-]\s*)?(?:[^:：|│]{0,30}(?:날짜|일시|date|📅|🗓))\s*[:：|│]/i.test(line);
+      if(explicit||panel){const matches=line.matchAll(/(?:\d{1,6}\s*년\s*)?\d{1,2}\s*월\s*\d{1,2}\s*일|\b\d{1,6}[-/.]\d{1,2}[-/.]\d{1,2}\b/g);for(const match of matches){const id=key+'\u0000'+lineIndex+'\u0000'+match.index;if(seen.has(id))continue;seen.add(id);const prefix=line.slice(0,match.index),calendar=prefix.match(/([^\s:/|,]+력)\s*$/)?.[1]||'';result.push({turnKey:key,raw:match[0],calendar,sourceLine:line,lineIndex:lineIndex+1,column:match.index,offset:offset+match.index,source:explicit?'명시 날짜 라벨':field?'상태창 날짜 필드':'INFO 영역 안의 날짜 후보 · 필드 출처 미확인'});}}
+      offset+=line.length+(text.slice(offset+line.length,offset+line.length+2)==='\r\n'?2:1);
+      panel=Math.max(0,panel-1);
+    }
+  }
+  return result;
+}
+function rpcmDateHintBlock(room,turns,maxChars=Infinity){
+  if(!rpcmContinuitySettings(room).dateHints||maxChars<=0)return '';
+  const hints=rpcmExplicitDateHints(turns);if(!hints.length)return '';
+  const sources=[],byLine=new Map(),candidates=hints.map(({sourceLine,...hint})=>{
+    const key=hint.turnKey+'\u0000'+hint.lineIndex;let sourceIndex=byLine.get(key);
+    if(sourceIndex===undefined){sourceIndex=sources.length;byLine.set(key,sourceIndex);sources.push({turnKey:hint.turnKey,lineIndex:hint.lineIndex,sourceLine});}
+    return {...hint,sourceIndex};
+  });
+  const block='\n\n[EXPLICIT_DATE_HINTS]\n'+JSON.stringify({sources,candidates})+'\n위 값은 원문에 명시된 날짜 후보입니다. candidates의 sourceIndex는 sources의 원문 줄을 가리킵니다. 사건 발생일과 같은지는 원문에서 확인하세요. 연도·달력·나이·상대 시점을 추정하지 마세요.\n[/EXPLICIT_DATE_HINTS]';
+  return block.length<=maxChars?block:'';
+}
+function rpcmRecordRecallComparison(room,blocks,query,current){
+  if(!room||!rpcmContinuitySettings(room).recallCompare)return;
+  const tokens=tokenizeRecallText(query);if(!tokens.length)return;
+  const signature=semanticSourceHash(String(query)+'\n'+blocks.map(block=>block.key+':'+semanticSourceHash(block.body||block.raw||'')).join('|'));
+  if(rpcmRecallComparisons.get(room)?.signature===signature)return;
+  const alternative=blocks.map(block=>{const sentences=String(block.body||block.raw||'').split(/(?<=[.!?。！？])\s+|\n+/),text=sentences.map((sentence,i)=>sentence+' '+(sentences[i+1]||''));let best=0;for(const window of text){const lower=window.toLocaleLowerCase();best=Math.max(best,tokens.reduce((sum,token)=>sum+(lower.includes(token)?1:0),0));}return {key:String(block.key),title:String(block.title||block.dateLabel||block.key),score:best};}).filter(row=>row.score>0).sort((a,b)=>b.score-a.score).slice(0,5);
+  const baseline=current.slice(0,5).map(row=>({key:String(row.block.key),title:String(row.block.title||row.block.key)})),a=new Set(alternative.map(row=>row.key)),b=new Set(baseline.map(row=>row.key));
+  rpcmRecallComparisons.set(room,{signature,at:Date.now(),baseline,alternative,added:alternative.filter(row=>!b.has(row.key)),removed:baseline.filter(row=>!a.has(row.key))});
+}
+function rpcmMemoSourceSafe(room,text){
+  if(/PRIVATE|비밀|은폐|정체|비공개/i.test(String(text)))return false;
+  const normalize=v=>String(v||'').replace(/\s+/g,'').toLocaleLowerCase(),needle=normalize(text);
+  return !(room.knowledgeCards||[]).some(card=>!card.archived&&(card.hiddenFrom?.length||card.concealments?.length)&&[card.fact,card.actualFact,card.knownPart].some(value=>{const fact=normalize(value);return fact.length>=8&&(needle.includes(fact)||fact.includes(needle));}));
+}
+function rpcmMemoRecentLogs(room,fallback){
+  const content=String((room.slots||[]).find(slot=>slot.id==='logSummary')?.content||'');if(!content)return fallback;
+  const label=String(room.activeLogTimeline||DEFAULT_LOG_TIMELINE),cached=rpcmMemoLogCache.get(room);if(cached?.content===content&&cached.label===label)return cached.text;
+  const blocks=parseDatedLogBlocks(content).filter(block=>normalizedLogTimelineKey(logTimelineLabelOfBlock(block))===normalizedLogTimelineKey(label)),text=selectRecentLogBlocks(blocks,15).map(block=>block.raw).join('\n');
+  rpcmMemoLogCache.set(room,{content,label,text});return text;
+}
+function rpcmAppendContinuityMemos(room,original,items,carrierLimits=null){
+  const query=String(room.autoRecallContextText||''),recent=rpcmMemoRecentLogs(room,String((items||[]).filter(item=>item.autoType==='recent-log').slice(-15).map(item=>item.content||'').join('\n'))),selected=String(items.map(item=>item.content||'').join('\n')),storySelected=String(items.filter(item=>item.group==='story-timeline').map(item=>item.content||'').join('\n')),memo=[];
+  if(!query||!selected)return items;
+  if(storySelected){
+    const tokens=tokenizeRecallText(query),active=activeLogTimelineLabel(room);
+    const cards=(room.storyTimelineCards||[]).filter(card=>card.inject!==false&&String(card.timelineLabel||active)===active&&(card.tags||[]).some(tag=>['미해결','떡밥','서사고리','hook'].includes(String(tag).toLowerCase()))&&String(card.title||'')&&storySelected.includes(String(card.title))&&rpcmMemoSourceSafe(room,String(card.title)+' '+String(card.content))&&tokens.some(token=>String(card.title+' '+card.content).toLocaleLowerCase().includes(token))&&!recent.includes(String(card.title))).slice(0,2);
+    for(const card of cards)memo.push('이번에 선택된 기억에 미해결 표식이 있는 항목: '+card.title+' · 새 사건이나 해결을 임의로 만들지 않는다.');
+  }
+  {
+    const logText=items.filter(item=>['log-auto','fixed'].includes(item.group)||item.sourceSlotId==='logSummary').map(item=>String(item.content||'')).join('\n');
+    if(logText&&rpcmMemoSourceSafe(room,logText))for(const actor of (room.slots||[]).filter(slot=>slot.group==='character'&&slot.enabled!==false&&slot.title&&!query.includes(slot.title)&&!recent.includes(slot.title)&&logText.includes(slot.title)).slice(0,2))memo.push('선택된 과거 기록의 인물: '+actor.title+' · 과거 기록에 등장한 인물이다. 이 기록만으로 현재 장면에 존재한다고 간주하지 않는다.');
+  }
+  if(!memo.length)return items;
+  const item={slotId:'chimera:rp-memo',title:'RP 메모',group:'extra',autoType:'continuity-memo',content:memo.join('\n'),totalTurns:0,usedTurns:0},trial=[...items,item];
+  return carrierRequestWithinLimits(room,buildInjectedMessage(original,buildContextBlockFromItems(trial)),carrierLimits)?trial:items;
+}
+async function rpcmWriteOptionalMemos(room,messageId,original,items,options){
+  const source=items,withMemos=(items||[]).some(item=>item.autoType==='continuity-memo');
+  let selected=items,limits=null,wire=null,utf16RefusalProven=false;
+  const build=()=>{const block=buildContextBlockFromItems(selected),text=buildInjectedMessage(original,block),metrics=assertCarrierRequestWithinLimits(room,text,'carrier 총 길이',limits);return {items:selected,block,text,metrics};};
+  for(let attempt=0;attempt<2;attempt++){
+    wire=build();
+    try{wire.writeReceipt=await patchMessage(apiChatIdOf(room),messageId,wire.text,options);if(wire.writeReceipt?.carrierEncoding)wire.metrics={...wire.metrics,encoding:wire.writeReceipt.carrierEncoding,payloadBytes:wire.writeReceipt.carrierPayloadBytes,messageBytes:wire.writeReceipt.carrierMessageBytes};if(utf16RefusalProven)rpcmPersistCarrierUtf16Refusal();return wire;}
+    catch(error){
+      utf16RefusalProven ||= error?.rpcmUtf16Refusal===true;
+      if(attempt)throw error;
+      const status=rpcmNetStatus(error),utf8Refit=error?.code==='RPCM_CARRIER_UTF8_REFIT';
+      if(status!==413&&!utf8Refit)throw error;
+      limits={byteBudget:status===413?Math.min(APP.safeCarrierPayloadBytes,Math.max(1,Math.floor(wire.metrics.payloadBytes*.9))):APP.safeCarrierPayloadBytes};
+      selected=fitItemsToCarrierLimits(room,original,source,withMemos,limits);
+      if(!selected.length)throw error;
+    }
+  }
+  throw new Error('carrier 주입 재선택 후 전송에 실패했습니다.');
+}
+
+function rpcmBranchScopeFields(scope){
+  if(scope==='personInfo')return ['knowledgeCards','personStateRecords','personLastImportSummary'];
+  if(scope==='timeline')return ['storyTimelineCards','storyTimelineLastReviewedMessageId','storyTimelineLastReviewedAt','storyTimelineUnreviewedTurnCount','storyTimelineCarryoverTurnKeys','storyTimelinePendingReview'];
+  if(scope==='lore')return ['lorePacks'];
+  if(scope==='logSummary')return ['autoLogPinnedKeys','manualLogSelectedKeys'];return [];
+}
+function rpcmBranchTask(scope){return ['currentState','importantItems'].includes(scope)?'currentItems':scope;}
+function rpcmBranchAreas(scope){return scope==='currentItems'?['currentState','importantItems']:[scope];}
+function rpcmBranchSlotSelected(scope,slot){return scope==='currentState'?slot.id==='currentState':scope==='importantItems'?slot.group==='item':scope==='currentItems'?slot.id==='currentState'||slot.group==='item':scope==='logSummary'?slot.id==='logSummary':false;}
+function rpcmBranchPayloadValid(scope,payload){
+  if(!['currentState','importantItems','currentItems','logSummary','personInfo','timeline','lore'].includes(scope)||!payload||typeof payload!=='object'||Array.isArray(payload))return false;
+  const expected=rpcmBranchScopeFields(scope).sort();if(!payload.fields||Object.keys(payload.fields).sort().join('|')!==expected.join('|'))return false;
+  if(expected.some(field=>{const row=payload.fields[field];return !row||typeof row.present!=='boolean'||row.present&&!Object.prototype.hasOwnProperty.call(row,'value');}))return false;
+  if(!Array.isArray(payload.slots)||payload.slots.some(row=>!row||!Number.isInteger(row.index)||row.index<0||row.index>1000000||!row.slot||typeof row.slot.id!=='string'||!rpcmBranchSlotSelected(scope,row.slot)))return false;
+  if(new Set(payload.slots.map(row=>row.slot.id)).size!==payload.slots.length)return false;
+  const allowed=['cursor','baseline','appliedAt','lastAppliedStart','lastAppliedEnd','lastAttemptKey','lastCheckedStart','lastCheckedEnd','checkedAt','checkedSourceHash','checkedResultHash','lastCheckNoChange'];
+  return payload.ai&&typeof payload.ai==='object'&&!Array.isArray(payload.ai)&&Object.entries(payload.ai).every(([area,row])=>rpcmBranchAreas(scope).includes(area)&&row&&row.values&&Object.keys(row.values).every(key=>allowed.includes(key)))&&(payload.checkpoint===null||payload.checkpoint&&typeof payload.checkpoint==='object'&&!Array.isArray(payload.checkpoint));
+}
+function rpcmBranchEntryValid(entry){return entry&&entry.version===1&&/^BR_[a-z0-9_]+$/i.test(String(entry.id||''))&&entry.basis&&Number.isInteger(entry.basis.turnCount)&&entry.basis.turnCount>0&&typeof entry.basis.firstKey==='string'&&typeof entry.basis.lastKey==='string'&&/^[a-f0-9]{64}$/.test(String(entry.basis.sha256||''))&&rpcmBranchPayloadValid(entry.scope,entry.before)&&rpcmBranchPayloadValid(entry.scope,entry.after);}
+function rpcmBranchPayload(room,scope){
+  const fields={},select=slot=>scope==='currentState'?slot.id==='currentState':scope==='importantItems'?slot.group==='item':scope==='currentItems'?slot.id==='currentState'||slot.group==='item':scope==='logSummary'?slot.id==='logSummary':false;
+  for(const field of rpcmBranchScopeFields(scope))fields[field]={present:Object.prototype.hasOwnProperty.call(room,field),value:structuredClone(room[field])};
+  const checkpoint=room.manualUpdateCheckpoints?.[rpcmBranchTask(scope)],ai={};
+  for(const area of rpcmBranchAreas(scope)){const row=room.aiMemoryAutomation?.areas?.[area];if(!row)continue;const values={};for(const key of ['cursor','baseline','appliedAt','lastAppliedStart','lastAppliedEnd','lastAttemptKey','lastCheckedStart','lastCheckedEnd','checkedAt','checkedSourceHash','checkedResultHash','lastCheckNoChange'])if(Object.prototype.hasOwnProperty.call(row,key))values[key]=structuredClone(row[key]);ai[area]={values,anchor:structuredClone(room.aiMemorySourceAnchors?.[area]||null)};}
+  return {fields,slots:(room.slots||[]).map((slot,index)=>({slot,index})).filter(row=>select(row.slot)).map(row=>structuredClone(row)),checkpoint:checkpoint?structuredClone(checkpoint):null,ai};
+}
+function rpcmRestoreBranchPayload(room,scope,payload){
+  if(!rpcmBranchPayloadValid(scope,payload))throw new Error('복원 사본의 영역·필드·항목 형식이 올바르지 않습니다. 원본은 유지했습니다.');
+  for(const [field,row] of Object.entries(payload.fields||{})){if(row.present)room[field]=structuredClone(row.value);else delete room[field];}
+  const select=slot=>scope==='currentState'?slot.id==='currentState':scope==='importantItems'?slot.group==='item':scope==='currentItems'?slot.id==='currentState'||slot.group==='item':scope==='logSummary'?slot.id==='logSummary':false;
+  const slots=(room.slots||[]).filter(slot=>!select(slot));for(const row of [...payload.slots].sort((a,b)=>a.index-b.index))slots.splice(Math.min(row.index,slots.length),0,structuredClone(row.slot));room.slots=slots;
+  const task=rpcmBranchTask(scope);room.manualUpdateCheckpoints||={};if(payload.checkpoint)room.manualUpdateCheckpoints[task]=structuredClone(payload.checkpoint);else delete room.manualUpdateCheckpoints[task];
+  for(const [area,record] of Object.entries(payload.ai||{})){const row=aiMemoryConfig(room).areas[area];for(const key of ['cursor','baseline','appliedAt','lastAppliedStart','lastAppliedEnd','lastAttemptKey','lastCheckedStart','lastCheckedEnd','checkedAt','checkedSourceHash','checkedResultHash','lastCheckNoChange'])delete row[key];Object.assign(row,structuredClone(record.values),{draft:null,status:'분기 복원 · 원문 재검토 필요',error:''});room.aiMemorySourceAnchors||={};if(record.anchor)room.aiMemorySourceAnchors[area]=structuredClone(record.anchor);else delete room.aiMemorySourceAnchors[area];}
+}
+async function rpcmAttachBranchReceipt(candidate,room,scope,turns,kind){
+  const before=rpcmBranchPayload(room,scope),after=rpcmBranchPayload(candidate,scope);if(JSON.stringify(before)===JSON.stringify(after))return;
+  const source=(turns||[]).map(row=>Array.isArray(row)?[String(row[0]),String(row[1])]:[String(row.key),String(row.text)]);if(!source.length)return;
+  const entry={version:1,id:'BR_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2),scope,kind,at:nowIso(),roomId:String(room.chatId),chatId:String(apiChatIdOf(room)),timeline:activeLogTimelineLabel(room),basis:{firstKey:source[0][0],lastKey:source.at(-1)[0],turnCount:source.length,sha256:await fullRebuildSha256(JSON.stringify(source))},before,after};
+  let records=[...(candidate.chimeraBranchReceiptsV1||[]),entry].slice(-12);
+  // Bounded recovery copies only. No canonical fact/card is pruned.
+  while(records.length&&utf8ByteLength(JSON.stringify(records))>8*1024*1024)records.shift();
+  candidate.chimeraBranchReceiptsV1=records;
+  if(!records.some(row=>row.id===entry.id))candidate.chimeraBranchReceiptNotice='적용 자료가 커서 8MiB 복원 사본 범위를 넘었습니다. 적용 전 백업을 사용하세요.';
+}
+async function rpcmBranchCandidates(room,turns){
+  const rows=turns.map(turn=>[String(turn.key),String(turn.text)]),positions=new Map(rows.map((row,index)=>[row[0],index])),result=[];
+  for(const entry of room.chimeraBranchReceiptsV1||[]){
+    if(!entry||entry.version!==1||entry.roomId!==String(room.chatId)||entry.chatId!==String(apiChatIdOf(room)))continue;
+    if(!rpcmBranchEntryValid(entry)){result.push({entry,sourceChanged:false,canRestore:false,reason:'복원 사본 형식 확인 필요 · 원본 유지'});continue;}
+    const first=positions.get(entry.basis.firstKey),last=positions.get(entry.basis.lastKey),slice=first!==undefined&&last!==undefined&&last>=first?rows.slice(first,last+1):[];
+    const sourceChanged=slice.length!==entry.basis.turnCount||await fullRebuildSha256(JSON.stringify(slice))!==entry.basis.sha256;
+    const overlapping=(room.chimeraBranchReceiptsV1||[]).filter(row=>rpcmBranchEntryValid(row)&&row.roomId===entry.roomId&&row.chatId===entry.chatId&&row.timeline===entry.timeline&&rpcmBranchAreas(row.scope).some(area=>rpcmBranchAreas(entry.scope).includes(area)));
+    const latest=overlapping.at(-1)?.id===entry.id,unchanged=JSON.stringify(rpcmBranchPayload(room,entry.scope))===JSON.stringify(entry.after),sameTimeline=activeLogTimelineLabel(room)===entry.timeline;
+    const busy=rpcmBranchAreas(entry.scope).some(area=>room.aiMemoryAutomation?.areas?.[area]?.draft)||['waiting-result','verifying'].includes(room.manualPendingJobs?.[rpcmBranchTask(entry.scope)]?.status);
+    result.push({entry,sourceChanged,canRestore:sourceChanged&&latest&&unchanged&&sameTimeline&&!busy,reason:!sourceChanged?'근거 유지':!latest?'더 최근 적용 기록이 있음':!unchanged?'적용 후 편집·잠금·삭제·기준점 변경 보존':!sameTimeline?'다른 시간선':busy?'검토 작업 진행 중':'원문 변경 · 복원 후보'});
+  }
+  return result.reverse();
+}
+async function rpcmRestoreBranchCandidate(room,id,control=null){
+  if(state.currentRoom!==room||state.saveStatus==='saving'||state.saveStatus==='error')throw new Error('현재 방의 저장 완료 후 복원해 주세요.');
+  const epoch=state.routeEpoch,base=JSON.stringify(room),turns=await loadManualCompletedTurns(room,{finalFresh:true,control}),choice=(await rpcmBranchCandidates(room,turns)).find(row=>row.entry.id===id);
+  if(control?.cancelled)throw rpcmHistoryUserAbort('복원 준비를 중단했습니다.');
+  if(state.currentRoom!==room||state.routeEpoch!==epoch||JSON.stringify(room)!==base)throw new Error('후보 확인 중 수동 변경이 있어 복원하지 않았습니다.');
+  if(!choice?.canRestore)throw new Error(choice?.reason||'복원 후보가 바뀌었습니다.');
+  const stored=await readManualStoredRoom(room);if(JSON.stringify(room)!==base||JSON.stringify(stored)!==base)throw new Error('저장본이 바뀌었습니다. 다시 검토해 주세요.');
+  const candidate=JSON.parse(base),entry=structuredClone(choice.entry);rpcmRestoreBranchPayload(candidate,entry.scope,entry.before);rpcmRestorePendingBranchItems(candidate,entry);
+  candidate.chimeraBranchReceiptsV1=(candidate.chimeraBranchReceiptsV1||[]).filter(row=>!row||row.id!==id);
+  candidate.chimeraBranchLastRestore={id,scope:entry.scope,at:nowIso(),requiresReview:true};candidate.updatedAt=nowIso();
+  const task=rpcmBranchTask(entry.scope);await stampVerifiedResult(candidate,task,'branch-restore');
+  if(control?.cancelled)throw rpcmHistoryUserAbort('복원 준비를 중단했습니다.');
+  await new Promise((resolve,reject)=>{const tx=state.db.transaction(APP.storeName,'readwrite'),store=tx.objectStore(APP.storeName),request=store.get(room.chatId);request.onsuccess=()=>{if(control?.cancelled||state.saveStatus==='saving'||state.saveStatus==='error'||state.currentRoom!==room||state.routeEpoch!==epoch||JSON.stringify(room)!==base||JSON.stringify(request.result||null)!==base){tx.abort();return;}if(control)control.commitStarted=true;candidate._rpcmRevision=Number(stored._rpcmRevision||0)+1;store.put(candidate);};request.onerror=()=>tx.abort();tx.oncomplete=resolve;tx.onabort=()=>reject(new Error('동시 변경·중단 또는 저장 실패로 복원하지 않았습니다.'));tx.onerror=()=>reject(tx.error||new Error('복원 저장 실패'));});
+  const checked=await readManualStoredRoom(room);if(JSON.stringify(checked)!==JSON.stringify(candidate))throw new Error('복원 저장본 재읽기를 확인하지 못했습니다.');
+  const final=await finalizeStoredResultReceipts(room,checked,[task],'branch-restore');
+  const lateEdits=JSON.stringify(room)!==base;rpcmReplaceRoomObject(room,rpcmKeepLateEdits(JSON.parse(base),room,final));rpcmRememberRoomBaseline(final);if(lateEdits)await saveRoom(room,'branch-restore-late-edits');
+  if(room.pending){try{for(const area of rpcmBranchAreas(entry.scope))await aiMemorySyncPending(room,area);}catch(error){notify('로컬 복원 완료 · 현재 주입 반영 대기','warn');}}
+  renderModalIfOpen();return true;
+}
+function rpcmFeatureDialog(title){
+  document.querySelector('#rpcm-continuity-dialog')?.remove();const backdrop=document.createElement('div');backdrop.id='rpcm-continuity-dialog';backdrop.style.cssText='position:fixed;inset:0;z-index:2147483645;background:#0008;display:grid;place-items:center;padding:18px';
+  const panel=document.createElement('section');panel.style.cssText='background:var(--wish-card,var(--rm-sheet,#202638));color:var(--wish-fg,var(--rm-fg,#eee));border:1px solid #8888;border-radius:14px;padding:18px;width:min(1000px,94vw);max-height:86vh;overflow:auto';
+  const heading=document.createElement('h3');heading.textContent=title;const close=document.createElement('button');close.textContent='닫기';close.type='button';close.onclick=()=>backdrop.remove();panel.append(heading,close);backdrop.appendChild(panel);document.body.appendChild(backdrop);backdrop.onclick=event=>{if(event.target===backdrop)backdrop.remove();};backdrop.addEventListener('keydown',event=>{if(event.key==='Escape')backdrop.remove();});close.focus();return {backdrop,panel};
+}
+function rpcmOpenTimelineChart(room){
+  const {panel}=rpcmFeatureDialog('타임라인 차트'),cards=structuredClone(room.storyTimelineCards||[]),filters=document.createElement('div'),select=document.createElement('select'),search=document.createElement('input'),list=document.createElement('div'),pager=document.createElement('div');
+  const labels=[...new Set(cards.map(card=>String(card.timelineLabel||DEFAULT_LOG_TIMELINE)))];select.innerHTML='<option value="">모든 시간선</option>'+labels.map(label=>'<option value="'+esc(label)+'">'+esc(label)+'</option>').join('');select.value=activeLogTimelineLabel(room);search.placeholder='제목·본문·태그 검색';filters.append(select,search);panel.append(filters,list,pager);let page=0;
+  const render=()=>{const query=search.value.toLocaleLowerCase(),visible=cards.filter(card=>(!select.value||String(card.timelineLabel||DEFAULT_LOG_TIMELINE)===select.value)&&[card.title,card.content,...(card.tags||[])].join('\n').toLocaleLowerCase().includes(query)).sort((a,b)=>Number(a.sortOrder||0)-Number(b.sortOrder||0)),total=Math.max(1,Math.ceil(visible.length/80));page=Math.max(0,Math.min(page,total-1));list.innerHTML='<p>'+visible.length+'개 · 읽기 전용 · '+(page+1)+'/'+total+'쪽</p>'+visible.slice(page*80,(page+1)*80).map(card=>'<details style="border-left:3px solid #ffad32;margin:10px 0;padding:6px 12px"><summary><span>'+esc(card.dateStart||'날짜 미정')+(card.dateEnd?' ~ '+esc(card.dateEnd):'')+'</span> · <b>'+esc(card.title||'제목 없음')+'</b> '+(card.userLocked?'🔒':'')+'</summary><p>'+esc(card.timelineLabel||DEFAULT_LOG_TIMELINE)+'</p><div style="white-space:pre-wrap">'+esc(card.content||'')+'</div><small>'+esc((card.tags||[]).join(' · '))+'</small></details>').join('');pager.replaceChildren();for(const [label,delta] of [['이전',-1],['다음',1]]){const button=document.createElement('button');button.textContent=label;button.disabled=delta<0?page===0:page>=total-1;button.onclick=()=>{page+=delta;render();};pager.appendChild(button);}};
+  select.onchange=search.oninput=()=>{page=0;render();};render();
+}
+async function rpcmOpenBranchReview(room){
+  const {panel,backdrop}=rpcmFeatureDialog('분기 영향·복원 후보'),status=document.createElement('p');status.textContent='현재 원문을 확인하는 중…';panel.appendChild(status);
+  const control=rpcmCreateHistoryControl(),close=()=>{control.cancel();backdrop.remove();};panel.querySelector('button').onclick=close;backdrop.onclick=event=>{if(event.target===backdrop)close();};backdrop.addEventListener('keydown',event=>{if(event.key==='Escape')close();});
+  try{const turns=await loadManualCompletedTurns(room,{finalFresh:true,control,onProgress:p=>{if(backdrop.isConnected)status.textContent='원문 '+Number(p.messages||0).toLocaleString('ko-KR')+'개 · '+Number(p.pages||0)+'페이지 확인 중…';}});if(!backdrop.isConnected||state.currentRoom!==room)return;const candidates=await rpcmBranchCandidates(room,turns);status.textContent=candidates.length?'근거 변경과 이후 편집을 구별했습니다. 복원 후에는 원문을 다시 검토하세요.':'이 버전에서 적용하며 기록한 복원 사본이 없습니다. 옛 기억은 추정으로 되돌리지 않습니다.';
+    for(const row of candidates){const item=document.createElement('details'),summary=document.createElement('summary');summary.textContent=row.entry.scope+' · '+row.entry.at+' · '+row.reason;item.appendChild(summary);const details=document.createElement('pre');details.style.cssText='white-space:pre-wrap;max-height:36vh;overflow:auto';details.textContent='현재 적용본\n'+JSON.stringify(row.entry.after,null,2)+'\n\n복원 후보\n'+JSON.stringify(row.entry.before,null,2);item.appendChild(details);const button=document.createElement('button');button.textContent='이 영역의 직전 상태 복원';button.disabled=!row.canRestore;button.onclick=async()=>{button.disabled=true;try{await rpcmRestoreBranchCandidate(room,row.entry.id,control);backdrop.remove();notify('선택 영역 복원 완료 · 원문 재검토 필요','success');}catch(error){status.textContent=error.message;}};item.appendChild(button);panel.appendChild(item);}
+  }catch(error){status.textContent='원문 확인 실패: '+error.message;}
+}
+function rpcmRenderContinuityTools(overlay,room){
+  const host=overlay.querySelector('#rpcm-section-tools')||overlay.querySelector('#rpcm-section-preferences');if(!host)return;
+  const card=document.createElement('details');card.className='rpcm-section-more';card.id='rpcm-continuity-tools';const summary=document.createElement('summary');summary.textContent='연속성 보완 · 진단·분기 검토';card.appendChild(summary);
+  const config=rpcmContinuitySettings(room);
+  for(const [key,label] of [['recallCompare','회상 방식 비교 기록 · 현재 선택은 유지'],['dateHints','작업자료에 명시 날짜 후보 첨부']]){
+    const line=document.createElement('label');line.style.cssText='display:block;padding:6px';const input=document.createElement('input');input.type='checkbox';input.checked=config[key];line.append(input,document.createTextNode(' '+label));card.appendChild(line);input.onchange=async()=>{const existed=Object.prototype.hasOwnProperty.call(room.chimeraFeaturesV1||{},key),previous=room.chimeraFeaturesV1?.[key],chosen=input.checked;room.chimeraFeaturesV1={...(room.chimeraFeaturesV1||{}),[key]:chosen};input.disabled=true;try{if(state.currentRoom!==room)throw new Error('현재 방이 바뀌었습니다.');await saveRoom(room);}catch(error){if(room.chimeraFeaturesV1?.[key]===chosen){if(existed)room.chimeraFeaturesV1[key]=previous;else delete room.chimeraFeaturesV1[key];}input.checked=!chosen;notify(error.message,'error');}finally{input.disabled=false;}};
+  }
+  for(const [label,action] of [['분기 영향·복원 후보 확인',()=>rpcmOpenBranchReview(room)],['타임라인 차트 열기',()=>rpcmOpenTimelineChart(room)],['회상 비교 결과 보기',()=>{const row=rpcmRecallComparisons.get(room),dialog=rpcmFeatureDialog('회상 비교 · 선택에는 미반영'),text=document.createElement('pre');text.style.whiteSpace='pre-wrap';text.textContent=row?'추가 후보\n'+row.added.map(item=>item.title).join('\n')+'\n\n빠지는 후보\n'+row.removed.map(item=>item.title).join('\n'):'비교 기록이 없습니다. 비교 설정을 켠 뒤 다음 회상 계산에서 기록합니다.';dialog.panel.appendChild(text);}]]){const button=document.createElement('button');button.type='button';button.textContent=label;button.onclick=action;card.appendChild(button);}
+  const note=document.createElement('p');note.textContent='RP 메모는 남는 전송 공간에만 붙습니다. 복원 사본은 최대 12개·8MiB이며 기억 원본은 정리하지 않습니다.';card.appendChild(note);host.appendChild(card);
+  const timeline=overlay.querySelector('#rpcm-section-timeline');if(timeline){const button=document.createElement('button');button.type='button';button.textContent='타임라인 차트';button.onclick=()=>rpcmOpenTimelineChart(room);timeline.prepend(button);}
+}
+
+  function manualReferenceData(room, task) {
+    const current = String((room.slots || []).find(slot => slot.id === 'currentState')?.content || '').trim();
+    if (task === 'logSummary' || task === 'personInfo' || task === 'timeline') return `[CURRENT_STATE]\n${current}\n[/CURRENT_STATE]`;
+    return '별도 참고자료 없음. 사실 근거는 기존 결과와 이번 신규 RP에 한정합니다.';
+  }
+
+  function manualPersonCardIndex(room) {
+    // Read stored identities without allocating IDs or normalizing the live room.
+    const deleted=new Set((room.personDeletedNames||[]).map(manualPersonName));
+    const hidden=new Set((room.personHiddenActors||[]).map(manualPersonName));
+    return ['knowledgeCards','personStateRecords'].flatMap(field=>(room[field]||[]).map(card=>({
+      id:String(card.id||''),type:field==='knowledgeCards'?'knowledge':String(card.type||''),
+      person:String(card.person||''),target:field==='knowledgeCards'?'':String(card.target||''),
+      lifecycle:field==='knowledgeCards'?(card.archived?'archived':'active'):(card.active===false?'ended':'active'),
+      locked:!!(card.userLocked||card.managedBy==='user'||card.editable===false),inject:card.inject!==false,
+      hiddenInView:hidden.has(manualPersonName(card.person)),deletedPerson:deleted.has(manualPersonName(card.person))
+    })));
+  }
+
+  function manualPersonStableIndex(room) {
+    const rows=manualPersonCardIndex(room),ids=rows.map(row=>row.id);
+    return ids.every(id=>!!id)&&new Set(ids).size===ids.length;
+  }
+
+  function manualPersonOutputMode(room,selection={}) {
+    // Legacy drafts without a mode still import as FULL. A full rebuild may be
+    // split into custom ranges, so fullBuild takes precedence over rangeMode.
+    if(selection.fullBuild||selection.mode==='full'||selection.personOutputMode==='FULL')return 'FULL';
+    if(!manualPersonStableIndex(room)){
+      if(selection.personOutputMode==='DELTA')throw new Error('기존 카드 ID가 비어 있거나 중복되어 증분 갱신을 할 수 없습니다. 전체 결과 모드로 검토해 주세요.');
+      return 'FULL';
+    }
+    return 'DELTA';
+  }
+
+  function manualValidatePersonDelta(room,draft,raw,parsed) {
+    if(draft.personOutputMode!=='DELTA')return;
+    if(!manualPersonStableIndex(room))throw new Error('증분 갱신의 기존 카드 ID가 비어 있거나 중복됐습니다.');
+    if(draft.personCardIndex&&JSON.stringify(draft.personCardIndex)!==JSON.stringify(manualPersonCardIndex(room)))throw new Error('인물 카드 인덱스가 작업자료 생성 뒤 변경됐습니다. 새 작업자료를 만들어 주세요.');
+    const lines=raw.slice(raw.indexOf('[[WISH_PERSON_V1]]')+'[[WISH_PERSON_V1]]'.length,raw.indexOf('[[/WISH_PERSON_V1]]')).split('\n').map(line=>line.trim()).filter(Boolean);
+    for(let i=0;i<parsed.records.length;i++){
+      const entry=parsed.records[i],source=JSON.parse(lines[i]);
+      if(entry.op!=='upsert')continue;
+      const required=entry.type==='knowledge'?['status','fact','actualFact','hiddenFrom','concealmentNote','concealments','category']
+        :entry.type==='speech'?['address','tone','context']:['official','stance','conflict','trajectory','graph'];
+      if(required.some(key=>!Object.hasOwn(source,key)))throw manualPersonRecordError(entry,`${entry.person}: 증분 upsert에는 ${required.join(', ')} 전체 필드가 필요합니다. 일부 필드만 보내면 기존 세부정보를 잃을 수 있습니다.`);
+    }
+  }
+
+  function manualPreservePersonDelta(room,candidate,records) {
+    // Serializers normalize in place; never expose their changes to untouched
+    // stored cards. Resolve keys only for entries that deliberately target them.
+    const affected=new Set(records.map(entry=>{
+      const old=entry.id?[...(room.knowledgeCards||[]),...(room.personStateRecords||[])].find(card=>String(card.id)===entry.id):personRecordMatch(structuredClone(room),entry);
+      return old?String(old.id):'';
+    }).filter(Boolean));
+    for(const field of ['knowledgeCards','personStateRecords']){
+      const oldRows=room[field]||[],oldMap=new Map(oldRows.map(card=>[String(card.id),card]));
+      candidate[field]=(candidate[field]||[]).map(card=>{
+        const old=oldMap.get(String(card.id));
+        return old&&(!affected.has(String(old.id))||old.userLocked||old.managedBy==='user'||old.editable===false)?structuredClone(old):card;
+      });
+      for(const old of oldRows)if(!candidate[field].some(card=>String(card.id)===String(old.id)))candidate[field].push(structuredClone(old));
+    }
+  }
+
+  function aiMemoryIsNoChange(room,area,prepared) {
+    // Compare actual stored content/settings, not the visible change-row count.
+    // An entirely deselected proposal is not a completed no-change review.
+    if(prepared.reviewSelection&&prepared.reviewSelection.originalChanged&&prepared.reviewSelection.selected===0)return false;
+    if(prepared.loreDiff?.some(row=>row.status!=='unchanged'&&row.status!=='protected'))return false;
+    return aiMemoryComparableSnapshot(aiMemoryAreaSnapshot(room,area),area)===aiMemoryComparableSnapshot(aiMemoryAreaSnapshot(prepared.candidate,area),area);
+  }
+
+  function manualOutputContract(task, personOutputMode = 'FULL') {
+    if (task === 'currentItems') return '현재상태.txt와 중요물품.txt에 대응하는 본문 두 개를 분리해 전체 출력합니다. 물품이 없으면 중요물품 본문은 빈 목록입니다.';
+    if (task === 'logSummary') return 'FULL_OUTPUT=NO. 신규·수정·정정 날짜의 완성된 [날짜-키워드] 블록만 출력합니다. 출력하지 않은 기존 날짜는 삭제 대상이 아닙니다.';
+    if(task==='personInfo')return rpcmKnowledgeContract()+'\n'+rpcmLegacyPersonOutputContract(task,personOutputMode);
+    if (task === 'personInfo' && personOutputMode === 'DELTA') return 'PERSON_OUTPUT_MODE=DELTA. 인물정보 출력 범위만 이번 계약을 따릅니다. GUIDE의 사실·사건·표현·세부조건·강제도 보존 규칙은 그대로 적용합니다. GUIDE의 전체 카드 출력은 이번 갱신으로 영향받는 카드의 완성된 전체 필드 출력으로 한정하며, 전체 저장본은 기존 카드와 이번 결과를 병합해 유지합니다. [[WISH_PERSON_V1]] 표식 한 쌍 사이에 신규·실제 변경·근거가 확인된 종료 카드만 한 줄 JSONL로 출력합니다. 변경이 없으면 표식 사이를 비웁니다. 출력하지 않은 기존 카드는 삭제·종료·변경 대상이 아닙니다. PERSON_CARD_INDEX는 식별용이며 EXISTING_RESULT와 REFERENCE_DATA의 전체 사실을 함께 참조합니다. 기존 카드는 정확한 id/type/person/target을 유지하고 신규 카드는 id를 생략합니다. upsert는 부분 필드 패치가 아닌 완성된 카드입니다: knowledge는 status,fact,actualFact,hiddenFrom,concealmentNote,concealments,category; speech는 address,tone,context; relationship은 official,stance,conflict,trajectory,graph 전체 필드를 포함합니다. 공통 person/key/target/evidence도 유형에 맞게 유지합니다. category 허용값 auto,relationship,secret,item,event,place,body,etc; 기존 수동 고정 category는 바꾸지 않습니다. 잠금 카드·삭제 인물·사용자 제외 인물은 임의로 변경·복원하지 않습니다. 이미 종료된 카드는 end를 반복하지 않으며 증분 upsert로 재활성화하지 않습니다. 종료·보관 카드의 복원은 전체 결과 모드에서 별도로 검토합니다. 복원은 사용자 확인을 거칩니다.';
+    if (task === 'personInfo') return '[[WISH_PERSON_V1]] 표식 한 쌍 사이에 현재 유효한 모든 카드를 한 줄 JSONL로 출력하고, 이번에 근거가 확인된 종료만 op=end로 넣습니다. 인지카드에는 확인 가능한 경우 선택적 category를 사용합니다. 허용값: auto,relationship,secret,item,event,place,body,etc. 확인할 근거가 없으면 auto. 기존 수동 고정 category는 임의로 바꾸지 않습니다.';
+    return '[TIMELINE] 안에 기존 REF와 신규 REF=NEW를 포함한 전체 카드 배열을 출력합니다. 잠금 카드는 바꾸지 않습니다.';
+  }
+  function rpcmLegacyPersonOutputContract(task, personOutputMode = 'FULL') {
+    if (task === 'currentItems') return '현재상태.txt와 중요물품.txt에 대응하는 본문 두 개를 분리해 전체 출력합니다. 물품이 없으면 중요물품 본문은 빈 목록입니다.';
+    if (task === 'logSummary') return 'FULL_OUTPUT=NO. 신규·수정·정정 날짜의 완성된 [날짜-키워드] 블록만 출력합니다. 출력하지 않은 기존 날짜는 삭제 대상이 아닙니다.';
+    if (task === 'personInfo' && personOutputMode === 'DELTA') return 'PERSON_OUTPUT_MODE=DELTA. 인물정보 출력 범위만 이번 계약을 따릅니다. GUIDE의 사실·사건·표현·세부조건·강제도 보존 규칙은 그대로 적용합니다. GUIDE의 전체 카드 출력은 이번 갱신으로 영향받는 카드의 완성된 전체 필드 출력으로 한정하며, 전체 저장본은 기존 카드와 이번 결과를 병합해 유지합니다. [[WISH_PERSON_V1]] 표식 한 쌍 사이에 신규·실제 변경·근거가 확인된 종료 카드만 한 줄 JSONL로 출력합니다. 변경이 없으면 표식 사이를 비웁니다. 출력하지 않은 기존 카드는 삭제·종료·변경 대상이 아닙니다. PERSON_CARD_INDEX는 식별용이며 EXISTING_RESULT와 REFERENCE_DATA의 전체 사실을 함께 참조합니다. 기존 카드는 정확한 id/type/person/target을 유지하고 신규 카드는 id를 생략합니다. upsert는 부분 필드 패치가 아닌 완성된 카드입니다: knowledge는 status,fact,actualFact,hiddenFrom,concealmentNote,concealments,category; speech는 address,tone,context; relationship은 official,stance,conflict,trajectory,graph 전체 필드를 포함합니다. 공통 person/key/target/evidence도 유형에 맞게 유지합니다. category 허용값 auto,relationship,secret,item,event,place,body,etc; 기존 수동 고정 category는 바꾸지 않습니다. 잠금 카드·삭제 인물·사용자 제외 인물은 임의로 변경·복원하지 않습니다. 이미 종료된 카드는 end를 반복하지 않으며 증분 upsert로 재활성화하지 않습니다. 종료·보관 카드의 복원은 전체 결과 모드에서 별도로 검토합니다. 복원은 사용자 확인을 거칩니다.';
+    if (task === 'personInfo') return '[[WISH_PERSON_V1]] 표식 한 쌍 사이에 현재 유효한 모든 카드를 한 줄 JSONL로 출력하고, 이번에 근거가 확인된 종료만 op=end로 넣습니다. 인지카드에는 확인 가능한 경우 선택적 category를 사용합니다. 허용값: auto,relationship,secret,item,event,place,body,etc. 확인할 근거가 없으면 auto. 기존 수동 고정 category는 임의로 바꾸지 않습니다.';
+    return '[TIMELINE] 안에 기존 REF와 신규 REF=NEW를 포함한 전체 카드 배열을 출력합니다. 잠금 카드는 바꾸지 않습니다.';
+  }
+
+  function manualPacketKey(room, task) { return `${String(room.chatId || '')}\u0000${task}`; }
+
+  function manualTaskStatusHtml(room, task) {
+    const checkpoint = manualCheckpointForTask(room, task);
+    const draft = manualUpdateRuntime.packets.get(manualPacketKey(room, task));
+    const count = manualUpdateRuntime.counts.get(String(room.chatId || ''))?.[task];
+    const applied = checkpoint.baselineAt ? `시작점 ${new Date(checkpoint.baselineAt).toLocaleString('ko-KR')}${checkpoint.appliedAt && checkpoint.appliedAt !== checkpoint.baselineAt ? ' · 이전 수동 적용 기록 보존' : ''}` : checkpoint.appliedAt ? new Date(checkpoint.appliedAt).toLocaleString('ko-KR') : '수동 적용 기록 없음';
+    const countText = count?.error ? `${count.error}${count.reason?' · '+count.reason:''}` : count?.count == null ? '새 RP 범위 확인 전' : checkpoint.endMessageId ? `새 RP ${count.count}턴${count.reprocess?' · 변경된 기준 턴부터 재검토':''}` : `완료된 RP ${count.count}턴 · 최초 범위`;
+    const carrier = manualUpdateRuntime.carrierStatuses.get(manualPacketKey(room, task));
+    const loreGuideStatus = task === 'lore' && !manualLoreGuideSlot(room).ready ? '<span class="rpcm-update-chip is-warning">자료집 지침 미연결 · 실행 잠금</span>' : '';
+    const fullBuild = manualFullBuildFor(room, task);
+    const completedBuild = room.manualFullBuildCompleted?.[task];
+    const fullBuildStatus = fullBuild
+      ? `<span class="rpcm-update-chip is-created">${task === 'lore' && !lorePacksFor(room).some(pack => lorePackManagedBy(pack) === 'ai') ? '자료집 최초 구축' : `${infoForManualTask(task)} 전체 구축`} · ${fullBuild.completedParts}구간 완료 · 다음 ${fullBuild.lastAppliedIndex + 2}턴부터 · 전체 ${fullBuild.totalTurns}턴${fullBuild.estimatedParts ? ` · 예상 약 ${fullBuild.estimatedParts}구간` : ''}</span><span class="rpcm-update-muted">각 구간 결과를 먼저 저장한 뒤 다음 구간을 생성합니다.</span>`
+      : completedBuild ? `<span class="rpcm-update-chip is-created">${infoForManualTask(task)} 전체 구축 완료 · ${completedBuild.completedParts}구간 · ${completedBuild.totalTurns}턴</span>` : '';
+    const carrierText = carrier?.appliedAt === checkpoint.appliedAt && carrier.roomUpdatedAt === String(room.updatedAt || '') ? carrier.text : room.pending ? '현재 주입 반영 여부 확인 필요' : '현재 주입 없음';
+    const aiAreas=task==='currentItems'?['currentState','importantItems']:[task];
+    const turnKeys=manualUpdateRuntime.counts.get(String(room.chatId||''))?.turnKeys||[];
+    const turnLabel=key=>{const countRow=manualUpdateRuntime.counts.get(String(room.chatId||''))||{};let index=turnKeys.indexOf(String(key));if(index<0)index=(countRow.turnUserKeys||[]).indexOf(String(key));return index>=0?`${index+1}턴`:String(key).slice(0,12);};
+    const aiStatus=aiAreas.map(area=>{const row=room.aiMemoryAutomation?.areas?.[area]||{};const label=area==='currentState'?'현재상태':area==='importantItems'?'중요 물품':MANUAL_UPDATE_TASKS[task]?.title||task;const appliedRange=row.lastAppliedStart&&row.lastAppliedEnd?`AI 적용 ${esc(turnLabel(row.lastAppliedStart))} ~ ${esc(turnLabel(row.lastAppliedEnd))}`:'AI 적용 없음';const draftRange=row.draft?` · 초안 ${Number(row.draft.turnCount)||0}턴 생성 · 검토 대기`:'';return `<span class="rpcm-update-chip ${row.draft?'is-warning':row.lastAppliedEnd?'is-created':'is-idle'}" title="AI 초안은 검토 후 적용해야 저장 결과에 반영됩니다.">${esc(label)} · ${appliedRange}${row.lastCheckedStart&&row.lastCheckedEnd?` · AI 검토 ${esc(turnLabel(row.lastCheckedStart))} ~ ${esc(turnLabel(row.lastCheckedEnd))}${row.lastCheckNoChange?' · 변경 없음':''}`:''}${draftRange}</span>`;}).join('');
+    return `${loreGuideStatus}${fullBuildStatus}<span class="rpcm-update-chip${count?.error ? ' is-warning' : ''}">${esc(countText)}</span>${aiStatus}<div class="rpcm-update-meta"><span><b>저장</b>${esc(applied)}</span>${checkpoint.appliedAt ? `<span><b>주입</b>${esc(carrierText)}</span>` : ''}</div>${draft ? `<span class="rpcm-update-chip is-created rpcm-update-waiting">${esc(({ 'result-imported':'결과 도착 · 검증 필요',reviewed:'결과 검토 중 · 다시 Diff를 확인하고 저장하세요',verifying:'저장 결과 확인 필요 · 다시 검증하세요',stale:'원문 변경 · 재검토 필요' })[room.manualPendingJobs?.[task]?.status]||'작업자료 생성 완료 · 결과 기다리는 중')} · ${esc(new Date(draft.createdAt).toLocaleTimeString('ko-KR'))}</span>` : ''}`;
+  }
+
+  function infoForManualTask(task) { return MANUAL_UPDATE_TASKS[task]?.title || '수동 업데이트'; }
+
+  function manualOverviewRowsHtml(room) {
+    const counts = manualUpdateRuntime.counts.get(String(room.chatId || ''));
+    return Object.entries(MANUAL_UPDATE_TASKS).map(([task, info]) => {
+      const count = counts?.[task];
+      const label = count?.error || (count?.count == null ? '범위 확인 전' : `새 RP ${count.count}턴`);
+      return `<span class="rpcm-update-overview-row" data-key="update-overview-${task}"><strong>${esc(info.title)}</strong><em class="${count?.error ? 'is-warning' : ''}">${esc(label)}</em></span>`;
+    }).join('');
+  }
+  function renderManualUpdateOverviewHtml(room) {
+    return `<section class="rpcm-update-overview" aria-label="수동 업데이트 바로가기"><div class="rpcm-update-overview-head"><div><strong>수동 업데이트</strong><span>새 RP 범위와 작업별 기준점을 확인합니다.</span></div><button type="button" class="rpcm-btn secondary" data-open-update>업데이트 센터 열기</button></div><div class="rpcm-update-overview-rows">${manualOverviewRowsHtml(room)}</div></section>`;
+  }
+
+  function maintenanceContextForRoom(room) {
+    const originalChars = carrierOriginalCharsForUi(room);
+    const budget = originalChars === null ? contextBudgetForPreview(room) : contextBudgetForCarrier(room, originalChars);
+    let items = room.pending ? activePendingItems(room.pending) : snapshotSelectedItems(room, null, budget);
+    const originalText = carrierOriginalTextForUi(room);
+    if (originalText !== null) items = fitItemsToCarrierLimits(room, originalText, items);
+    const stats = statsForItems(items);
+    return { items, capacity:carrierCapacityForUi(room, stats.block, buildContextBlockFromItems(items)) };
+  }
+
+  function maintenanceViewForItem(item) {
+    if (item.sourceSlotId === 'logSummary' || item.group === 'log-auto') return 'logs';
+    if (item.group === 'lore') return 'lore';
+    if (item.group === 'item') return 'items';
+    if (item.group === 'character') return 'characters';
+    if (item.group === 'extra') return 'extra';
+    if (item.group === 'knowledge' || item.group === 'person') return 'people';
+    if (item.group === 'timeline' || item.group === 'story-timeline') return 'timeline';
+    return 'memory';
+  }
+
+  function maintenanceRecommendations(room, items, capacity, precomputed = null) {
+    const immediate = [], updates = [], capacityItems = [];
+    const push = (list, title, reason, view, detail = '', task = '', item = null) => list.push({ title, reason, view, detail, task, item });
+    const duplicateLogs = (precomputed?.duplicateGroups ?? duplicateLogDateGroups(room)).length;
+    const duplicateItems = (precomputed?.duplicateItemGroups ?? duplicateImportantItemGroups(room)).length;
+    const conflicts = precomputed?.knowledgeConflictCount ?? knowledgeConflicts(room).size;
+    const loreBudget = precomputed?.loreBudget ?? loreBudgetInfoFor(room);
+    const loreOmitted = Math.max(0, Number(loreBudget?.candidates || 0) - Number(loreBudget?.included || 0));
+    if (duplicateLogs) push(immediate, '중복 로그', `${duplicateLogs}개 날짜 그룹의 시간선·내용 확인`, 'logs');
+    if (duplicateItems) push(immediate, '중복 물품', `${duplicateItems}개 물품 그룹 확인`, 'items');
+    if (conflicts) push(immediate, '인지 카드 충돌', `${conflicts}개 인지 충돌 확인`, 'people');
+    const storyDue = Number(room.storyTimelineUnreviewedTurnCount || 0) >= Number(room.storyTimelineReviewSettings?.threshold || 50);
+    if (storyDue) push(immediate, '타임라인 검토 필요', `마지막 검토 이후 ${room.storyTimelineUnreviewedTurnCount}턴`, 'timeline');
+    if (loreOmitted) push(immediate, '자료집 용량 제외', `${loreOmitted}개 후보가 주입 예산에서 제외됨`, 'lore');
+    if (room.pending?.reanchorRetry || (room.pending && !room.pending.verified)) push(immediate, '현재 주입 확인', room.pending.reanchorRetry ? 'carrier 이동 복구 대기' : '서버 반영 확인 필요', 'overview');
+    if (Number(room._logBudgetInfo?.omitted || 0) > 0) push(immediate, '날짜로그 용량 제외', `${room._logBudgetInfo.omitted}개 선택 로그가 용량 때문에 제외됨`, 'logs');
+    const blocks = parseDatedLogBlocks((room.slots || []).find(slot => slot.id === 'logSummary')?.content || '');
+    const accepted = new Set((room.acceptedUnknownLogKeys || []).map(String));
+    if (blocks.some(block => (block.isUnknown && !accepted.has(String(block.key))) || (!block.isUnknown && !block.isSpecialDate && block.year == null))) push(immediate, '날짜로그 날짜 확인', '날짜 미상 또는 연도가 빠진 블록 확인', 'logs');
+
+    const counts = manualUpdateRuntime.counts.get(String(room.chatId || ''));
+    for (const [task, info] of Object.entries(MANUAL_UPDATE_TASKS)) {
+      const count = Number(counts?.[task]?.count);
+      const threshold = task === 'timeline' ? Math.max(20, Number(room.storyTimelineReviewSettings?.threshold || 50)) : 25;
+      if (Number.isFinite(count) && count >= threshold) push(updates, info.title, `기준점 이후 완료 RP ${count}턴 · 갱신 검토`, 'update', `${count}턴`, task);
+    }
+    if (Number(room.storyTimelineUnreviewedTurnCount || 0) >= Number(room.storyTimelineReviewSettings?.threshold || 50) && !updates.some(entry => entry.task === 'timeline')) push(updates, '연속성 타임라인', `마지막 검토 이후 ${room.storyTimelineUnreviewedTurnCount}턴`, 'timeline', `${room.storyTimelineUnreviewedTurnCount}턴`);
+
+    const limit = Number(room.maxChars || APP.defaultMaxChars);
+    const usage = Number(capacity?.total || 0);
+    const near = usage > APP.safeChars || usage > limit * .9 || (capacity?.byteKnown && Number(capacity.payloadBytes || 0) > APP.safeCarrierPayloadBytes * .9);
+    if (near) {
+      push(capacityItems, '컨텍스트 정리 권장', `${formatCount(usage)} / ${formatCount(limit)}자 · 주입 필요성과 내용 길이 확인`, 'overview');
+      const large = [...(items || [])].filter(item => String(item.content || '').trim()).sort((a, b) => String(b.content || '').length - String(a.content || '').length).slice(0, 5);
+      for (const item of large) {
+        const chars = String(item.content || '').length;
+        push(capacityItems, `${item.title || itemCategory(item)} · ${itemCategory(item)}`, `현재 ${formatCount(chars)}자 주입 · 필요성과 길이 확인`, maintenanceViewForItem(item), `${formatCount(chars)}자`, '', item);
+      }
+    }
+    const oldLarge = (items || []).filter(item => item.group !== 'log-auto' && item.sourceSlotId !== 'logSummary' && !item.userLocked).map(item => {
+      const slot = (room.slots || []).find(entry => String(entry.id) === String(item.slotId || item.sourceSlotId || ''));
+      const updatedAt = item.updatedAt || slot?.updatedAt;
+      const age = updatedAt ? Date.now() - new Date(updatedAt).getTime() : 0;
+      return { item, age, chars:String(item.content || '').length, updatedAt };
+    }).filter(row => Number.isFinite(row.age) && row.age > 180 * 86400000 && row.chars >= 2200).sort((a, b) => b.chars - a.chars).slice(0, 2);
+    for (const row of oldLarge) if (!capacityItems.some(entry => entry.item && maintenanceItemKey(entry.item) === maintenanceItemKey(row.item))) push(capacityItems, `${row.item.title || itemCategory(row.item)} · ${itemCategory(row.item)}`, `큰 주입 항목 · 마지막 수정 ${new Date(row.updatedAt).toLocaleDateString('ko-KR')} · 주입 필요성 확인`, maintenanceViewForItem(row.item), `${formatCount(row.chars)}자`, '', row.item);
+    const summary = capacityItems.filter(entry => !entry.item);
+    const ranked = capacityItems.filter(entry => entry.item).sort((a, b) => String(b.item.content || '').length - String(a.item.content || '').length);
+    capacityItems.splice(0, capacityItems.length, ...summary, ...ranked);
+    return { immediate, updates, capacityItems };
+  }
+
+  function maintenanceItemKey(item) {
+    if (item?.loreCardId) return `lore:${item.loreCardId}`;
+    if (item?.sourceSlotId === 'logSummary' || item?.group === 'log-auto') return `log:${item.sourceKey || item.slotId || ''}`;
+    return `slot:${item?.slotId || ''}`;
+  }
+
+  function maintenanceCapacityInventory(report, items) {
+    const existing = new Map(report.capacityItems.filter(entry => entry.item).map(entry => [maintenanceItemKey(entry.item), entry]));
+    const summary = report.capacityItems.filter(entry => !entry.item);
+    const seen = new Set();
+    const rows = [...(items || [])].filter(item => {
+      const key = maintenanceItemKey(item);
+      if (!String(item.content || '').trim() || seen.has(key)) return false;
+      seen.add(key); return true;
+    })
+      .sort((a, b) => String(b.content || '').length - String(a.content || '').length)
+      .map(item => existing.get(maintenanceItemKey(item)) || {
+        title:`${item.title || itemCategory(item)} · ${itemCategory(item)}`,
+        reason:'현재 주입 중 · 내용과 주입 필요성을 직접 확인',
+        view:maintenanceViewForItem(item),
+        detail:`${formatCount(String(item.content || '').length)}자`,
+        task:'', item,
+      });
+    return [...summary, ...rows];
+  }
+
+  function refreshMaintenanceOverview(overlay, room) {
+    const count = overlay?.querySelector('[data-maintenance-count]');
+    if (!count || !room || state.currentRoom !== room) return;
+    const { items, capacity } = maintenanceContextForRoom(room);
+    const report = maintenanceRecommendations(room, items, capacity);
+    count.textContent = `정리 추천 ${report.updates.length + report.capacityItems.length}건`;
+  }
+
+  function openMaintenanceTarget(overlay, entry) {
+    const view = entry.task ? 'update' : entry.view;
+    showWorkView(overlay, view, true);
+    const item = entry.item;
+    if (view === 'lore' && item?.loreCardId && ![...overlay.querySelectorAll('[data-lore-card]')].some(node => node.dataset.loreCard === String(item.loreCardId))) {
+      Object.assign(loreUiFor(state.currentRoom), { search:'', type:'', mode:'', pack:'' });
+      const list = overlay.querySelector('#rpcm-lore-list');
+      if (list) rpcmPatchHtml(list, renderLoreListHtml(state.currentRoom));
+      for (const id of ['rpcm-lore-search','rpcm-lore-filter-pack','rpcm-lore-filter-type','rpcm-lore-filter-mode']) {
+        const field = overlay.querySelector('#' + id);
+        if (field) field.value = '';
+      }
+    }
+    const target = entry.task ? overlay.querySelector(`[data-update-task="${entry.task}"]`)
+      : item?.loreCardId ? [...overlay.querySelectorAll('[data-lore-card]')].find(node => node.dataset.loreCard === String(item.loreCardId))
+        : item?.slotId ? [...overlay.querySelectorAll('.rpcm-slot[data-slot-id]')].find(node => node.dataset.slotId === String(item.slotId)) : null;
+    if (target?.tagName === 'DETAILS') target.open = true;
+    for (let parent = target?.parentElement; parent && parent !== overlay; parent = parent.parentElement) if (parent.tagName === 'DETAILS') parent.open = true;
+    const pack = target?.closest('.rpcm-lore-pack');
+    if (pack) pack.open = true;
+    target?.scrollIntoView({ block:'center' });
+    target?.querySelector('h3')?.focus?.({ preventScroll:true });
+    return target;
+  }
+
+  function maintenanceActionsForEntry(room, entry) {
+    if (entry.task) return [{ code:'update', label:'작업자료 만들기' }];
+    const item = entry.item;
+    if (!item) return [];
+    if (item.sourceSlotId === 'logSummary' || item.group === 'log-auto') {
+      const key = String(item.sourceKey || '').replace(/^auto-log:/, '');
+      return [
+        ...(key && (room.autoLogPinnedKeys || []).map(String).includes(key) ? [{ code:'log-unpin', label:'📌 고정 해제' }] : []),
+        ...(key && (room.manualLogSelectedKeys || []).map(String).includes(key) ? [{ code:'log-unselect', label:'직접 선택 해제' }] : []),
+      ];
+    }
+    if (item.group === 'lore') {
+      const pack = lorePacksFor(room).find(pack => String(pack.id) === String(item.lorePackId));
+      const card = (pack?.cards || []).find(card => String(card.id) === String(item.loreCardId));
+      if (!card) return [];
+      return [
+        ...(card.mode === 'always' ? [{ code:'lore-auto', label:'항상 → 자동' }] : []),
+        ...(card.mode === 'manual' && card.manualSelected !== false ? [{ code:'lore-unselect', label:'직접 선택 해제' }] : []),
+        ...(card.mode !== 'off' ? [{ code:'lore-off', label:'주입 끄기' }] : []),
+        { code:'edit', label:'편집' },
+      ];
+    }
+    if (item.slotId === 'currentState') return [{ code:'update-current', label:'현재상태 업데이트' }, { code:'edit', label:'원문 편집' }];
+    if (item.group === 'timeline' || item.group === 'story-timeline') return [{ code:'update-timeline', label:'타임라인 업데이트' }];
+    if (item.group === 'knowledge' || item.group === 'person') return [{ code:'update-person', label:'인물정보 업데이트' }];
+    const slot = (room.slots || []).find(slot => String(slot.id) === String(item.slotId));
+    if (!slot || slot.id === 'logSummary') return [];
+    return [
+      ...(slot.autoPinned ? [{ code:'slot-unpin', label:'📌 고정 해제' }] : []),
+      ...((slot.group === 'character' || slot.group === 'item') && !slot.autoExcluded ? [{ code:'slot-exclude', label:'자동 선택 제외' }] : []),
+      ...(slot.enabled && !slot.autoPinned ? [{ code:'slot-off', label:'주입 끄기' }] : []),
+      { code:'edit', label:'편집' },
+    ];
+  }
+
+  async function applyMaintenanceAction(room, entry, code) {
+    if (state.currentRoom !== room) throw new Error('현재 방이 바뀌었습니다.');
+    const roomKey = String(room.chatId || '');
+    if (state.autoSaveTimers.has(roomKey) || state.saveStatus === 'saving' || state.saveStatus === 'error') throw new Error('기존 로컬 저장이 끝난 뒤 다시 시도해 주세요.');
+    if (!maintenanceActionsForEntry(room, entry).some(action => action.code === code)) throw new Error('이 항목에 사용할 수 없는 작업입니다.');
+    const item = entry.item;
+    if (code === 'slot-off') {
+      const slot = (room.slots || []).find(slot => String(slot.id) === String(item.slotId));
+      await setSlotEnabledDuringPending(room, slot, false);
+      return;
+    }
+    if (code === 'slot-unpin' || code === 'slot-exclude') {
+      const slot = (room.slots || []).find(slot => String(slot.id) === String(item.slotId));
+      const previous = { autoPinned:slot.autoPinned, autoExcluded:slot.autoExcluded, lastAutoMatch:slot.lastAutoMatch };
+      if (code === 'slot-unpin') {
+        slot.autoPinned = false;
+        if (slot.lastAutoMatch === '사용자 고정') slot.lastAutoMatch = '';
+      } else {
+        slot.autoExcluded = true; slot.autoPinned = false;
+        if (slot.lastAutoMatch === '사용자 고정') slot.lastAutoMatch = '';
+      }
+      try { await saveRoom(room); }
+      catch (error) { Object.assign(slot, previous); throw error; }
+      return;
+    }
+    if (code.startsWith('lore-')) {
+      const pack = lorePacksFor(room).find(pack => String(pack.id) === String(item.lorePackId));
+      const card = (pack?.cards || []).find(card => String(card.id) === String(item.loreCardId));
+      await commitLoreMutation(room, () => {
+        if (code === 'lore-auto') card.mode = 'auto';
+        else if (code === 'lore-unselect') card.manualSelected = false;
+        else card.mode = 'off';
+      });
+      return;
+    }
+    if (code === 'log-unpin' || code === 'log-unselect') {
+      const key = String(item.sourceKey || '').replace(/^auto-log:/, '');
+      const field = code === 'log-unpin' ? 'autoLogPinnedKeys' : 'manualLogSelectedKeys';
+      const before=[...(room[field]||[])],pendingBefore=rpcmRoomClone(room.pending);let attempted=null;
+      room[field] = before.map(String).filter(value => value !== key);
+      const selectionAfter=rpcmRoomClone(room[field]);
+      try { if(room.pending){const work=rebuildPendingLogItems(room,'maintenance-log-selection');attempted=rpcmRoomClone(room.pending);await work;}else await saveRoom(room); }
+      catch (error) {
+        const late=Array.isArray(room[field])?room[field]:[];
+        room[field]=[...before.filter(value=>!selectionAfter.includes(value)&&!late.includes(value)),...late];
+        rpcmRollbackDesiredPending(room,pendingBefore,attempted);
+        await saveRoom(room).catch(() => {});
+        throw error;
+      }
+    }
+  }
+
+  function openMaintenanceDialog(room) {
+    const overlay = state.modal;
+    if (!overlay || state.currentRoom !== room) return;
+    document.querySelector('#rpcm-maintenance-backdrop')?.remove();
+    const backdrop = document.createElement('div');
+    backdrop.id = 'rpcm-maintenance-backdrop';
+    backdrop.innerHTML = `<section class="rpcm-maintenance-dialog" role="dialog" aria-modal="true" aria-label="정리 점검"><header><div><h2>정리 점검</h2><p>현재 주입과 저장 설정을 로컬에서 확인합니다. 열기만 해서는 변경되지 않습니다.</p></div><button type="button" class="rpcm-btn secondary" data-maintenance-ai="diet">AI 필요성 검토</button><button type="button" class="rpcm-btn secondary" data-maintenance-ai="update">AI 갱신 우선순위</button><button type="button" data-maintenance-close aria-label="닫기" data-rpcm-close="icon">${rpcmUiIcon('close')}</button></header><div class="rpcm-maintenance-capacity" aria-live="polite"></div><nav class="rpcm-maintenance-tabs" role="tablist" aria-label="정리 점검 종류"></nav><div class="rpcm-maintenance-body" id="rpcm-maintenance-panel" role="tabpanel"></div><footer><div class="rpcm-maintenance-summary" aria-live="polite"></div><button type="button" class="rpcm-btn primary" data-maintenance-bulk disabled>선택 항목 주입 끄기</button><button type="button" class="rpcm-btn secondary" data-maintenance-close aria-label="닫기" data-rpcm-close="text">닫기</button></footer></section>`;
+    const selected = new Set(), expanded = new Set();
+    let currentEntries = [], currentCapacityEntries = [], currentCapacity = null;
+    let activeTab = '', capacityFilter = 'all', showAll = false, busy = false, resultMessage = '';
+    const close = () => { if (!busy) backdrop.remove(); };
+    const filterCapacity = (entry) => {
+      const item = entry.item;
+      if (!item || capacityFilter === 'all') return true;
+      const actions = maintenanceActionsForEntry(room, entry);
+      const reason = String(item.recallReason || item.loreBaseReason || '');
+      const slot = (room.slots || []).find(slot => String(slot.id) === String(item.slotId || ''));
+      const logKey = String(item.sourceKey || '').replace(/^auto-log:/, '');
+      const directlyChosen = !!slot?.autoPinned || (item.group === 'lore' && ['manual','always'].includes(item.loreMode)) || (item.group === 'log-auto' && ((room.autoLogPinnedKeys || []).map(String).includes(logKey) || (room.manualLogSelectedKeys || []).map(String).includes(logKey)));
+      if (capacityFilter === 'off') return actions.some(action => ['slot-off','lore-off'].includes(action.code));
+      if (capacityFilter === 'core') return item.slotId === 'currentState' || ['timeline','story-timeline','knowledge','person'].includes(item.group);
+      if (capacityFilter === 'auto') return !directlyChosen && (item.group === 'log-auto' || /자동|감지|관련|최근/.test(reason) || (item.group === 'lore' && item.loreMode === 'auto'));
+      if (capacityFilter === 'manual') return directlyChosen || /직접|고정/.test(reason);
+      return true;
+    };
+    const render = (resetScroll = false) => {
+      const { items, capacity } = maintenanceContextForRoom(room);
+      currentCapacity = capacity;
+      const report = maintenanceRecommendations(room, items, capacity);
+      currentCapacityEntries = maintenanceCapacityInventory(report, items);
+      const capacityRows = currentCapacityEntries.filter(entry => entry.item);
+      const capacityNotes = currentCapacityEntries.filter(entry => !entry.item);
+      if (!activeTab) activeTab = report.immediate.length ? 'immediate' : report.updates.length ? 'updates' : 'capacity';
+      currentEntries = [];
+      const eligible = new Set(capacityRows.filter(entry => maintenanceActionsForEntry(room, entry).some(action => ['slot-off','lore-off'].includes(action.code))).map(entry => maintenanceItemKey(entry.item)));
+      for (const key of selected) if (!eligible.has(key)) selected.delete(key);
+      const selectedEntries = capacityRows.filter(entry => selected.has(maintenanceItemKey(entry.item)));
+      const savings = selectedEntries.reduce((sum, entry) => sum + String(entry.item.content || '').length, 0);
+      const total = Number(capacity.total || 0), expected = Math.max(0, total - savings);
+      const status = statusForChars(total, Number(room.maxChars || APP.defaultMaxChars), capacity.byteKnown ? Number(capacity.payloadBytes || 0) : 0);
+      backdrop.querySelector('.rpcm-maintenance-capacity').innerHTML = `<strong>현재 ${formatCount(total)} / ${formatCount(Number(room.maxChars || APP.defaultMaxChars))}자 · ${esc(status.label)}</strong><span>선택 해제 예상 −${formatCount(savings)}자 · 예상 ${formatCount(expected)}자</span><small>본문 기준 예상 · 적용 후 실제 사용량 재계산</small>${resultMessage ? `<p>${esc(resultMessage)}</p>` : ''}`;
+      const tabs = [['immediate','즉시 확인',report.immediate.length], ['updates','갱신 권장',report.updates.length], ['capacity','용량 정리',capacityRows.length]];
+      backdrop.querySelector('.rpcm-maintenance-tabs').innerHTML = tabs.map(([id, label, count]) => `<button type="button" role="tab" data-maintenance-tab="${id}" aria-selected="${activeTab === id}" aria-controls="rpcm-maintenance-panel" tabindex="${activeTab === id ? 0 : -1}">${label} ${count}</button>`).join('');
+      const body = backdrop.querySelector('.rpcm-maintenance-body');
+      const previousScroll = resetScroll ? 0 : body.scrollTop;
+      const focusedKey = document.activeElement?.dataset?.maintenanceSelect || '';
+      const focusedExpand = document.activeElement?.dataset?.maintenanceExpand || '';
+      const focusedFilter = document.activeElement?.dataset?.maintenanceFilter || '';
+      const rowHtml = (entry, capacityRow = false) => {
+        const index = currentEntries.push(entry) - 1;
+        const item = entry.item, chars = item ? String(item.content || '').length : 0;
+        const actions = maintenanceActionsForEntry(room, entry);
+        const primary = actions.find(action => ['slot-off','lore-off'].includes(action.code)) || actions.find(action => action.code.startsWith('update')) || actions.find(action => ['slot-unpin','log-unpin'].includes(action.code)) || actions[0];
+        const secondary = actions.filter(action => action !== primary);
+        const canSelect = capacityRow && item && actions.some(action => ['slot-off','lore-off'].includes(action.code));
+        const key = item ? maintenanceItemKey(item) : '';
+        const rowKey = capacityRow && item ? key : `${activeTab}:${index}`;
+        const isExpanded = expanded.has(rowKey);
+        const percent = item && total ? Math.round(chars / total * 100) : 0;
+        const recall = item ? String(item.recallReason || item.loreBaseReason || (item.slotId === 'currentState' || ['timeline','story-timeline'].includes(item.group) ? '핵심 기억' : '직접 선택')) : '';
+        const meta = item ? `${formatCount(chars)}자 · 전체 대비 ${percent}%` : String(entry.detail || '');
+        const savedSlot = item ? (room.slots || []).find(slot => String(slot.id) === String(item.slotId || '')) : null;
+        const mode = item?.group === 'lore' ? loreModeLabel(item.loreMode) : ({ 'manual-log':'직접 선택', 'pinned-log':'사용자 고정', 'recent-log':'최근 연속성', 'related-log':'관련 로그' })[item?.autoType] || (savedSlot?.autoPinned ? '사용자 고정' : item?.slotId === 'currentState' || ['timeline','story-timeline','knowledge','person'].includes(item?.group) ? '핵심 기억' : item?.group === 'log-auto' ? '날짜로그 자동 회수' : item?.group === 'character' || item?.group === 'item' ? '자동 선택' : '저장된 주입 설정');
+        const updatedAt = item?.updatedAt || savedSlot?.updatedAt;
+        const updatedLabel = updatedAt && !Number.isNaN(new Date(updatedAt).getTime()) ? `<p>마지막 수정: ${esc(new Date(updatedAt).toLocaleDateString('ko-KR'))}</p>` : '';
+        const detail = item ? `<p>선택 이유: ${esc(entry.reason)} · 회수 근거: ${esc(recall)}</p><p>현재 방식: ${esc(mode)} · 전체 대비 ${percent}% · ${canSelect ? `해제 시 약 ${formatCount(chars)}자 절감` : '주입 방식 확인 필요'}</p>${updatedLabel}${entry.detail ? `<p>${esc(entry.detail)}</p>` : ''}` : `<p>${esc(entry.reason)}${entry.detail ? ` · ${esc(entry.detail)}` : ''}</p>`;
+        const actionButton = action => `<button type="button" class="rpcm-btn secondary" data-maintenance-run="${index}" data-maintenance-act="${action.code}">${esc(action.label)}</button>`;
+        const openButton = `<button type="button" class="rpcm-btn secondary" data-maintenance-open="${index}">${entry.task ? '업데이트센터' : '화면 열기'}</button>`;
+        return `<article class="${canSelect && selected.has(key) ? 'is-selected' : ''}"><div class="rpcm-maintenance-entry">${canSelect ? `<label class="rpcm-maintenance-select"><input type="checkbox" data-maintenance-select="${esc(key)}" ${selected.has(key) ? 'checked' : ''} aria-label="${esc(entry.title)} 주입 해제 선택"></label>` : ''}<div><div class="rpcm-maintenance-title"><strong>${esc(entry.title)}</strong><small>${esc(meta)}</small></div><p class="rpcm-maintenance-reason" title="${esc(entry.reason)}">${esc(entry.reason)}</p></div></div><div class="rpcm-maintenance-row-actions">${primary ? actionButton(primary) : openButton}<button type="button" class="rpcm-btn secondary rpcm-maintenance-expand" data-maintenance-expand="${esc(rowKey)}" aria-label="${esc(entry.title)} 상세 ${isExpanded ? '접기' : '펼치기'}" aria-expanded="${isExpanded}">${isExpanded ? '▴' : '▾'}</button></div>${isExpanded ? `<div class="rpcm-maintenance-detail">${detail}<div class="rpcm-maintenance-detail-actions">${secondary.map(actionButton).join('')}${primary ? openButton : ''}</div></div>` : ''}</article>`;
+      };
+      let html = '';
+      if (activeTab === 'capacity') {
+        const filters = [['all','전체'],['off','주입 끄기 가능'],['core','핵심 기억'],['auto','자동 선택'],['manual','직접 선택']];
+        const filtered = capacityRows.filter(filterCapacity);
+        const visible = showAll ? filtered : filtered.slice(0, 12);
+        html = `<section><div class="rpcm-maintenance-filters" aria-label="용량 후보 필터">${filters.map(([id,label]) => `<button type="button" data-maintenance-filter="${id}" aria-pressed="${capacityFilter === id}">${label}</button>`).join('')}</div>${capacityNotes.map(entry => rowHtml(entry)).join('')}${visible.length ? visible.map(entry => rowHtml(entry, true)).join('') : '<p class="rpcm-maintenance-empty">현재 필터에 맞는 후보가 없습니다.</p>'}${filtered.length > visible.length ? `<button type="button" class="rpcm-btn secondary rpcm-maintenance-more" data-maintenance-show-more>나머지 ${filtered.length - visible.length}개 더 보기</button>` : ''}</section>`;
+      } else {
+        const entries = activeTab === 'immediate' ? report.immediate : report.updates;
+        html = `<section>${entries.length ? entries.map(entry => rowHtml(entry)).join('') : '<p class="rpcm-maintenance-empty">현재 확인할 후보가 없습니다.</p>'}</section>`;
+      }
+      body.innerHTML = html;
+      body.scrollTop = previousScroll;
+      if (focusedKey) [...body.querySelectorAll('[data-maintenance-select]')].find(control => control.dataset.maintenanceSelect === focusedKey)?.focus({ preventScroll:true });
+      if (focusedExpand) [...body.querySelectorAll('[data-maintenance-expand]')].find(control => control.dataset.maintenanceExpand === focusedExpand)?.focus({ preventScroll:true });
+      if (focusedFilter) [...body.querySelectorAll('[data-maintenance-filter]')].find(control => control.dataset.maintenanceFilter === focusedFilter)?.focus({ preventScroll:true });
+      backdrop.querySelector('.rpcm-maintenance-summary').textContent = selected.size ? `${selected.size}개 선택 · ${formatCount(total)}자 → 예상 ${formatCount(expected)}자` : '원문·카드 삭제 없음 · 체크포인트 변경 없음';
+      backdrop.querySelector('[data-maintenance-bulk]').disabled = busy || !selected.size;
+    };
+    backdrop.addEventListener('change', event => {
+      const key = event.target.dataset.maintenanceSelect;
+      if (!key || busy) return;
+      if (event.target.checked) selected.add(key); else selected.delete(key);
+      render();
+    });
+    backdrop.addEventListener('click', async event => {
+      if (event.target === backdrop || event.target.closest('[data-maintenance-close]')) { close(); return; }
+      const aiShortcut=event.target.closest('[data-maintenance-ai]');if(aiShortcut&&!busy){const tool=aiShortcut.dataset.maintenanceAi;close();openMemoryAssistantDialog(room,{tool,autoRun:true});return;}

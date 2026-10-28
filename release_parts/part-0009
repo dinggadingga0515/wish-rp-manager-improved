@@ -1,0 +1,1000 @@
+  function normalizedLogTimelineKey(value) {
+    const label = cleanLogTimelineLabel(value);
+    return !label || label === DEFAULT_LOG_TIMELINE ? '__main__' : label.toLocaleLowerCase();
+  }
+
+  function logTimelineLabelOfBlock(block) {
+    return cleanLogTimelineLabel(block?.timelineLabel) || DEFAULT_LOG_TIMELINE;
+  }
+
+  function normalizeRoomLogTimelines(room) {
+    if (!room || typeof room !== 'object') return [DEFAULT_LOG_TIMELINE];
+    const raw = Array.isArray(room.logTimelines) ? room.logTimelines : [];
+    const labels = [];
+    const seen = new Set();
+    const add = value => {
+      const label = cleanLogTimelineLabel(value) || DEFAULT_LOG_TIMELINE;
+      const key = normalizedLogTimelineKey(label === DEFAULT_LOG_TIMELINE ? '' : label);
+      if (seen.has(key)) return;
+      seen.add(key);
+      labels.push(label);
+    };
+    add(DEFAULT_LOG_TIMELINE);
+    raw.forEach(add);
+    const log = (room.slots || []).find(slot => slot.id === 'logSummary');
+    const blocks = parseDatedLogBlocks(String(log?.content || ''));
+    blocks.forEach(block => add(logTimelineLabelOfBlock(block)));
+    const legacyKeyMap = new Map();
+    blocks.forEach(block => {
+      if (block.isUnknown || !block.sourceTimelineLabel) return;
+      const legacyTimelineKey = String(block.sourceTimelineLabel).toLocaleLowerCase();
+      if (legacyTimelineKey === block.timelineKey) return;
+      const legacyDateKey = `${block.calendarDateKey}::${legacyTimelineKey}`;
+      legacyKeyMap.set(`${legacyDateKey}-${simpleHash(block.heading)}`, String(block.key));
+    });
+    if (legacyKeyMap.size) remapLogSelectionKeys(room, legacyKeyMap, blocks);
+    room.logTimelines = labels;
+    const requested = cleanLogTimelineLabel(room.activeLogTimeline);
+    room.activeLogTimeline = labels.find(label => normalizedLogTimelineKey(label === DEFAULT_LOG_TIMELINE ? '' : label) === normalizedLogTimelineKey(requested === DEFAULT_LOG_TIMELINE ? '' : requested)) || DEFAULT_LOG_TIMELINE;
+    return labels;
+  }
+
+  function nextLogTimelineRoundLabel(labels) {
+    const used = new Set((labels || []).map(label => normalizedLogTimelineKey(label)));
+    if (!used.has(normalizedLogTimelineKey(DEFAULT_REGRESSION_TIMELINE))) return DEFAULT_REGRESSION_TIMELINE;
+    let round = 1;
+    while (used.has(normalizedLogTimelineKey(`${round}회차`))) round++;
+    return `${round}회차`;
+  }
+
+  function activeLogTimelineLabel(room) {
+    normalizeRoomLogTimelines(room);
+    return cleanLogTimelineLabel(room?.activeLogTimeline) || DEFAULT_LOG_TIMELINE;
+  }
+
+  function makeStoryCardId() {
+    return `TL_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+  }
+
+  function normalizeStoryDate(value) {
+    const raw = String(value || '').trim().replace(/[./]/g, '-');
+    const match = raw.match(/^(\d{1,6})-(\d{1,2})-(\d{1,2})$/);
+    if (!match) return '';
+    return `${match[1].padStart(4, '0')}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}`;
+  }
+
+  function normalizeStoryTimelineCards(room) {
+    if (!room || typeof room !== 'object') return [];
+    const labels = normalizeRoomLogTimelines(room);
+    const labelByKey = new Map(labels.map(label => [normalizedLogTimelineKey(label), label]));
+    const fallbackLabel = activeLogTimelineLabel(room);
+    const seenIds = new Set();
+    const now = nowIso();
+    room.storyTimelineCards = (Array.isArray(room.storyTimelineCards) ? room.storyTimelineCards : []).map((raw, index) => {
+      const source = raw && typeof raw === 'object' ? raw : {};
+      let cardId = String(source.cardId || '').trim();
+      if (!/^TL_[A-Za-z0-9_-]+$/.test(cardId) || seenIds.has(cardId)) cardId = makeStoryCardId();
+      seenIds.add(cardId);
+      const requestedLabel = cleanLogTimelineLabel(source.timelineLabel) || fallbackLabel;
+      // timelineLabel은 별도 타임라인 문서가 아니라 카드의 출처 세계선 표시에만 사용합니다.
+      const timelineLabel = labelByKey.get(normalizedLogTimelineKey(requestedLabel)) || requestedLabel || fallbackLabel;
+      const tags = Array.isArray(source.tags)
+        ? source.tags.map(tag => String(tag || '').trim()).filter(Boolean)
+        : String(source.tags || '').split(/[,，#]/).map(tag => tag.trim()).filter(Boolean);
+      return {
+        cardId,
+        timelineLabel,
+        dateStart:normalizeStoryDate(source.dateStart),
+        dateEnd:normalizeStoryDate(source.dateEnd),
+        title:String(source.title || '').trim(),
+        content:String(source.content || '').trim(),
+        tags:[...new Set(tags)],
+        userLocked:!!source.userLocked,
+        inject:source.inject !== false,
+        sortOrder:Number.isFinite(Number(source.sortOrder)) ? Number(source.sortOrder) : index,
+        createdAt:String(source.createdAt || now),
+        updatedAt:String(source.updatedAt || source.createdAt || now),
+      };
+    });
+    return room.storyTimelineCards;
+  }
+
+  function storyDateSortValue(value) {
+    const normalized = normalizeStoryDate(value);
+    if (!normalized) return Number.MAX_SAFE_INTEGER;
+    const parts = normalized.split('-').map(Number);
+    return parts[0] * 10000 + parts[1] * 100 + parts[2];
+  }
+
+  function sortedStoryTimelineCards(cards) {
+    return [...(cards || [])].sort((a, b) => {
+      const date = storyDateSortValue(a.dateStart) - storyDateSortValue(b.dateStart);
+      if (date) return date;
+      const end = storyDateSortValue(a.dateEnd || a.dateStart) - storyDateSortValue(b.dateEnd || b.dateStart);
+      if (end) return end;
+      return Number(a.sortOrder || 0) - Number(b.sortOrder || 0);
+    });
+  }
+
+  function orderedStoryTimelineCards(cards) {
+    return [...(cards || [])].sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0));
+  }
+
+  function storyTimelineCardsFor(room) {
+    return orderedStoryTimelineCards(normalizeStoryTimelineCards(room));
+  }
+
+  function storyCardDateLabel(card) {
+    const start = String(card?.dateStart || '').replace(/-/g, '.');
+    const end = String(card?.dateEnd || '').replace(/-/g, '.');
+    if (!start) return '날짜 미정';
+    return end && end !== start ? `${start} ~ ${end}` : start;
+  }
+
+  function storyTimelineSummary(room) {
+    const cards = normalizeStoryTimelineCards(room);
+    const enabled = room?.storyTimelineInjectionEnabled !== false;
+    const eligible = cards.filter(card => card.inject && (card.title || card.content));
+    const chars = enabled ? eligible.reduce((sum, card) => sum + String(card.title || '').length + String(card.content || '').length + (card.tags || []).join(',').length, 0) : 0;
+    return { count:cards.length, injectCount:enabled ? eligible.length : 0, eligibleCount:eligible.length, chars, enabled };
+  }
+
+  // 외부 [인물정보] 방의 결과물은 정해진 JSONL 형식만 해석합니다. RP 원문 자체는 추측해 분류하지 않습니다.
+  function normalizePersonStateRecords(room) {
+    if (!room || typeof room !== 'object') return [];
+    const seen = new Set();
+    room.personStateRecords = (Array.isArray(room.personStateRecords) ? room.personStateRecords : [])
+      .filter(record => record && ['speech','relationship'].includes(record.type)).map(record => {
+        record.id = String(record.id || 'ps_' + Date.now().toString(36) + Math.random().toString(36).slice(2,9));
+        while (seen.has(record.id)) record.id += '_';
+        seen.add(record.id);
+        for (const field of ['key','person','target','address','tone','context','official','stance','conflict','evidence']) record[field] = String(record[field] || '');
+        if (record.type === 'relationship') record.trajectory = String(record.trajectory || '');
+        record.active = record.active !== false;
+        record.inject = record.inject !== false;
+        return record;
+      });
+
+    const speechSeen = new Map();
+    room.personStateRecords = room.personStateRecords.filter(record => {
+      if (record.type !== 'speech' || !record.active) return true;
+      const signature=JSON.stringify(Object.fromEntries(Object.keys(record).filter(key=>!['id','createdAt','updatedAt'].includes(key)).sort().map(key=>[key,record[key]])));
+      const existing = speechSeen.get(signature);
+      if (!existing) {
+        speechSeen.set(signature, record);
+        return true;
+      }
+      existing.inject = existing.inject || record.inject;
+      if (!String(existing.key || '').trim() && String(record.key || '').trim()) existing.key = record.key;
+      if (String(record.evidence || '').trim().length > String(existing.evidence || '').trim().length) existing.evidence = record.evidence;
+      if (!existing.updatedAt && record.updatedAt) existing.updatedAt = record.updatedAt;
+      return false;
+    });
+
+    room.personStateInjectionEnabled = room.personStateInjectionEnabled === true;
+    return room.personStateRecords;
+  }
+
+  function parsePersonStateOutput(text, preserveRoom = null) {
+    const src = String(text || '').replace(/\r\n?/g, '\n').replace(/^\uFEFF/, '').trim();
+    const lines = src.split('\n');
+    const errors = [];
+    if (lines[0]?.trim() !== '[[WISH_PERSON_V1]]' || lines.at(-1)?.trim() !== '[[/WISH_PERSON_V1]]') {
+      return {records:[], errors:['첫 줄 [[WISH_PERSON_V1]]과 마지막 줄 [[/WISH_PERSON_V1]]을 확인해 주세요.']};
+    }
+    if (src.length > 600000 || lines.length > 2200) return {records:[], errors:['한 번에 가져올 수 있는 결과물 크기를 초과했습니다. 결과를 나누어 주세요.']};
+    const records = [];
+    const used = new Set();
+    for (let i = 1; i < lines.length - 1; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      let raw;
+      try { raw = JSON.parse(line); } catch (_) { errors.push(`${i + 1}행: 한 줄짜리 JSON 객체가 아닙니다.`); continue; }
+      if (!raw || Array.isArray(raw) || typeof raw !== 'object') { errors.push(`${i + 1}행: 객체가 아닙니다.`); continue; }
+      const type = String(raw.type || ''), op = String(raw.op || '');
+      if(type==='knowledge'&&preserveRoom&&((op==='upsert'&&!KNOWLEDGE_STATUSES.includes(String(raw.status||'')))||(preserveRoom.knowledgeCards||[]).some(card=>typeof card.status==='string'&&!KNOWLEDGE_STATUSES.includes(card.status)&&(raw.id?String(card.id)===String(raw.id):String(card.person||'').trim().toLocaleLowerCase('ko-KR')===String(raw.person||'').trim().toLocaleLowerCase('ko-KR')&&((raw.key&&String(card.key)===String(raw.key))||(raw.fact&&String(card.fact||'').trim().toLocaleLowerCase('ko-KR')===String(raw.fact).trim().toLocaleLowerCase('ko-KR'))))))) {
+        if(!rpcmUnknownKnowledgeMatches(preserveRoom,raw)){errors.push((i+1)+'행: 미지원 인지 상태는 기존 카드의 무변경 내보내기 행만 보존할 수 있습니다.');continue;}
+        const identity='knowledge\u0000'+String(raw.id||raw.key);if(used.has(identity)){errors.push((i+1)+'행: 보존 카드가 중복됐습니다.');continue;}used.add(identity);
+        records.push({...raw,preserveUnknown:true,preservedUnknownRow:structuredClone(raw)});continue;
+      }
+      const person = String(raw.person || '').trim(), target = String(raw.target || '').trim();
+      const key = String(raw.key || '').trim(), id = String(raw.id || '').trim();
+      const evidence = String(raw.evidence || '').trim();
+      const categoryPresent = Object.prototype.hasOwnProperty.call(raw,'category');
+      if(type === 'knowledge' && categoryPresent && !KNOWLEDGE_CATEGORY_IDS.has(String(raw.category))){errors.push(`${i + 1}행: 지원하지 않는 category 값입니다.`);continue;}
+      if (!['knowledge','speech','relationship'].includes(type) || !['upsert','end'].includes(op) || !person || (!id && !/^[a-z0-9_]{2,90}$/.test(key)) || !evidence) {
+        errors.push(`${i + 1}행: type/op/person/key(또는 id)/evidence를 확인해 주세요.`); continue;
+      }
+      if (type !== 'knowledge' && !target) { errors.push(`${i + 1}행: 상대 인물이 없습니다.`); continue; }
+      if(type==='relationship'&&Object.prototype.hasOwnProperty.call(raw,'graph')&&raw.graph!==null&&(!raw.graph||typeof raw.graph!=='object'||Array.isArray(raw.graph))){errors.push(`${i+1}행: 관계도 구조 graph는 객체 또는 null이어야 합니다.`);continue;}
+      if (type === 'relationship' && Object.prototype.hasOwnProperty.call(raw, 'trajectory') && typeof raw.trajectory !== 'string') {
+        errors.push(`${i + 1}행: 핵심 전환은 문자열이어야 합니다.`); continue;
+      }
+      const record = {type,op,id,key,person,target,evidence,category:categoryPresent ? String(raw.category) : 'auto',categoryPresent,
+        knownPart:String(raw.knownPart||''),knownPartPresent:Object.prototype.hasOwnProperty.call(raw,'knownPart'),status:String(raw.status || ''),fact:String(raw.fact || '').trim(),actualFact:String(raw.actualFact || '').trim(),
+        hiddenFrom:Array.isArray(raw.hiddenFrom)?[...new Set(raw.hiddenFrom.map(value=>String(value||'').trim()).filter(Boolean))]:[],
+        concealmentNote:String(raw.concealmentNote || '').trim(),
+        concealments:Array.isArray(raw.concealments)?raw.concealments.filter(row=>row&&typeof row==='object').map(row=>({holder:String(row.holder||'').trim(),target:String(row.target||'').trim(),scope:String(row.scope||'').trim(),publicVersion:String(row.publicVersion||'').trim()})).filter(row=>row.holder&&row.target):[],
+        hiddenFromPresent:Object.prototype.hasOwnProperty.call(raw,'hiddenFrom'),concealmentNotePresent:Object.prototype.hasOwnProperty.call(raw,'concealmentNote'),concealmentsPresent:Object.prototype.hasOwnProperty.call(raw,'concealments'),
+        address:String(raw.address || '').trim(),tone:String(raw.tone || '').trim(),context:String(raw.context || '').trim(),
+        official:String(raw.official || '').trim(),stance:String(raw.stance || '').trim(),conflict:String(raw.conflict || '').trim(),
+        trajectory:String(raw.trajectory || '').trim(), trajectoryPresent:Object.prototype.hasOwnProperty.call(raw,'trajectory'),graph:normalizeRelationshipGraph(raw.graph,person,target),graphPresent:Object.prototype.hasOwnProperty.call(raw,'graph')};
+      if (type === 'relationship' && record.trajectory.length > 1200) { errors.push(`${i + 1}행: 핵심 전환은 1,200자를 넘을 수 없습니다.`); continue; }
+      if (op === 'upsert' && ((type === 'knowledge' && (!KNOWLEDGE_STATUSES.includes(record.status) || !record.fact || (record.status === 'mistaken' && !record.actualFact) || (record.status==='knows-part'&&!record.knownPart.trim())))
+        || (type === 'speech' && !record.address && !record.tone)
+        || (type === 'relationship' && !record.official && !record.stance && !record.conflict))) {
+        errors.push(`${i + 1}행: ${type}의 필수 현재값이 없습니다.`); continue;
+      }
+      const identity = `${type}\u0000${person.toLocaleLowerCase()}\u0000${target.toLocaleLowerCase()}\u0000${id || key}`;
+      if (used.has(identity)) { errors.push(`${i + 1}행: 같은 카드가 결과물에서 중복됐습니다.`); continue; }
+      used.add(identity);
+      records.push(record);
+    }
+    return {records,errors};
+  }
+
+  function personRecordMatch(room, entry) {
+    const source = entry.type === 'knowledge' ? normalizeKnowledgeCards(room) : normalizePersonStateRecords(room);
+    const candidates = source.filter(record => entry.type === 'knowledge' || record.type === entry.type);
+    if (entry.id) {
+      const idMatch = candidates.filter(record => record.id === entry.id);
+      if (idMatch.length === 1) return idMatch[0];
+    }
+    const samePerson = value => String(value || '').trim().toLocaleLowerCase('ko-KR');
+    const same = candidates.filter(record => samePerson(record.person) === samePerson(entry.person)
+      && (entry.type === 'knowledge' || samePerson(record.target) === samePerson(entry.target))
+      && ((entry.key && String(record.key || '') === entry.key)
+        || (entry.type === 'knowledge' && entry.fact && samePerson(record.fact) === samePerson(entry.fact))));
+    if (same.length === 1) return same[0];
+
+    if (entry.type === 'speech') {
+      const speechSame = candidates.filter(record => record.type === 'speech'
+        && samePerson(record.person) === samePerson(entry.person)
+        && samePerson(record.target) === samePerson(entry.target)
+        && samePerson(record.address) === samePerson(entry.address)
+        && samePerson(record.tone) === samePerson(entry.tone)
+        && samePerson(record.context) === samePerson(entry.context));
+      if (speechSame.length === 1) return speechSame[0];
+    }
+    return null;
+  }
+
+  function personStateExportText(room) {
+    const lines = ['[[WISH_PERSON_V1]]'];
+    for (const card of normalizeKnowledgeCards(room).filter(card => !card.archived)) lines.push(JSON.stringify({op:'upsert',type:'knowledge',id:card.id,key:card.key || '',person:card.person,status:card.status,...(card.knownPart!==undefined?{knownPart:card.knownPart}:{}),fact:card.fact,actualFact:card.actualFact || '',evidence:card.evidence || '',hiddenFrom:card.hiddenFrom||[],concealmentNote:card.concealmentNote||'',concealments:card.concealments||[],category:card.category||'auto',inject:!!card.inject}));
+    for (const record of normalizePersonStateRecords(room).filter(record => record.active)) lines.push(JSON.stringify({op:'upsert',type:record.type,id:record.id,key:record.key,person:record.person,target:record.target,address:record.address,tone:record.tone,context:record.context,official:record.official,stance:record.stance,conflict:record.conflict,...(record.type === 'relationship' ? {trajectory:record.trajectory || '',...(record.graph?{graph:normalizeRelationshipGraph(record.graph,record.person,record.target)}:{})} : {}),evidence:record.evidence,inject:record.inject}));
+    lines.push('[[/WISH_PERSON_V1]]');
+    return lines.join('\n');
+  }
+
+  // 인지 카드는 현재상태에서 자동 추출하지 않습니다. 명시적으로 확인한 내용만 보관합니다.
+  const KNOWLEDGE_STATUSES = ['knows', 'does-not-know', 'suspects', 'mistaken', 'unconfirmed','knows-part','heard-only','denies','forgot'];
+  const KNOWLEDGE_STATUS_LABELS = Object.freeze({knows:'알고 있음','does-not-know':'모름',suspects:'추측 / 의심',mistaken:'오해',unconfirmed:'확인 안 됨','knows-part':'일부만 앎','heard-only':'전해 들음',denies:'부정',forgot:'잊음'});
+  const KNOWLEDGE_CATEGORY_DEFS = Object.freeze([
+    { id:'relationship', label:'관계·감정' },
+    { id:'secret', label:'비밀·정보' },
+    { id:'item', label:'물품·소지' },
+    { id:'event', label:'사건·과거' },
+    { id:'place', label:'위치·일정' },
+    { id:'body', label:'신체·능력' },
+    { id:'etc', label:'기타' },
+  ]);
+  const KNOWLEDGE_CATEGORY_IDS = new Set(['auto', ...KNOWLEDGE_CATEGORY_DEFS.map(row => row.id)]);
+  function normalizeKnowledgeCategory(value) {
+    const category = String(value || 'auto').trim();
+    return KNOWLEDGE_CATEGORY_IDS.has(category) ? category : 'auto';
+  }
+  function inferredKnowledgeCategory(card) {
+    const manual = normalizeKnowledgeCategory(card?.category);
+    if (manual !== 'auto') return manual;
+    const text = String(card?.fact || card?.actualFact || '').toLocaleLowerCase('ko-KR'); // Only the described fact, never provenance/key noise.
+    const has = pattern => pattern.test(text);
+    if (has(/비밀|정체|본명|신원|정보|은폐|숨기|감추|소문|거짓말|오해|의심|private|패스워드|암호|기밀|공개\s*여부/)) return 'secret';
+    if (has(/반지|목걸이|팔찌|귀걸이|사진|편지|메시지|문서|증거|열쇠|휴대폰|핸드폰|폰\b|가방|선물|소지|보관|물건|장비|도구|무기|총\b|차량|자동차|카드키|약\b/)) return 'item';
+    if (has(/부상|상처|통증|치료|회복|질병|병\b|임신|신체|몸\b|혈액|생리|알레르기|약물|능력|특수능력|초능력|마법|변신|저주|후유증|기억상실/)) return 'body';
+    if (has(/위치|장소|어디|집\b|숙소|기지|학교|병원|회사|도시|국가|출국|귀국|여행|일정|예약|약속\s*시간|만남\s*예정|계획|출발|도착|근무|수업|행사|파티/)) return 'place';
+    if (has(/관계|연애|연인|사랑|호감|감정|질투|신뢰|불신|친구|썸\b|고백|결별|이별|헤어|화해|용서|독점|동거|약혼|결혼|배우자|성적\s*관계|키스/)) return 'relationship';
+    if (has(/사건|과거|예전|첫\s|처음|폭행|사고|납치|실종|임무|작전|전투|경기|수사|범행|살인|구조|재회|만났|만남|발견|목격|공격|체포|도주/)) return 'event';
+    return 'etc';
+  }
+  function knowledgeCategoryLabel(card) {
+    const id = inferredKnowledgeCategory(card);
+    return KNOWLEDGE_CATEGORY_DEFS.find(row => row.id === id)?.label || '기타';
+  }
+
+  function normalizeKnowledgeCards(room) {
+    if (!room || typeof room !== 'object') return [];
+    const entries = Array.isArray(room.knowledgeCards) ? room.knowledgeCards : [];
+    const seen = new Set();
+    room.knowledgeCards = entries.filter(card => card && typeof card === 'object').map(card => {
+      const entry = card;
+      entry.id = String(entry.id || 'kc_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 9));
+      while (seen.has(entry.id)) entry.id += '_';
+      seen.add(entry.id);
+      entry.person = String(entry.person || '');
+      entry.fact = String(entry.fact || '');
+      entry.status = typeof entry.status==='string'&&entry.status ? entry.status : 'unconfirmed';
+      if(Object.prototype.hasOwnProperty.call(entry,'knownPart'))entry.knownPart=String(entry.knownPart||'');
+      entry.evidence = String(entry.evidence || '');
+      entry.actualFact = String(entry.actualFact || '');
+      entry.hiddenFrom = Array.isArray(entry.hiddenFrom) ? [...new Set(entry.hiddenFrom.map(value=>String(value||'').trim()).filter(Boolean))] : [];
+      entry.concealmentNote = String(entry.concealmentNote || '');
+      entry.key = String(entry.key || '');
+      entry.category = normalizeKnowledgeCategory(entry.category);
+      entry.archived = entry.archived === true;
+      entry.inject = entry.inject === true;
+      return entry;
+    });
+    // 기존 방은 주입 상태를 스스로 결정하게 합니다.
+    room.knowledgeInjectionEnabled = room.knowledgeInjectionEnabled === true;
+    return room.knowledgeCards;
+  }
+
+  function knowledgeConflicts(room, cards = null) {
+    const grouped = new Map();
+    for (const card of (cards || normalizeKnowledgeCards(room))) {
+      if (card.archived) continue;
+      if (!card.inject || !rpcmKnowledgeCanInject(card)) continue;
+      const key = `${card.person.trim().toLocaleLowerCase()}\u0000${card.fact.trim().toLocaleLowerCase()}`;
+      if (!card.person.trim() || !card.fact.trim()) continue;
+      if (!grouped.has(key)) grouped.set(key, new Set());
+      grouped.get(key).add(card.status);
+    }
+    return new Set([...grouped].filter(([, statuses]) => statuses.size > 1).map(([key]) => key));
+  }
+
+  function currentPersonPlayerName(room, prepared = null) {
+    const chosen = String(room?.personPlayerName || '').trim();
+    if (chosen) return chosen;
+    const records = (prepared?.records || normalizePersonStateRecords(room)).filter(record => record.active && record.target.trim());
+    const counts = new Map();
+    for (const record of records) {
+      const name = record.target.trim();
+      if (name === record.person.trim()) continue;
+      counts.set(name, (counts.get(name) || 0) + 1);
+    }
+    const best = [...counts].sort((a, b) => b[1] - a[1])[0];
+    if (best?.[1] >= 2) return best[0];
+    const names = new Set((prepared?.cards || normalizeKnowledgeCards(room)).filter(card => !card.archived).map(card => card.person.trim()));
+    return names.has('USER') && names.size > 1 ? 'USER' : '';
+  }
+
+  function personInformationBundles(room, prepared = null) {
+    const player = prepared?.player ?? currentPersonPlayerName(room,prepared);
+    const byName = new Map();
+    const get = name => {
+      const key = String(name || '').trim();
+      if (!key || (player && key.toLocaleLowerCase() === player.toLocaleLowerCase())) return null;
+      if (!byName.has(key)) byName.set(key, { name:key, knowledge:[], speech:[], relationship:[] });
+      return byName.get(key);
+    };
+    for (const card of (prepared?.cards || normalizeKnowledgeCards(room))) if (!card.archived) get(card.person)?.knowledge.push(card);
+    for (const record of (prepared?.records || normalizePersonStateRecords(room))) if (record.active) get(record.person)?.[record.type]?.push(record);
+    return [...byName.values()];
+  }
+
+  function personInformationItem(room, bundle, prepared = null) {
+    const conflict = prepared?.conflicts || knowledgeConflicts(room);
+    const name = bundle.name;
+    const player = prepared?.player ?? currentPersonPlayerName(room,prepared);
+    const knowledge = room.knowledgeInjectionEnabled ? bundle.knowledge.filter(card => {
+      const key = `${card.person.trim().toLocaleLowerCase()}\u0000${card.fact.trim().toLocaleLowerCase()}`;
+      return card.inject && card.fact.trim() && rpcmKnowledgeCanInject(card)
+        && (card.status !== 'mistaken' || card.actualFact.trim()) && !conflict.has(key);
+    }) : [];
+    const speech = room.personStateInjectionEnabled ? bundle.speech.filter(record => record.inject && (!player || record.target.trim() === player)) : [];
+    const relationships = room.personStateInjectionEnabled ? bundle.relationship.filter(record => record.inject && (!player || record.target.trim() === player)) : [];
+    if (!knowledge.length && !speech.length && !relationships.length) return null;
+    const labels = KNOWLEDGE_STATUS_LABELS;
+    const related = relationships.map(record => [record.official && `실제 관계: ${record.official}`, record.stance && `${name}의 태도: ${record.stance}`, record.conflict && `남은 갈등·경계: ${record.conflict}`, record.trajectory && `핵심 전환: ${record.trajectory}`].filter(Boolean).join('\n')).join('\n\n');
+    const spoken = speech.map(record => [record.address && `호칭: ${record.address}`, record.tone && `말투: ${record.tone}`, record.context && `적용 조건: ${record.context}`].filter(Boolean).join(' · ')).join('\n');
+    const known = knowledge.map(card=>rpcmKnowledgeLine(card,name)).join('\n');
+    const content = [
+      `[${name} → ${player || '상대'} · 인물정보]`,
+      '한 인물의 인지·태도·호칭은 다른 인물의 지식이나 USER의 내면으로 옮기지 않는다.',
+      related && `[관계·감정선]\n${related}`,
+      spoken && `[호칭·말투]\n${spoken}`,
+      known && `[인지 상태]\n${known}`,
+    ].filter(Boolean).join('\n\n');
+    return { slotId:'person:' + encodeURIComponent(name), personName:name, title:`${name} · 인물정보`, group:'knowledge', content,
+      totalTurns:APP.defaultRetentionTurns, usedTurns:0, autoType:'person', recallReason:`최근 RP에서 ${name} 언급 · 인지·관계·호칭 함께 선택` };
+  }
+
+  function knowledgeInjectionItems(room, contextText = '', prepared = null) {
+    const cleanText = String(contextText || '');
+    if (!cleanText.trim()) return [];
+    const scan = prepared || rpcmPreparePersonScan(room);
+    return scan.bundles.filter(bundle => {
+      const slot = scan.slots.get(bundle.name);
+      const evidence = characterRpDetectionEvidence(cleanText,
+        { ...slot, title:bundle.name }, scan.owners, bundle.name);
+      return evidence.accepted;
+    }).map(bundle => personInformationItem(room, bundle, scan)).filter(Boolean);
+  }
+
+  function isKnowledgePendingItem(item) {
+    return item?.slotId === 'knowledge:master' || String(item?.slotId || '').startsWith('person:');
+  }
+
+  async function rebuildPendingKnowledgeItem(room) {
+    if (!room?.pending) return;
+    const pending = room.pending;
+    ensureVerifiedPendingSnapshot(pending);
+    const pendingBefore=rpcmRoomClone(pending);
+    const oldItems = clonePendingItems(pending.items);
+    const scan = rpcmPreparePersonScan(room);
+    const activeNames = new Set(knowledgeInjectionItems(room, room.autoRecallContextText, scan).map(item => item.personName));
+    const bundles = new Map(scan.bundles.map(bundle => [bundle.name, bundle]));
+    const removedKeys = new Set(quickRemovedPendingItems(pending).map(item => item.slotId));
+    const fresh = [...activeNames].map(name => bundles.get(name)).filter(Boolean).map(bundle => personInformationItem(room, bundle, scan)).filter(Boolean);
+    const previousById = new Map((pending.items || []).filter(isKnowledgePendingItem).map(item => [item.slotId, item]));
+    pending.items = (pending.items || []).filter(item => !isKnowledgePendingItem(item));
+    for (const item of fresh) {
+      if (removedKeys.has(item.slotId)) continue;
+      const previous = previousById.get(item.slotId);
+      pending.items.push({ ...item, totalTurns:previous?.totalTurns ?? item.totalTurns, usedTurns:previous?.usedTurns ?? 0 });
+    }
+    const before = oldItems.filter(isKnowledgePendingItem).map(item => [item.slotId,item.content,item.totalTurns,item.usedTurns]);
+    const after = pending.items.filter(isKnowledgePendingItem).map(item => [item.slotId,item.content,item.totalTurns,item.usedTurns]);
+    if (JSON.stringify(before) === JSON.stringify(after)) return;
+    const attemptedPending=rpcmRoomClone(room.pending);
+    try {
+      return await syncPendingCarrier(room, 'person-bundles-edit');
+    } catch (error) {
+      if(rpcmRollbackDesiredPending(room,pendingBefore,attemptedPending))await saveRoom(room);
+      throw error;
+    }
+  }
+
+  function knowledgeSimilarCandidates(cards,limit=20) {
+    const candidates=[],seen=new Set();
+    const norm=value=>String(value||'').normalize('NFKC').toLocaleLowerCase('ko-KR').replace(/[\s.,!?·:;()"'“”‘’]+/g,'');
+    const groups=new Map();
+    for(const card of cards){
+      if(!card.person?.trim() || !card.fact?.trim())continue;
+      const key=norm(card.person),bucket=groups.get(key)||[];bucket.push(card);groups.set(key,bucket);
+    }
+    for(const group of groups.values()){
+      if(group.length>250)continue; // never freeze long-room UI with quadratic comparisons
+      for(let i=0;i<group.length;i++)for(let j=i+1;j<group.length;j++){
+        const a=group[i],b=group[j],x=norm(a.fact),y=norm(b.fact);
+        if(!x || !y || (x!==y && !(x.length>=16&&y.length>=16&&(x.includes(y)||y.includes(x)))))continue;
+        const signature=[a.id,b.id].join('|');if(seen.has(signature))continue;
+        seen.add(signature);
+        candidates.push({a,b,sameStatus:a.status===b.status,sameEvidence:norm(a.evidence)===norm(b.evidence)});
+        if(candidates.length>=limit)return candidates;
+      }
+    }
+    return candidates;
+  }
+
+  function renderKnowledgePanel(room, overlay) {
+    rpcmNewBadgeSchedule();
+    const panel = overlay.querySelector('#rpcm-knowledge-panel');
+    if (!panel) return;
+    const editingIds = new Set([...panel.querySelectorAll('.rpcm-knowledge-fields:not([hidden])')].map(node => node.closest('[data-knowledge-id]')?.dataset.knowledgeId));
+    const cards = normalizeKnowledgeCards(room).filter(card => !card.archived);
+    const categoryIds = new Set(['all', ...KNOWLEDGE_CATEGORY_DEFS.map(row => row.id)]);
+    const activeCategory = categoryIds.has(state.personKnowledgeCategory) ? state.personKnowledgeCategory : 'all';
+    state.personKnowledgeCategory = activeCategory;
+    const visibleCards = activeCategory === 'all' ? cards : cards.filter(card => inferredKnowledgeCategory(card) === activeCategory);
+    const categoryCounts = Object.fromEntries(KNOWLEDGE_CATEGORY_DEFS.map(row => [row.id, cards.filter(card => inferredKnowledgeCategory(card) === row.id).length]));
+    const conflicts = knowledgeConflicts(room);
+    const duplicateCandidates = knowledgeSimilarCandidates(cards);
+    const eligible = cards.filter(card => card.inject && card.person.trim() && card.fact.trim() && rpcmKnowledgeCanInject(card) && (card.status !== 'mistaken' || card.actualFact.trim())).length;
+    const actual = room.knowledgeInjectionEnabled ? eligible - cards.filter(card => {
+      const key = `${card.person.trim().toLocaleLowerCase()}\u0000${card.fact.trim().toLocaleLowerCase()}`;
+      return card.inject && conflicts.has(key);
+    }).length : 0;
+    const label = KNOWLEDGE_STATUS_LABELS;
+    const categoryTabs = `<div class="rpcm-knowledge-category-tabs" role="tablist" aria-label="인지 카드 카테고리"><button type="button" data-knowledge-category="all" aria-selected="${activeCategory === 'all'}">전체 <small>${cards.length}</small></button>${KNOWLEDGE_CATEGORY_DEFS.map(row => `<button type="button" data-knowledge-category="${row.id}" aria-selected="${activeCategory === row.id}">${row.label} <small>${categoryCounts[row.id] || 0}</small></button>`).join('')}</div>`;
+    panel.innerHTML = `<div class="rpcm-knowledge-head"><div><strong>🔎 인물별 인지 현황 · ${cards.length}개</strong><span>인지 카드를 내용별로 자동 분류해 모아 봅니다. 카드 편집에서 분류를 직접 고정할 수도 있습니다.</span></div><label><input type="checkbox" id="rpcm-knowledge-enabled" ${room.knowledgeInjectionEnabled ? 'checked' : ''}> 인지 카드 주입 ${room.knowledgeInjectionEnabled ? 'ON' : 'OFF'}</label><button type="button" id="rpcm-knowledge-add">＋ 카드 추가</button></div>
+      <div class="rpcm-knowledge-note">확인되지 않은 ‘모름’은 만들지 마세요. <b>미확인</b>은 저장만 되고 주입에서 빠집니다. 이름과 사실이 같은 카드의 판정이 충돌하면 해당 카드들을 주입하지 않습니다. ${room.knowledgeInjectionEnabled ? `현재 주입 가능 ${Math.max(0, actual)}개` : `주입 OFF · 포함 체크 ${eligible}개`}${conflicts.size ? ` · <b>충돌 ${conflicts.size}건 확인 필요</b>` : ''}</div>
+      ${duplicateCandidates.length?`<details class="rpcm-knowledge-duplicates"><summary>중복 표현 검토 후보 ${duplicateCandidates.length}쌍 (자동 병합 안 함)</summary>${duplicateCandidates.map(row=>`<p><b>${esc(row.a.person)}</b> · ${esc(row.a.fact)} / ${esc(row.b.fact)} <small>${row.sameStatus?'같은 상태':'서로 다른 상태'} · ${row.sameEvidence?'같은 근거':'근거 다름'} · 각각 편집하여 확인</small></p>`).join('')}</details>`:''}
+      ${categoryTabs}
+      <div class="rpcm-knowledge-list">${visibleCards.length ? visibleCards.map(card => {
+        const key = `${card.person.trim().toLocaleLowerCase()}\u0000${card.fact.trim().toLocaleLowerCase()}`;
+        const category = inferredKnowledgeCategory(card);
+        const categoryLabel = knowledgeCategoryLabel(card);
+        const categoryOptions = `<option value="auto"${card.category === 'auto' ? ' selected' : ''}>자동 분류 · ${categoryLabel}</option>${KNOWLEDGE_CATEGORY_DEFS.map(row => `<option value="${row.id}"${card.category === row.id ? ' selected' : ''}>${row.label}</option>`).join('')}`;
+        return `<details class="rpcm-knowledge-card${conflicts.has(key) && card.inject ? ' has-conflict' : ''}" data-knowledge-id="${esc(card.id)}" data-knowledge-category-value="${category}"><summary><strong>${esc(card.person.trim() || '인물 이름 입력')}</strong><span>${esc(card.fact.trim() || '인지할 사실 입력')}</span><em>${esc(label[card.status]||'미지원 상태 · '+card.status)}</em><small class="rpcm-knowledge-category-badge">${esc(categoryLabel)}</small>${card.inject ? '<small>포함</small>' : ''}</summary><div class="rpcm-knowledge-read"><div><strong>${esc(card.fact.trim() || '인지할 사실을 기록해 주세요.')}</strong><span>${esc(card.status === 'mistaken' && card.actualFact.trim() ? '실제 사실: ' + card.actualFact.trim() + ' · ' : '')}${esc(card.evidence.trim() || '확인 근거 미기록')}</span></div><button type="button" data-action="edit">편집</button></div><div class="rpcm-knowledge-fields" hidden><label>인물<input data-field="person" type="text" value="${esc(card.person)}" placeholder="예: NPC_A"></label><label>카테고리<select data-field="category">${categoryOptions}</select></label><label>인지 대상 사실<textarea data-field="fact" rows="2" placeholder="한 카드에는 하나의 사실만 기록">${esc(card.fact)}</textarea></label><label>현재 인지 상태<select data-field="status">${rpcmKnowledgeOptions(card.status)}</select></label><label>일부만 앎 · 실제 아는 범위<textarea data-field="knownPart" rows="2" placeholder="인지한 부분만 기록하세요. 나머지를 추정하지 않습니다.">${esc(card.knownPart||'')}</textarea></label><label>오해의 실제 사실 · 해당 시<textarea data-field="actualFact" rows="2" placeholder="오해 카드라면 객관적으로 확인된 실제 사실">${esc(card.actualFact)}</textarea></label><label>숨기는 대상 · 알고 있음일 때만 표시<input data-field="hiddenFrom" value="${esc((card.hiddenFrom||[]).join(', '))}" placeholder="숨기는 대상 이름 · 쉼표로 구분"></label><label>은폐 내용·공개용 설명<textarea data-field="concealmentNote" rows="2" placeholder="실제로 숨긴 범위와 설명을 적으세요. 단순히 상대가 모른다는 뜻이 아닙니다.">${esc(card.concealmentNote||'')}</textarea></label><label>확인 근거<textarea data-field="evidence" rows="2" placeholder="예: 8월 1일 RP에서 직접 전달함">${esc(card.evidence)}</textarea></label><div class="rpcm-knowledge-actions"><label><input type="checkbox" data-field="inject" ${card.inject ? 'checked' : ''}> 주입에 포함</label><button type="button" data-action="delete">삭제</button></div></div></details>`;
+      }).join('') : `<div class="rpcm-knowledge-empty">${cards.length ? '이 카테고리에 해당하는 인지 카드가 없습니다.' : '등록된 카드가 없습니다. 인물이 실제로 알거나 모른다고 확인된 사실부터 추가하세요.'}</div>`}</div>`;
+    panel.querySelectorAll('.rpcm-knowledge-card').forEach(node => {
+      if (editingIds.has(node.dataset.knowledgeId)) {
+        node.querySelector('.rpcm-knowledge-fields').hidden = false;
+        node.querySelector('.rpcm-knowledge-read').hidden = true;
+      }
+    });
+
+    const persist = async () => {
+      if (rpcmHasActiveComposition()) { setTimeout(() => void persist(), 200); return; }
+      try {
+        await saveRoom(room);
+        await rebuildPendingKnowledgeItem(room);
+      } catch (error) { notify(`인지 카드 주입 갱신 실패: ${error.message}`, 'error', 6000); }
+    };
+    const saveTimers = new Map();
+    const editCard = (field, immediate = false) => {
+      const node = field.closest('[data-knowledge-id]');
+      const card = cards.find(item => item.id === node?.dataset.knowledgeId);
+      if (!card) return;
+      if(field.dataset.field==='hiddenFrom')card.hiddenFrom=[...new Set(String(field.value||'').split(/[,，]/).map(value=>value.trim()).filter(Boolean))];
+      else if(field.dataset.field==='category')card.category=normalizeKnowledgeCategory(field.value);
+      else card[field.dataset.field] = field.type === 'checkbox' ? field.checked : field.value;
+      card.updatedAt = nowIso();
+      const read = node.querySelector('.rpcm-knowledge-read');
+      if (read) {
+        read.querySelector('strong').textContent = card.fact.trim() || '인지할 사실을 기록해 주세요.';
+        read.querySelector('span').textContent = (card.status === 'mistaken' && card.actualFact.trim() ? '실제 사실: ' + card.actualFact.trim() + ' · ' : '') + (card.evidence.trim() || '확인 근거 미기록');
+      }
+      const prev = saveTimers.get(card.id);
+      if (prev) clearTimeout(prev);
+      if (immediate) { saveTimers.delete(card.id); void persist(); }
+      else saveTimers.set(card.id, setTimeout(() => { saveTimers.delete(card.id); void persist(); }, 450));
+    };
+    panel.addEventListener('input', event => {
+      if (event.target.matches('[data-field="person"],[data-field="fact"],[data-field="actualFact"],[data-field="knownPart"],[data-field="evidence"],[data-field="hiddenFrom"],[data-field="concealmentNote"]')) editCard(event.target);
+    });
+    panel.addEventListener('change', event => {
+      if (event.target.id === 'rpcm-knowledge-enabled') {
+        room.knowledgeInjectionEnabled = event.target.checked;
+        room.personStateInjectionEnabled = event.target.checked;
+        // 사용자가 명시적으로 주입을 켤 때 간편 주입 관리의 일시 제외도 해제합니다.
+        if (room.knowledgeInjectionEnabled && room.pending) room.pending.quickRemovedItems = quickRemovedPendingItems(room.pending).filter(item => !isKnowledgePendingItem(item));
+        void persist().then(() => renderModalIfOpen());
+      } else if (event.target.matches('[data-field]')) {
+        editCard(event.target, true);
+        if (['inject','status','category'].includes(event.target.dataset.field)) setTimeout(() => renderModalIfOpen(), 0);
+      }
+    });
+    panel.querySelector('#rpcm-knowledge-add').onclick = async () => {
+      const card = { id:'kc_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 9), person:'', fact:'', status:'unconfirmed', category:'auto', evidence:'', inject:false, updatedAt:nowIso() };
+      room.knowledgeCards.push(card);
+      state.personKnowledgeCategory = 'all';
+      await saveRoom(room);
+      renderModalIfOpen();
+      const item = [...overlay.querySelectorAll('.rpcm-knowledge-card')].find(node => node.dataset.knowledgeId === card.id);
+      if (item) {
+        item.open = true;
+        item.querySelector('.rpcm-knowledge-read').hidden = true;
+        item.querySelector('.rpcm-knowledge-fields').hidden = false;
+        item.querySelector('[data-field="person"]')?.focus();
+      }
+    };
+    panel.addEventListener('click', event => {
+      const categoryButton = event.target.closest('[data-knowledge-category]');
+      if (categoryButton) {
+        state.personKnowledgeCategory = categoryButton.dataset.knowledgeCategory || 'all';
+        renderModalIfOpen();
+        return;
+      }
+      if (event.target.matches('[data-action="edit"]')) {
+        const node = event.target.closest('[data-knowledge-id]');
+        const fields = node?.querySelector('.rpcm-knowledge-fields');
+        const read = node?.querySelector('.rpcm-knowledge-read');
+        if (!fields || !read) return;
+        fields.hidden = false;
+        read.hidden = true;
+        node.open = true;
+        fields.querySelector('[data-field="fact"]')?.focus();
+        return;
+      }
+      if (!event.target.matches('[data-action="delete"]')) return;
+      const node = event.target.closest('[data-knowledge-id]');
+      const index = cards.findIndex(card => card.id === node?.dataset.knowledgeId);
+      if (index < 0 || !confirm('이 인지 카드를 삭제할까요?')) return;
+      room.knowledgeCards = room.knowledgeCards.filter(card => card.id !== cards[index].id);
+      void persist().then(() => renderModalIfOpen());
+    });
+  }
+
+  // Core 1.0.6 cognition view adapter. It reads Wish cards without normalizing or
+  // writing them; missing actor × fact states exist only in this ViewModel.
+  // Cache counts only, reusing RP history fetched by the existing update range check.
+  const personAppearanceCounts=new Map();
+  const personAppearanceTasks=new Map();
+  function personCollectAppearances(room,turns){
+    // UI sort only. Large rooms must never block the main thread for all turns.
+    const id=String(room.chatId||''),input=Array.isArray(turns)?turns:[];
+    const previous=personAppearanceTasks.get(id);if(previous)previous.cancelled=true;
+    const job={cancelled:false};personAppearanceTasks.set(id,job);
+    const vm=personCoreViewModel(room),counts=new Map();
+    const matchers=vm.actors.map(actor=>{
+      const alternatives=[actor.name,...actor.aliases].filter(name=>Array.from(name).length>=2).map(name=>{
+        const escaped=name.replace(/[.*+?^${}()|[\\]\\]/g,'\\$&');
+        return /[a-z]/i.test(name)?`(?<![a-z0-9])${escaped}(?![a-z0-9])`:escaped;
+      });
+      return {key:manualPersonName(actor.name),pattern:alternatives.length?new RegExp(alternatives.map(src=>`(?:${src})`).join('|'),'i'):null};
+    });
+    let index=0;
+    const step=()=>{
+      if(job.cancelled||personAppearanceTasks.get(id)!==job)return;
+      const start=performance.now();
+      // Time budget is more important than item count: long RP texts vary widely.
+      while(index<input.length && index%16!==15 && performance.now()-start<7)scanOne();
+      while(index<input.length && performance.now()-start<7)scanOne();
+      if(index<input.length){setTimeout(step,35);return;}
+      if(!job.cancelled&&personAppearanceTasks.get(id)===job){
+        personAppearanceCounts.set(id,counts);personAppearanceTasks.delete(id);
+        if(state.currentRoom===room && state.workView==='people' && state.modal?.isConnected)
+          renderPersonCoreUi(room,state.modal);
+      }
+    };
+    const scanOne=()=>{
+      const turn=input[index++],text=String(turn.text||[turn.userText,turn.assistantText].filter(Boolean).join('\\n'));
+      for(const actor of matchers)if(actor.pattern?.test(text))counts.set(actor.key,(counts.get(actor.key)||0)+1);
+    };
+    // Short records can be computed promptly; long histories yield to UI frames.
+    if(input.length<=32)step();else setTimeout(step,35);
+  }  function personCompareActors(room,a,b,frequency=null){
+    const count=personAppearanceCounts.get(String(room.chatId));
+    const fallback=actor=>frequency instanceof Map ? (frequency.get(manualPersonName(actor.name))||0) :
+      (room.personStateRecords||[]).filter(row=>row.active!==false&&(manualPersonName(row.person)===manualPersonName(actor.name)||manualPersonName(row.target)===manualPersonName(actor.name))).length+
+      (room.knowledgeCards||[]).filter(row=>!row.archived&&manualPersonName(row.person)===manualPersonName(actor.name)).length;
+    return Number(b.pinned)-Number(a.pinned)||Number(b.pc)-Number(a.pc)
+      ||(count?(count.get(manualPersonName(b.name))||0)-(count.get(manualPersonName(a.name))||0):fallback(b)-fallback(a))||a.catalogIndex-b.catalogIndex;
+  }
+  function personPinButton(room,name,actorHint=null){
+    // The caller already owns the completed actor view model. Never rebuild all
+    // facts/relations for one pin icon during a 60+ actor paint.
+    const actor=actorHint||personCoreViewModel(room).actors.find(row=>manualPersonName(row.name)===manualPersonName(name)),pinned=!!actor?.pinned;
+    return `<button type="button" class="rpcm-person-pin ${pinned?'is-pinned':''}" data-person-pin="${esc(name)}" aria-pressed="${pinned}" aria-label="${esc(name)} ${pinned?'상단 고정 해제':'상단에 고정'}" title="${pinned?'고정 해제':'상단에 고정'}"><span class="rpcm-person-pin-mark" aria-hidden="true">📍</span><span class="rpcm-person-pin-label">${pinned?'고정됨':'고정'}</span></button>`;
+  }
+  async function personTogglePin(room,overlay,name){
+    if(state.currentRoom!==room)return;
+    const before=structuredClone(room.personUiActors||[]),actor=personCoreViewModel(room).actors.find(row=>manualPersonName(row.name)===manualPersonName(name));if(!actor)return;
+    room.personUiActors ||= [];
+    let entry=room.personUiActors.find(row=>manualPersonName(row.name)===manualPersonName(name));
+    if(!entry){entry={name:actor.name,aliases:[...actor.aliases]};room.personUiActors.push(entry);}
+    entry.pinned=!actor.pinned;
+    try{await saveRoom(room);if(state.currentRoom===room){state.personCoreRailScroll=0;overlay.querySelector('.m3-people')?.scrollTo({left:0});renderPersonCoreUi(room,overlay);}}
+    catch(error){room.personUiActors=before;notify('인물 고정을 저장하지 못했습니다: '+error.message,'error');}
+  }
+
+  function personCoreViewModel(room) {
+    const norm = value => String(value || '').trim().toLocaleLowerCase('ko-KR');
+    const deletedNames=new Set((room.personDeletedNames||[]).map(norm));
+    const internalId = value => /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/i.test(String(value || '').trim());
+    const metadata = Array.isArray(room.personUiActors) ? room.personUiActors.filter(row => row && String(row.name || '').trim()) : [];
+    const actors = [], byName = new Map();
+    const add = (name, details = {}) => {
+      const label = String(name || '').trim(), key = norm(label);
+      if (!key||deletedNames.has(key)) return null;
+      let actor = byName.get(key);
+      if (!actor) {
+        actor = { name:label, aliases:[], pinned:false, pc:false, catalogIndex:actors.length };
+        actors.push(actor); byName.set(key, actor);
+      }
+      if (Array.isArray(details.aliases) && details.aliases.length && !actor.aliases.length) actor.aliases = details.aliases.map(String).map(value => value.trim()).filter(Boolean);
+      if (details.pinned === true) actor.pinned = true;
+      return actor;
+    };
+    // Character slots are Wish's explicit canonical actor order. UI-only
+    // actors follow them; pinned actors move ahead without inferring importance.
+    (room.slots || []).filter(slot => slot.group === 'character').forEach(slot => add(slot.title, { aliases:slot.aliases }));
+    metadata.forEach(row => add(row.name, row));
+    const knowledge = (Array.isArray(room.knowledgeCards) ? room.knowledgeCards : []).filter(card => card && card.archived !== true);
+    const records = (Array.isArray(room.personStateRecords) ? room.personStateRecords : []).filter(record => record && record.active !== false && ['speech','relationship'].includes(record.type));
+    knowledge.forEach(card => {add(card.person);if(Array.isArray(card.hiddenFrom))card.hiddenFrom.forEach(add);if(Array.isArray(card.concealments))card.concealments.forEach(row=>{add(row?.holder);add(row?.target);});});
+    records.forEach(record => { add(record.person); add(record.target); });
+    // Match Wish's existing PC fallback without calling the normalizers: this
+    // adapter must not write to the room while merely drawing Core's rail.
+    let player = String(room.personPlayerName || '').trim();
+    if (!player) {
+      const counts = new Map();
+      for (const record of records) {
+        const target = String(record.target || '').trim();
+        if (target && norm(target) !== norm(record.person)) counts.set(target, (counts.get(target) || 0) + 1);
+      }
+      const best = [...counts].sort((a,b) => b[1] - a[1])[0];
+      if (best?.[1] >= 2) player = best[0];
+      else if (knowledge.some(card => String(card.person || '').trim() === 'USER') && actors.length > 1) player = 'USER';
+    }
+    if (player) { const actor=add(player); if(actor)actor.pc=true; }
+    // Compute unchanged record-frequency sort scores ONCE, not in every comparator
+    // (and not again for every pin button). Display-only: no injection changes.
+    const frequency=new Map();
+    const bump=name=>{const key=manualPersonName(name);if(key)frequency.set(key,(frequency.get(key)||0)+1);};
+    for(const record of room.personStateRecords||[]){
+      if(record?.active===false)continue;
+      const names=new Set([manualPersonName(record?.person),manualPersonName(record?.target)]);
+      names.forEach(name=>{if(name)bump(name);});
+    }
+    for(const card of room.knowledgeCards||[]){if(card&&!card.archived)bump(card.person);}
+    actors.sort((a,b)=>personCompareActors(room,a,b,frequency));
+
+    const facts = [], byKey = new Map(), byText = new Map();
+    for (const card of knowledge) {
+      const text = String(card.fact || '').trim();
+      if (!text) continue;
+      const key = norm(card.key), textKey = norm(text).replace(/\s+/g,' ');
+      let fact = (key && byKey.get(key)) || byText.get(textKey);
+      if (!fact) {
+        const explicit = [card.label,card.title].map(value => String(value || '').trim()).find(value => value && !internalId(value)) || '';
+        const lines = text.split(/\n/);
+        const firstLine = lines.map(value => value.trim()).find(value => value && !internalId(value)) || '';
+        const readable = explicit || firstLine || '제목 없는 인지 정보';
+        const title = readable.length <= 100 ? readable : readable.slice(0, 97).trimEnd() + '…';
+        const displayContent = internalId(lines[0]) ? lines.slice(1).join('\n').trim() : text;
+        fact = { id:String(card.id || facts.length), title, content:displayContent || '내용을 확인해 주세요.', cards:[], byActor:new Map(), concealments:[] };
+        facts.push(fact);
+      }
+      if (key) byKey.set(key,fact);
+      byText.set(textKey,fact);
+      fact.cards.push(card);
+      const actorKey = norm(card.person);
+      if (!fact.byActor.has(actorKey)) fact.byActor.set(actorKey,[]);
+      fact.byActor.get(actorKey).push(card);
+      // Only explicitly stored concealment relations may appear here. Wish's
+      // evidence prose is never interpreted as a new hidden relationship.
+      const explicit = Array.isArray(card.concealments) ? card.concealments : [];
+      explicit.forEach(row => {
+        if (!row || !String(row.holder || '').trim() || !String(row.target || '').trim()) return;
+        fact.concealments.push({ holder:String(row.holder), target:String(row.target), scope:String(row.scope || ''), publicVersion:String(row.publicVersion || '') });
+      });
+      if (['knows','knows-part'].includes(card.status) && Array.isArray(card.hiddenFrom) && String(card.person || '').trim()) card.hiddenFrom.forEach(target => {
+        if (String(target || '').trim()) fact.concealments.push({ holder:String(card.person),target:String(target),scope:String(card.concealmentNote || ''),publicVersion:'' });
+      });
+    }
+    const statusFor = (fact, actor) => {
+      const cards = fact.byActor.get(norm(actor.name)) || [];
+      if (!cards.length) return { kind:'unverified', label:'확인 안 됨', cardIds:[] };
+      const raw = [...new Set(cards.map(card => String(card.status || '').toLowerCase()))];
+      if (raw.length > 1) return { kind:'conflict', label:'상태 충돌 · 확인 필요', cardIds:cards.map(card => String(card.id || '')) };
+      const labels = { 'knows-part':['partial','일부만 앎'],'heard-only':['heard','전해 들음'],denies:['denies','부정'],forgot:['forgot','잊음'],knows:['aware','알고 있음'], aware:['aware','알고 있음'], 'does-not-know':['unaware','모름'], unaware:['unaware','모름'], unconfirmed:['unverified','확인 안 됨'], unverified:['unverified','확인 안 됨'], mistaken:['mistaken',KNOWLEDGE_STATUS_LABELS.mistaken], suspects:['suspects',KNOWLEDGE_STATUS_LABELS.suspects], private:['private','비공개'] };
+      const [kind,label] = labels[raw[0]] || ['unsupported','미지원 상태 · '+raw[0]];
+      return { kind,label,cardIds:cards.map(card => String(card.id || '')) };
+    };
+    const archived = [
+      ...(Array.isArray(room.knowledgeCards) ? room.knowledgeCards : []).filter(card => card?.archived === true).map(card => ({ id:String(card.id || ''), kind:'knowledge', title:internalId(card.fact) ? '제목 없는 인지 정보' : String(card.fact || card.person || ''), evidence:String(card.evidence || ''), person:String(card.person || ''), at:String(card.updatedAt || '') })),
+      ...(Array.isArray(room.personStateRecords) ? room.personStateRecords : []).filter(record => record?.active === false).map(record => ({ id:String(record.id || ''), kind:String(record.type || ''), title:`${record.person || ''} → ${record.target || ''}`, evidence:String(record.evidence || ''), person:String(record.person || ''), at:String(record.updatedAt || '') })),
+    ];
+    return { actors, facts, records, archived, statusFor };
+  }
+
+  // v0.17.14 임시21: restore per-status visual badges on person knowledge chips.
+  // Temp19 unified the quick-change button, but dropped the status variant hook.
+  // Keep the one-click behavior while restoring the original badge appearance.
+  function rpcmKnowledgeStatusTheme(status) {
+    const kind=String(status?.kind||'unverified');
+    if(kind==='partial')return {chip:'known',reader:'partial'};
+    if(['heard','denies','forgot','unsupported'].includes(kind))return {chip:'never',reader:kind};
+    if(kind==='aware')return {chip:'known',reader:'aware'};
+    if(kind==='unaware'||kind==='unverified')return {chip:'unknown',reader:kind};
+    if(kind==='suspects'||kind==='mistaken'||kind==='conflict'||kind==='private')return {chip:'never',reader:kind};
+    return {chip:'unknown',reader:'unverified'};
+  }
+  // one shared status operation for the whole and individual person readers.
+  // No implicit group mutation: one actor and one persisted knowledge record per change.
+  function rpcmKnowledgeStatusControl(fact,person,status,compact=false) {
+    const personName=String(person||'');
+    const theme=rpcmKnowledgeStatusTheme(status);
+    const baseClass=compact?`m3-chip ${theme.chip}`:'rpcm-person-reader-status';
+    return `<button type="button" class="${baseClass} rpcm-knowledge-status-trigger rpcm-knowledge-status-split" data-status="${esc(theme.reader)}" data-rpcm-knowledge-quick="1" data-rpcm-fact-id="${esc(fact.id)}" data-rpcm-actor="${esc(personName)}" aria-label="${esc(personName)} 인지 상태 변경"><span class="rpcm-knowledge-person-badge">${esc(personName)}</span><span class="rpcm-knowledge-state-badge ${esc(theme.chip)}" data-status="${esc(theme.reader)}">${esc(status.label)}</span></button>`;
+  }
+  // Temp23: a quick status save redraws the selected person reader. Keep disclosure
+  // and viewport state in UI memory only; never persist these to the RP database.
+  function rpcmCaptureKnowledgeDisclosure(overlay){
+    const host=overlay?.querySelector('#rpcm-person-core');
+    const reader=host?.querySelector('#rpcm-person-profiles');
+    const person=String(reader?.dataset.personName||'');
+    if(!person||reader.dataset.pane!=='knowledge')return null;
+    const openFacts=[];
+    for(const details of reader.querySelectorAll('details.rpcm-person-reader-fact[open]')){
+      let ids=[];
+      try{ids=JSON.parse(details.dataset.newKnowledgeIds||'[]');}catch(_){}
+      if(!Array.isArray(ids)||!ids.length)continue;
+      const nested=[...details.querySelectorAll('details')];
+      openFacts.push({ids:ids.map(String),nestedOpen:nested.flatMap((node,index)=>node.open?[index]:[])});
+    }
+    const scroller=overlay.querySelector('.rpcm-work-content');
+    return {person,pane:'knowledge',openFacts,scrollTop:scroller?.scrollTop??null};
+  }
+  function rpcmRestoreKnowledgeDisclosure(overlay,snapshot){
+    if(!snapshot||state.personCoreSelectedActor!==snapshot.person||state.personCorePane!==snapshot.pane)return;
+    const reader=overlay?.querySelector('#rpcm-person-profiles');
+    if(reader?.dataset.personName!==snapshot.person||reader.dataset.pane!==snapshot.pane)return;
+    const openedById=new Map();
+    for(const item of snapshot.openFacts)for(const id of item.ids)openedById.set(id,item);
+    for(const details of reader.querySelectorAll('details.rpcm-person-reader-fact')){
+      let ids=[];
+      try{ids=JSON.parse(details.dataset.newKnowledgeIds||'[]');}catch(_){}
+      if(!Array.isArray(ids))continue;
+      const prior=ids.map(String).map(id=>openedById.get(id)).find(Boolean);
+      if(!prior)continue;
+      details.open=true;
+      const nested=[...details.querySelectorAll('details')];
+      for(const index of prior.nestedOpen)if(nested[index])nested[index].open=true;
+    }
+    const scroller=overlay.querySelector('.rpcm-work-content');
+    if(scroller&&snapshot.scrollTop!==null)scroller.scrollTop=snapshot.scrollTop;
+  }
+  const rpcmKnowledgeQuickBusy=new Set();
+  function rpcmKnowledgeEvidenceCandidates(fact,target,actor,nextStatus){
+    const bestByEvidence=new Map(),actorKey=manualPersonName(actor);
+    for(const card of (fact?.cards||[])){
+      if(!card||card.archived)continue;
+      const evidence=String(card.evidence||'').trim();
+      if(!evidence)continue;
+      const sameActor=manualPersonName(card.person)===actorKey,sameStatus=String(card.status||'')===String(nextStatus||''),isTarget=card===target;
+      let priority=4;
+      if(sameStatus&&sameActor)priority=0;
+      else if(sameStatus)priority=1;
+      else if(isTarget)priority=2;
+      else if(sameActor)priority=3;
+      const row={evidence,person:String(card.person||''),status:String(card.status||''),sameActor,sameStatus,isTarget,priority};
+      const previous=bestByEvidence.get(evidence);
+      if(!previous||priority<previous.priority||(priority===previous.priority&&isTarget&&!previous.isTarget))bestByEvidence.set(evidence,row);
+    }
+    return [...bestByEvidence.values()].sort((a,b)=>a.priority-b.priority||Number(b.isTarget)-Number(a.isTarget)||a.person.localeCompare(b.person,'ko'));
+  }
+  function rpcmKnowledgeQuickMenu(room,overlay,trigger){
+    document.querySelector('#rpcm-knowledge-quick-menu')?.remove();
+    const groupNames=trigger.dataset.rpcmMembers ? (()=>{try{return JSON.parse(trigger.dataset.rpcmMembers);}catch(_){return [];}})() : [];
+    if(Array.isArray(groupNames)&&groupNames.length>1){
+      const chooser=document.createElement('div');chooser.id='rpcm-knowledge-quick-menu';
+      chooser.style.cssText='position:fixed;z-index:2147483646;padding:10px;max-height:60vh;overflow:auto;display:flex;flex-direction:column;gap:5px;min-width:170px;border:1px solid var(--rm-line,#777);border-radius:10px;background:var(--rm-sheet,#20212a);color:var(--rm-fg,#eee);box-shadow:0 7px 24px #0005';
+      const title=document.createElement('strong');title.textContent='변경할 인물을 선택하세요';chooser.appendChild(title);
+      for(const name of groupNames){const option=document.createElement('button');option.type='button';option.textContent=String(name);option.onclick=e=>{e.stopPropagation();chooser.remove();rpcmKnowledgeQuickMenu(room,overlay,{dataset:{rpcmFactId:trigger.dataset.rpcmFactId,rpcmActor:String(name)},getBoundingClientRect:()=>trigger.getBoundingClientRect(),focus:()=>trigger.focus()});};chooser.appendChild(option);}
+      document.body.appendChild(chooser);const r=trigger.getBoundingClientRect();chooser.style.left=Math.max(8,Math.min(r.left,innerWidth-chooser.offsetWidth-8))+'px';chooser.style.top=Math.max(8,Math.min(r.bottom+4,innerHeight-chooser.offsetHeight-8))+'px';
+      const outside=e=>{if(!chooser.contains(e.target)&&e.target!==trigger){chooser.remove();document.removeEventListener('pointerdown',outside,true);}};document.addEventListener('pointerdown',outside,true);
+      return;
+    }
+    const fact=personCoreViewModel(room).facts.find(item=>String(item.id)===String(trigger.dataset.rpcmFactId));
+    if(!fact)return;
+    const actor=String(trigger.dataset.rpcmActor||'');
+    const own=fact.cards.filter(card=>manualPersonName(card.person)===manualPersonName(actor)&&!card.archived);
+    const menu=document.createElement('div');menu.id='rpcm-knowledge-quick-menu';menu.className='rpcm-knowledge-quick-menu';
+    menu.style.cssText='position:fixed;z-index:2147483646;width:min(270px,calc(100vw - 24px));max-height:72vh;overflow:auto;padding:9px;display:flex;flex-direction:column;gap:5px;border:1px solid var(--rm-line,#777);border-radius:11px;background:var(--rm-sheet,#20212a);color:var(--rm-fg,#eee);box-shadow:0 7px 24px #0005';
+    const caption=document.createElement('strong');caption.textContent=actor+' · 인지 상태 변경';caption.style.cssText='font-size:12px;padding:3px';menu.appendChild(caption);
+    const initial=own.length>1?null:own[0]||null;
+    // TEMP30 · NEXT-08/NEXT-09:
+    // - evidence 후보는 textarea를 채우는 도구이며 textarea가 최종 저장값의 단일 기준입니다.
+    // - 빠른 메뉴의 '확인 안 됨'은 explicit unconfirmed 카드를 만들지 않고,
+    //   해당 인물×fact의 활성 판정을 이전 검토로 보내 virtual 확인 안 됨으로 복귀합니다.
+    if(own.length>1){
+      const note=document.createElement('small');note.textContent='동일 인물의 카드가 여러 장입니다. 개별 상태 변경은 수정할 카드를 선택하세요. 확인 안 됨은 이 인물의 동일 정보 활성 판정을 모두 해제합니다.';menu.appendChild(note);
+      const reset=document.createElement('button');reset.type='button';reset.textContent='확인 안 됨 · 이 인물의 판정 모두 해제';reset.title='수동으로 지정한 인지 판정을 해제하고 카드가 없던 기본 확인 안 됨 상태로 되돌립니다.';reset.style.cssText='text-align:left;padding:7px 9px;background:transparent;color:inherit;border:1px solid #8885;border-radius:7px;cursor:pointer';reset.onclick=event=>{event.stopPropagation();void clearToNeutral(reset);};menu.appendChild(reset);
+      for(const card of own){const b=document.createElement('button');b.type='button';b.textContent=String(card.fact).slice(0,60)+' ('+(KNOWLEDGE_STATUS_LABELS[card.status]||'확인 안 됨')+')';b.onclick=()=>renderOptions(card);menu.appendChild(b);}
+    }else renderOptions(initial);
+    function renderOptions(target){
+      menu.style.width='min(270px,calc(100vw - 24px))';
+      menu.replaceChildren(caption);
+      if(target){const note=document.createElement('small');note.textContent=String(target.fact).slice(0,110);menu.appendChild(note);}
+      for(const group of rpcmKnowledgeGroups()){
+        let host=menu;
+        if(group.values.length>1){const fold=document.createElement('details'),title=document.createElement('summary');title.textContent=group.label;fold.appendChild(title);if(group.values.includes(target?.status))fold.open=true;menu.appendChild(fold);host=fold;}
+        for(const status of group.values){
+        const option=document.createElement('button');option.type='button';option.textContent=KNOWLEDGE_STATUS_LABELS[status];option.style.cssText='text-align:left;padding:6px 9px;background:transparent;color:inherit;border:1px solid #8885;border-radius:7px;cursor:pointer';
+        if(status==='unconfirmed')option.title='수동으로 지정한 인지 판정을 해제하고 카드가 없던 기본 확인 안 됨 상태로 되돌립니다.';
+        if(target?.status===status)option.setAttribute('aria-current','true');
+        option.onclick=event=>{
+          event.stopPropagation();if(state.currentRoom!==room||rpcmKnowledgeQuickBusy.has(String(room.chatId)))return;
+          if(status==='unconfirmed'){void clearToNeutral(option);return;}
+          if(target?.status===status&&String(target?.evidence||'').trim()){menu.remove();return;}
+          renderEvidence(target,status);
+        };
+        host.appendChild(option);
+        }
+      }
+    }
+    function renderEvidence(target,status){
+      menu.style.width='min(520px,calc(100vw - 24px))';
+      menu.replaceChildren(caption);
+      const heading=document.createElement('small');heading.textContent=`${KNOWLEDGE_STATUS_LABELS[status]} · 저장할 근거를 확인하세요.`;heading.style.cssText='padding:2px 3px 5px;opacity:.9';menu.appendChild(heading);
+      const candidates=rpcmKnowledgeEvidenceCandidates(fact,target,actor,status);
+      let selectedCandidateEvidence='';
+      const candidateButtons=[];
+      const directLabel=document.createElement('strong');directLabel.textContent='직접 근거 입력';directLabel.style.cssText='font-size:12px;margin-top:2px';
+      const directHelp=document.createElement('small');directHelp.textContent='누가 · 어디서/언제 · 무엇을 통해 알게 되었는지 자유롭게 적어 주세요.';directHelp.style.cssText='opacity:.8;line-height:1.45';
+      const direct=document.createElement('textarea');direct.rows=4;direct.placeholder='예: A가 C에서 B와 대화하며 이 사실을 직접 알게 됨';direct.style.cssText='width:100%;box-sizing:border-box;resize:vertical;padding:8px;border:1px solid #8885;border-radius:8px;background:transparent;color:inherit;font:inherit;line-height:1.45';
+      const save=document.createElement('button');save.type='button';save.className='rpcm-btn primary';save.textContent='근거를 선택하거나 입력하세요';save.disabled=true;
+      const sync=()=>{
+        const evidence=String(direct.value||'').trim();
+        save.disabled=!evidence;
+        save.textContent=!evidence?'근거를 선택하거나 입력하세요':selectedCandidateEvidence?'선택한 근거로 저장':'입력한 근거로 저장';
+        candidateButtons.forEach(button=>{
+          const selected=!!selectedCandidateEvidence&&button.dataset.evidence===selectedCandidateEvidence;
+          button.setAttribute('aria-pressed',String(selected));
+          button.classList.toggle('is-selected',selected);
+          button.textContent=(selected?'✓ 선택됨 · ':'')+button.dataset.baseText;
+        });
+      };
+      if(candidates.length){
+        const list=document.createElement('div');list.style.cssText='display:grid;gap:6px;max-height:34vh;overflow:auto;padding-right:2px';
+        for(const row of candidates){
+          const button=document.createElement('button');button.type='button';button.className='rpcm-knowledge-evidence-option';button.dataset.evidence=row.evidence;button.setAttribute('aria-pressed','false');
+          const stateLabel=KNOWLEDGE_STATUS_LABELS[row.status]||'확인 안 됨';
+          const badge=row.sameStatus?(row.sameActor?'새 상태 일치 · 현재 인물':'새 상태 일치'):row.isTarget?'현재 카드의 기존 근거':row.sameActor?'현재 인물의 다른 상태 근거':'다른 상태 근거';
+          const baseText=`${badge} · ${row.person} · ${stateLabel}\n${row.evidence.slice(0,220)}${row.evidence.length>220?'…':''}`;
+          button.dataset.baseText=baseText;button.textContent=baseText;
+          button.title=row.evidence;button.style.cssText='white-space:pre-wrap;text-align:left;padding:8px 9px;background:transparent;color:inherit;border:1px solid #8885;border-radius:8px;cursor:pointer;line-height:1.45';
+          button.onclick=event=>{event.stopPropagation();selectedCandidateEvidence=row.evidence;direct.value=row.evidence;sync();};candidateButtons.push(button);list.appendChild(button);
+        }
+        menu.appendChild(list);
+      }else{
+        const empty=document.createElement('small');empty.textContent='같은 지식에 저장된 근거 후보가 없습니다. 아래에 직접 입력하거나 취소하세요.';empty.style.cssText='padding:6px 3px;opacity:.8';menu.appendChild(empty);
+      }
+      direct.oninput=()=>{selectedCandidateEvidence='';sync();};menu.append(directLabel,directHelp,direct);
+      const knownPart=document.createElement('textarea');knownPart.rows=3;knownPart.placeholder='이 인물이 실제로 아는 부분';knownPart.value=String(target?.knownPart||'');
+      if(status==='knows-part'){const label=document.createElement('label');label.textContent='일부만 앎 · 실제 아는 범위';label.appendChild(knownPart);menu.appendChild(label);}
+      const actions=document.createElement('div');actions.style.cssText='display:flex;gap:10px;justify-content:flex-end;margin-top:2px';
+      const back=document.createElement('button');back.type='button';back.className='rpcm-btn secondary';back.textContent='← 인지상태 다시 선택';back.onclick=event=>{event.stopPropagation();renderOptions(target);};
+      save.onclick=async event=>{event.stopPropagation();await commitStatusEvidence(target,status,String(direct.value||'').trim(),save,String(knownPart.value||'').trim());};
+      actions.append(back,save);menu.appendChild(actions);sync();
+    }
+    async function clearToNeutral(button){
+      if(state.currentRoom!==room||rpcmKnowledgeQuickBusy.has(String(room.chatId)))return;
+      const targets=(fact.cards||[]).filter(card=>card&&!card.archived&&manualPersonName(card.person)===manualPersonName(actor));
+      if(!targets.length){menu.remove();return;}
+      rpcmKnowledgeQuickBusy.add(String(room.chatId));button.disabled=true;
+      const disclosureSnapshot=rpcmCaptureKnowledgeDisclosure(overlay),now=nowIso();
+      const before=targets.map(card=>({card,archived:card.archived,inject:card.inject,updatedAt:card.updatedAt}));
+      for(const card of targets){card.archived=true;card.inject=false;card.updatedAt=now;}
+      try{
+        await saveRoom(room);
+        menu.remove();
+        try{await rebuildPendingKnowledgeItem(room);}catch(syncError){notify('판정은 해제됐지만 주입 동기화가 필요합니다: '+String(syncError.message||syncError),'warn',6000);}
+        if(state.currentRoom===room&&overlay.isConnected){renderPersonCoreUi(room,overlay);rpcmRestoreKnowledgeDisclosure(overlay,disclosureSnapshot);}
+      }catch(error){
+        for(const snapshot of before){snapshot.card.archived=snapshot.archived;snapshot.card.inject=snapshot.inject;snapshot.card.updatedAt=snapshot.updatedAt;}
+        notify('인지 상태 판정 해제 실패: '+String(error.message||error),'error',6000);menu.remove();
+      }finally{rpcmKnowledgeQuickBusy.delete(String(room.chatId));}
+    }
+    async function commitStatusEvidence(target,status,evidence,button,knownPart=''){
+      if(status==='knows-part'&&!knownPart){notify('실제로 아는 범위를 기록해 주세요.','warn');return;}
+      if(!evidence){notify('인지 상태를 저장하려면 근거가 필요합니다.','warn',4000);return;}
+      if(state.currentRoom!==room||rpcmKnowledgeQuickBusy.has(String(room.chatId)))return;
+      rpcmKnowledgeQuickBusy.add(String(room.chatId));button.disabled=true;
+      const disclosureSnapshot=rpcmCaptureKnowledgeDisclosure(overlay),now=nowIso(),created=!target;
+      const before=target?{knownPart:target.knownPart,status:target.status,evidence:target.evidence,updatedAt:target.updatedAt}:null;
+      const card=target||{id:'kc_'+Date.now().toString(36)+Math.random().toString(36).slice(2,9),person:actor,fact:String(fact.cards[0]?.fact||fact.content||fact.title),status:'unconfirmed',category:'auto',evidence:'',actualFact:'',hiddenFrom:[],concealmentNote:'',inject:false,archived:false,updatedAt:now};
+      if(created)room.knowledgeCards.push(card);
+      card.status=status;if(status==='knows-part')card.knownPart=knownPart;card.evidence=evidence;card.updatedAt=now;
+      try{
+        await saveRoom(room);
+        menu.remove();
+        try{await rebuildPendingKnowledgeItem(room);}catch(syncError){notify('상태는 저장됐지만 주입 동기화가 필요합니다: '+String(syncError.message||syncError),'warn',6000);}
+        if(state.currentRoom===room&&overlay.isConnected){renderPersonCoreUi(room,overlay);rpcmRestoreKnowledgeDisclosure(overlay,disclosureSnapshot);}
+      }catch(error){
+        if(created)room.knowledgeCards=room.knowledgeCards.filter(item=>item!==card);
+        else {card.status=before.status;card.evidence=before.evidence;card.updatedAt=before.updatedAt;if(before.knownPart===undefined)delete card.knownPart;else card.knownPart=before.knownPart;}
+        notify('인지 상태 저장 실패: '+String(error.message||error),'error',6000);menu.remove();
+      }finally{rpcmKnowledgeQuickBusy.delete(String(room.chatId));}
+    }
+    document.body.appendChild(menu);
+    const rect=trigger.getBoundingClientRect();menu.style.left=Math.max(10,Math.min(rect.left,innerWidth-menu.offsetWidth-10))+'px';
+    menu.style.top=(rect.bottom+menu.offsetHeight+6<innerHeight?rect.bottom+4:Math.max(10,rect.top-menu.offsetHeight-4))+'px';
+    const outside=e=>{if(!menu.contains(e.target)&&e.target!==trigger){menu.remove();document.removeEventListener('pointerdown',outside,true);}};
+    document.addEventListener('pointerdown',outside,true);
+    menu.addEventListener('keydown',e=>{if(e.key==='Escape'){menu.remove();trigger.focus();document.removeEventListener('pointerdown',outside,true);}});
+  }
+  function rpcmBindKnowledgeQuickButtons(room,overlay,host){
+    host.querySelectorAll('[data-rpcm-knowledge-quick]').forEach(button=>button.onclick=event=>{event.preventDefault();event.stopPropagation();rpcmKnowledgeQuickMenu(room,overlay,button);});
+  }
+
+  function rpcmKnowledgeGroupedChips(fact,vm) {
+    const groups=new Map();
+    for(const actor of vm.actors){
+      const status=vm.statusFor(fact,actor);
+      const cards=fact.byActor.get(manualPersonName(actor.name))||[];
+      const c=cards.length===1?cards[0]:null;
+      const signature=c?JSON.stringify([status.kind,status.label,c.status,c.knownPart,c.actualFact,c.evidence,c.category,c.inject,c.hiddenFrom,c.concealmentNote,c.concealments]):'single:'+actor.name;
+      if(!groups.has(signature))groups.set(signature,[]);
+      groups.get(signature).push({name:actor.name,status});
+    }
+    return [...groups.values()].map(entries=>{
+      const first=entries[0],names=entries.map(row=>row.name);
+      if(names.length===1)return rpcmKnowledgeStatusControl(fact,first.name,first.status,true);
+      const theme=rpcmKnowledgeStatusTheme(first.status);
+      return `<button type="button" class="m3-chip ${theme.chip} rpcm-knowledge-status-trigger rpcm-knowledge-status-split" data-status="${esc(theme.reader)}" data-rpcm-knowledge-quick="1" data-rpcm-fact-id="${esc(fact.id)}" data-rpcm-members="${esc(JSON.stringify(names))}" title="각 인물의 상태는 개별 변경됩니다"><span class="rpcm-knowledge-person-badge">${esc(names.join(', '))}</span><span class="rpcm-knowledge-state-badge ${esc(theme.chip)}" data-status="${esc(theme.reader)}">${esc(first.status.label)}</span></button>`;
+    }).join('');
+  }
+  function personCoreIcon(name) {
+    const paths = {
+      plus:'<path d="M12 5v14M5 12h14"/>',
+      edit:'<path d="M15.4 4.6 19.4 8.6 8.6 19.4H4.6v-4Z"/>',
+      check:'<path d="m5.4 12.6 4.4 4.4 8.8-9"/>',
+      eye:'<path d="M2.6 12S6 5.8 12 5.8 21.4 12 21.4 12 18 18.2 12 18.2 2.6 12 2.6 12Z"/><circle cx="12" cy="12" r="2.7"/>',
+      chev:'<path d="m8 10.4 4 4 4-4"/>',
+    };

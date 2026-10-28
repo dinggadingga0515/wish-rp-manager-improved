@@ -1,0 +1,1000 @@
+
+  function bindManualUpdateCenter(overlay, room) {
+    bindIntegratedCenter(overlay,room);
+    overlay.querySelector('#rpcm-update-batch')?.addEventListener('click',()=>openManualBatchDialog(room));
+    bindManualMoreMenus(overlay);
+    overlay.querySelector('#rpcm-update-export')?.addEventListener('click', () => openManualRpExportDialog(room));
+    overlay.querySelector('#rpcm-manual-recovery')?.addEventListener('click', () => openManualRecoveryDialog(room));
+    overlay.querySelectorAll('[data-full-next]').forEach(button => button.addEventListener('click', async () => {
+      button.disabled = true;
+      const task = button.dataset.fullNext;
+      try {
+        const progress = manualFullBuildFor(room, task);
+        if (!progress) throw new Error('이어갈 전체 구축 상태가 없습니다.');
+        const result = await makeManualFullBuildPart(room, task, progress.packetMode, false);
+        showManualFullBuildPacket(room, task, result);
+      } catch (error) { notify(`전체 구축 중단: ${error.message}`, 'warn', 7000); if (button.isConnected) button.disabled = false; }
+    }));
+    overlay.querySelectorAll('[data-full-cancel]').forEach(button => button.addEventListener('click', async () => {
+      button.disabled = true;
+      try { await cancelManualFullBuild(room, button.dataset.fullCancel); renderModalIfOpen(); notify('전체 구축 진행 상태를 종료했습니다. 이미 저장한 결과는 유지됩니다.', 'success'); }
+      catch (error) { notify(`전체 구축 취소 실패: ${error.message}`, 'error'); if (button.isConnected) button.disabled = false; }
+    }));
+    overlay.querySelector('#rpcm-update-refresh')?.addEventListener('click', () => { void refreshManualUpdateCounts(overlay, room, true); });
+    overlay.querySelector('#rpcm-manual-integrity-check')?.addEventListener('click', async event => {
+      const button=event.currentTarget;button.disabled=true;button.textContent='저장본 확인 중…';
+      try{
+        await openManualIntegrityDialog(room);
+      }catch(error){notify(`적용 누락 점검 실패: ${error.message}`,'error');}
+      finally{button.disabled=false;button.textContent='수동 결과 적용 누락 점검';}
+    });
+    overlay.querySelectorAll('[data-update-redownload]').forEach(button=>button.addEventListener('click',()=>{
+      const task=button.dataset.updateRedownload,draft=manualUpdateRuntime.packets.get(manualPacketKey(room,task));
+      if(!draft){notify('진행 중인 작업자료가 없습니다.','warn');return;}
+      if(draft.fullBuild)void showManualFullBuildPacket(room,task,{draft,...draft.fullBuild});else openManualUpdateTextDialog(`${MANUAL_UPDATE_TASKS[task].title} · 작업자료`,`${draft.turnCount}턴 · 결과 기다리는 중 · 작업 ID ${draft.jobId||'이전 작업'}`,draft.packet,'작업자료 복사');
+    }));
+    overlay.querySelectorAll('[data-update-cancel]').forEach(button=>button.addEventListener('click',async()=>{
+      const task=button.dataset.updateCancel,job=room.manualPendingJobs?.[task],key=manualPacketKey(room,task);
+      if(!job||!confirm(`${MANUAL_UPDATE_TASKS[task].title} 작업자료 대기를 취소할까요? 저장된 기억과 체크포인트는 유지됩니다.`))return;
+      button.disabled=true;
+      const prior={...job};
+      room.manualPendingJobs[task]={...job,status:'cancelled',draft:null,cancelledAt:nowIso()};
+      try{await saveRoom(room);manualUpdateRuntime.packets.delete(key);renderModalIfOpen();notify('작업자료 대기를 취소했습니다.','success');}
+      catch(error){room.manualPendingJobs[task]=prior;button.disabled=false;notify(`작업 취소 실패: ${error.message}`,'error');}
+    }));
+    overlay.querySelectorAll('[data-update-guide]').forEach(button => button.addEventListener('click', () => {
+      const task = button.dataset.updateGuide;
+      const guide = manualGuideMetadata(room, task);
+      openManualUpdateTextDialog(`${MANUAL_UPDATE_TASKS[task].title} · 지침만 복사`, `${guide.source} · ${guide.version} · ${guide.hash}`, manualGuideOnlyText(room, task), '지침만 복사');
+    }));
+    overlay.querySelectorAll('[data-update-packet]').forEach(button => button.addEventListener('click', () => openManualPacketModeDialog(room, button.dataset.updatePacket)));
+    overlay.querySelectorAll('[data-update-result]').forEach(button => button.addEventListener('click', () => openManualUpdateResultDialog(room, button.dataset.updateResult)));
+  }
+
+  function loreUiFor(room) {
+    const id = String(room?.chatId || '');
+    if (!state.loreUi || state.loreUi.chatId !== id) state.loreUi = { chatId:id, search:'', type:'', mode:'', pack:'', openPacks:{}, openCards:{} };
+    return state.loreUi;
+  }
+
+  function loreModeLabel(mode) {
+    return ({ off:'끔', manual:'직접 선택', always:'항상 주입', auto:'감지어 자동' })[mode] || '끔';
+  }
+
+  function loreTypeLabel(type) { return type === '물건·장비 설정' ? '아이템' : type || '기타'; }
+  function loreCardBadge(card, pack) {
+    if (pack.enabled === false || card.enabled === false || card.mode === 'off') return '사용 안 함';
+    return ({always:'항상 참고',manual:card.manualSelected === false ? '직접 선택 해제' : '직접 선택',auto:'키워드'})[card.mode] || '사용 안 함';
+  }
+
+  function lorePackModeStats(pack) {
+    const cards = Array.isArray(pack?.cards) ? pack.cards : [];
+    const enabled = cards.filter(card => card?.enabled !== false);
+    return {
+      total:cards.length,
+      auto:enabled.filter(card => card?.mode === 'auto').length,
+      always:enabled.filter(card => card?.mode === 'always').length,
+      manual:enabled.filter(card => card?.mode === 'manual').length,
+      off:cards.filter(card => card?.enabled === false || card?.mode === 'off').length,
+    };
+  }
+  function loreMetaChips(label, values) {
+    return Array.isArray(values) && values.length ? `<div class="rpcm-lore-meta-row"><strong>${label}</strong><span>${values.map(value => `<em>${esc(value)}</em>`).join('')}</span></div>` : '';
+  }
+  function renderLoreCardHtml(pack, card, ui) {
+    const fields = loreCardContentFields(card), open = ui.openCards?.[card.id] === true;
+    const quote = card.type === '핵심 대사' && fields.exactQuote ? `<blockquote class="rpcm-lore-quote">${esc(fields.exactQuote)}</blockquote><div class="rpcm-lore-quote-meta">${[['화자',fields.speaker],['상대',fields.target],['맥락',fields.context],['장소',fields.location],['날짜',fields.date]].filter(([,value]) => value).map(([label,value]) => `<span><strong>${label}</strong>${esc(value)}</span>`).join('')}</div>` : '';
+    const detail = open ? `<div class="rpcm-lore-cardbody">${quote}${fields.full ? `<p class="rpcm-lore-full">${esc(fields.full)}</p>` : ''}${fields.compact && fields.compact !== fields.full ? `<div class="rpcm-lore-density"><strong>짧은 요약</strong><span>${esc(fields.compact)}</span></div>` : ''}${fields.micro && fields.micro !== fields.compact ? `<div class="rpcm-lore-density"><strong>한 줄</strong><span>${esc(fields.micro)}</span></div>` : ''}${loreMetaChips('키워드',fields.triggers)}${loreMetaChips('별칭',fields.aliases)}${loreMetaChips('연결 대상',fields.entities)}<div class="rpcm-lore-card-actions"><button type="button" class="rpcm-btn secondary" data-lore-card-edit="${esc(card.id)}">편집</button><details class="rpcm-lore-actions-menu"><summary>⋯ 관리</summary><div><button type="button" class="rpcm-btn secondary" data-utility-shortcut="related" data-utility-ref="lore:${esc(card.id)}">관련 기억</button><button type="button" class="rpcm-btn secondary" data-utility-shortcut="source" data-utility-ref="lore:${esc(card.id)}">근거 찾기</button><button type="button" class="rpcm-btn secondary" data-utility-shortcut="trigger" data-utility-ref="lore:${esc(card.id)}">AI 감지어</button><label>주입 방식<select data-lore-mode="${esc(card.id)}" aria-label="${esc(card.title || '자료 카드')} 주입 방식">${LORE_MODES.map(mode => `<option value="${mode}" ${card.mode === mode ? 'selected' : ''}>${loreModeLabel(mode)}</option>`).join('')}</select></label>${card.mode === 'manual' ? `<label class="rpcm-lore-manual-select"><input type="checkbox" data-lore-manual-select="${esc(card.id)}" ${card.manualSelected === false ? '' : 'checked'}> 현재 주입 선택</label>` : ''}<label><input type="checkbox" data-lore-card-enabled="${esc(card.id)}" ${card.enabled === false ? '' : 'checked'}> 카드 사용</label><button type="button" class="rpcm-btn warn" data-lore-card-delete="${esc(card.id)}">삭제</button></div></details></div></div>` : '';
+    return `<details class="rpcm-lore-card" data-key="lore-card-${esc(card.id)}" data-lore-card="${esc(card.id)}" ${open ? 'open' : ''}><summary class="rpcm-lore-card-head"><span class="rpcm-lore-card-title"><strong>${esc(card.title || '제목 없음')}</strong><small>${esc(loreTypeLabel(card.type))} · ${loreCardUserLocked(card,pack) ? '사용자 보호' : 'AI 관리'}</small></span><span class="rpcm-lore-mode-badge">${esc(loreCardBadge(card,pack))}</span><span class="rpcm-lore-chevron" aria-hidden="true">⌄</span></summary>${detail}</details>`;
+  }
+
+  function renderLoreListHtml(room) {
+    const ui = loreUiFor(room), query = ui.search.trim().toLocaleLowerCase('ko-KR');
+    const packs = lorePacksFor(room).filter(pack => !ui.pack || pack.id === ui.pack);
+    if (!packs.length) return '<div class="rpcm-lore-empty">자료팩이 없습니다. 방 전용 진행 자료나 일반 참고 자료팩을 만들어 주세요.</div>';
+    const html = packs.map(pack => {
+      const cards = (Array.isArray(pack.cards) ? pack.cards : []).filter(card => {
+        if (ui.type && card.type !== ui.type) return false;
+        if (ui.mode && card.mode !== ui.mode) return false;
+        const fields = loreCardContentFields(card);
+        return !query || [pack.title,fields.title,fields.full,fields.compact,fields.micro,fields.exactQuote,fields.speaker,fields.target,fields.location,fields.date,...fields.aliases,...fields.triggers,...fields.entities].join(' ').toLocaleLowerCase('ko-KR').includes(query);
+      });
+      if (!cards.length && (query || ui.type || ui.mode)) return '';
+      const open = ui.openPacks?.[pack.id] ?? (pack.kind === 'room' && !pack.copiedFrom);
+      const groups = new Map();
+      if (open || query) for (const card of cards) { const type = LORE_TYPES.includes(card.type) ? card.type : '기타'; if (!groups.has(type)) groups.set(type,[]); groups.get(type).push(card); }
+      const modeStats = lorePackModeStats(pack);
+      const body = open || query ? `<div class="rpcm-lore-packbody"><div class="rpcm-lore-pack-actions"><div class="rpcm-lore-pack-state"><label><input type="checkbox" data-lore-pack-enabled="${esc(pack.id)}" ${pack.enabled === false ? '' : 'checked'}> 팩 사용</label><span class="rpcm-lore-pack-mode-summary">자동 ${modeStats.auto}/${modeStats.total} · 항상 ${modeStats.always} · 직접 ${modeStats.manual} · 꺼짐 ${modeStats.off}</span></div><div class="rpcm-lore-pack-tools"><button type="button" class="rpcm-btn secondary" data-lore-card-import="${esc(pack.id)}">카드 추가</button><details class="rpcm-update-more rpcm-lore-bulk-menu"><summary>주입 설정</summary><div class="rpcm-update-more-actions"><label>이 팩의 전체 카드<select data-lore-pack-bulk-mode="${esc(pack.id)}" aria-label="${esc(pack.title || '자료팩')} 전체 주입 방식"><option value="">방식 선택…</option><option value="auto">감지어 자동</option><option value="always">항상 주입</option><option value="manual">직접 선택</option><option value="off">사용 안 함</option></select></label><button type="button" class="rpcm-btn secondary" data-lore-pack-bulk-apply="${esc(pack.id)}">선택한 방식 일괄 적용</button></div></details><details class="rpcm-update-more"><summary>팩 관리</summary><div class="rpcm-update-more-actions"><button type="button" class="rpcm-btn secondary" data-lore-pack-edit="${esc(pack.id)}">팩 편집</button><button type="button" class="rpcm-btn secondary" data-lore-card-add="${esc(pack.id)}">직접 작성</button><div class="rpcm-lore-menu-separator" role="separator"></div><button type="button" class="rpcm-btn warn" data-lore-pack-delete="${esc(pack.id)}">팩 삭제</button></div></details></div></div><div class="rpcm-lore-cards">${[...groups].sort(([a],[b]) => LORE_TYPE_ORDER.indexOf(a)-LORE_TYPE_ORDER.indexOf(b)).map(([type,list]) => `<section class="rpcm-lore-type-group" data-key="lore-type-${esc(pack.id)}-${esc(type)}"><div class="rpcm-lore-type-head"><strong>${esc(loreTypeLabel(type))}</strong><small>${list.length}개</small></div>${list.map(card => renderLoreCardHtml(pack,card,ui)).join('')}</section>`).join('') || '<div class="rpcm-lore-empty">표시할 카드가 없습니다.</div>'}</div></div>` : '';
+      return `<details class="rpcm-lore-pack" data-key="lore-pack-${esc(pack.id)}" data-lore-pack="${esc(pack.id)}" ${open || query ? 'open' : ''}><summary><span><strong>${esc(pack.title || '제목 없는 자료팩')}</strong><small>${pack.kind === 'room' ? '방 전용 진행 자료' : '일반 참고 자료팩'} · ${cards.length}/${(pack.cards || []).length}카드 · ${lorePackManagedBy(pack) === 'ai' ? 'AI 관리' : '사용자 관리'}</small></span><span class="rpcm-lore-pack-status">${pack.enabled === false ? '사용 안 함' : `사용 중 · 자동 ${modeStats.auto}/${modeStats.total}`}</span><span class="rpcm-lore-chevron" aria-hidden="true">⌄</span></summary>${body}</details>`;
+    }).join('');
+    return html || '<div class="rpcm-lore-empty">검색 결과가 없습니다.</div>';
+  }
+
+  function renderLoreSectionHtml(room) {
+    const ui = loreUiFor(room), packs = lorePacksFor(room);
+    const budget = loreBudgetInfoFor(room);
+    return `<section class="rpcm-section rpcm-lore-section" id="rpcm-section-lore"><div class="rpcm-section-head"><div><div class="rpcm-section-title">📚 자료집</div><div class="rpcm-section-desc">세계관·장소·조직·규칙 등을 이 방에서 관리하고 RP Manager가 직접 주입합니다. 새 팩은 사용 ON, 새 카드는 감지어 자동입니다. 원치 않으면 팩 사용이나 카드 주입을 끄세요.</div></div><div class="rpcm-charlib-actions rpcm-lore-toolbar"><button type="button" class="rpcm-add-btn rpcm-add-primary" id="rpcm-lore-add-pack">＋ 자료팩</button><button type="button" class="rpcm-add-btn" id="rpcm-lore-card-import">카드 추가</button><details class="rpcm-update-more"><summary>가져오기</summary><div class="rpcm-update-more-actions"><button type="button" class="rpcm-add-btn" id="rpcm-lore-copy">다른 방에서 선택 복사</button><button type="button" class="rpcm-add-btn" id="rpcm-lore-direct-paste">JSON 붙여넣기</button><button type="button" class="rpcm-add-btn" id="rpcm-lore-legacy">기존 로어 원문 이전</button></div></details><details class="rpcm-update-more"><summary>관리</summary><div class="rpcm-update-more-actions"><button type="button" class="rpcm-add-btn" id="rpcm-lore-json-export">자료집 JSON 내보내기</button><button type="button" class="rpcm-add-btn" id="rpcm-lore-guide">지침</button><button type="button" class="rpcm-add-btn" data-utility-shortcut="loreStructure">AI 구조 점검</button></div></details></div></div><div class="rpcm-lore-status">팩 ${packs.length}개 · 카드 ${packs.reduce((n, pack) => n + (pack.cards || []).length, 0)}개 · 주입 상한 ${formatCount(LORE_INJECTION_CHAR_LIMIT)}자/${LORE_INJECTION_CARD_LIMIT}카드 · 핵심 기억 먼저 배치${budget?.candidates ? ` · 후보 ${budget.candidates}개 중 ${budget.included}개 반영${budget.candidates > budget.included ? ' (나머지는 용량 상한으로 제외)' : ''}` : ''} · ${room.pending ? '변경 시 현재 주입 반영 시도' : '다음 주입에 반영'}</div><div class="rpcm-lore-filters"><input id="rpcm-lore-search" type="search" value="${esc(ui.search)}" placeholder="제목·키워드·연결 대상·내용 검색" aria-label="자료집 검색"><select id="rpcm-lore-filter-pack" aria-label="자료팩 필터"><option value="">모든 팩</option>${packs.map(pack => `<option value="${esc(pack.id)}" ${ui.pack === pack.id ? 'selected' : ''}>${esc(pack.title || '제목 없는 팩')}</option>`).join('')}</select><select id="rpcm-lore-filter-type" aria-label="자료 유형 필터"><option value="">모든 유형</option>${LORE_TYPES.map(type => `<option value="${esc(type)}" ${ui.type === type ? 'selected' : ''}>${esc(type)}</option>`).join('')}</select><select id="rpcm-lore-filter-mode" aria-label="주입 방식 필터"><option value="">모든 주입 방식</option>${LORE_MODES.map(mode => `<option value="${mode}" ${ui.mode === mode ? 'selected' : ''}>${loreModeLabel(mode)}</option>`).join('')}</select></div><div id="rpcm-lore-list">${renderLoreListHtml(room)}</div></section>`;
+  }
+
+  function lorePortableExport(room) {
+    return {
+      format:'wish-rp-manager-lore-portable', version:2, exportedAt:nowIso(),
+      packs:lorePacksFor(room).map(pack => ({
+        id:String(pack.id || ''), title:String(pack.title || ''), kind:String(pack.kind || 'reference'), enabled:pack.enabled !== false,
+        managedBy:lorePackManagedBy(pack), copiedFrom:pack.copiedFrom || null, createdAt:pack.createdAt || '', updatedAt:pack.updatedAt || '',
+        cards:(pack.cards || []).map(card => ({
+          id:String(card.id || ''), ...loreCardContentFields(card), sourceTurnKey:String(card.sourceTurnKey || ''), evidence:String(card.evidence || ''),
+          mode:LORE_MODES.includes(card.mode) ? card.mode : 'off', manualSelected:card.manualSelected !== false, enabled:card.enabled !== false,
+          managedBy:loreCardManagedBy(card,pack), userLocked:loreCardUserLocked(card,pack), createdAt:card.createdAt || '', updatedAt:card.updatedAt || '',
+        })),
+      })),
+    };
+  }
+
+  function openLoreGuideDialog(room) {
+    const slot=manualLoreGuideSlot(room);
+    const dialog=loreDialog('자료집 지침 · '+(slot.source.includes('사용자')?'사용자 수정본':'기본 v2.0.3'),
+      `<p>기본값과 수동 업데이트 패킷은 최종 자료집 v2.0.3 전문을 공유합니다. 이 방의 사용자 수정본은 별도로 유지됩니다.</p><label>지침 전문<textarea name="guide" rows="19" spellcheck="false">${esc(slot.text)}</textarea></label><div class="rpcm-tool-actions"><button type="button" class="rpcm-btn secondary" data-lore-guide-copy>내용 복사</button><button type="button" class="rpcm-btn secondary" data-lore-guide-reset>기본값 복원</button></div>`, async form => {
+        const text=form.elements.guide.value;
+        if (!text.trim()) throw new Error('빈 지침은 저장할 수 없습니다.');
+        const candidate=structuredClone(room);
+        candidate.manualUpdateGuides={...(candidate.manualUpdateGuides || {})};
+        if (text === MANUAL_LORE_GUIDE_V2) delete candidate.manualUpdateGuides.lore;
+        else candidate.manualUpdateGuides.lore=text;
+        await saveRoom(candidate);
+        rpcmReplaceRoomObject(room,candidate);
+        manualUpdateRuntime.packets.delete(manualPacketKey(room,'lore'));
+        renderModalIfOpen();
+      });
+    dialog.querySelector('[data-lore-guide-copy]').onclick=async()=>{
+      try{if(!await copyPlainText(externalChatTitleInstruction('lore')+'\n\n'+dialog.querySelector('[name="guide"]').value))throw new Error('복사하지 못했습니다.');notify('자료집 지침을 복사했습니다.','success');}
+      catch(error){notify(error.message,'error');}
+    };
+    dialog.querySelector('[data-lore-guide-reset]').onclick=()=>{dialog.querySelector('[name="guide"]').value=MANUAL_LORE_GUIDE_V2;notify('기본 v2.0.3 본문을 불러왔습니다. 저장을 눌러 확정하세요.','success');};
+  }
+
+  async function commitLoreMutation(room, mutate) {
+    const oldPacks = JSON.parse(JSON.stringify(lorePacksFor(room)));
+    const pendingBefore=room.pending?rpcmRoomClone(room.pending):null;
+    const oldPending = room.pending ? clonePendingItems(room.pending.items) : null;
+    let carrier=room.pending?'로컬 저장 완료 · 현재 주입 변경 대상 없음':'로컬 저장 완료 · 다음 주입부터 최신 자료집 사용';
+    if (!Array.isArray(room.lorePacks)) room.lorePacks = [];
+    let attemptedPacks=null;
+    try { mutate(); attemptedPacks=rpcmRoomClone(room.lorePacks);await saveRoom(room); }
+    catch (error) { room.lorePacks=attemptedPacks?rpcmKeepLateEdits(attemptedPacks,room.lorePacks,oldPacks):oldPacks;throw error; }
+    if (room.pending) {
+      const signature = items => JSON.stringify((items || []).filter(item => item.group === 'lore').map(item => [item.slotId,item.title,item.content,item.loreMode,item.matchedAlias,item.recallReason]));
+      const before = signature(oldPending);
+      refreshPendingLoreItems(room);
+      const attemptedPending=rpcmRoomClone(room.pending);
+      try { if (signature(room.pending.items) !== before){const synced=await syncPendingCarrier(room, 'lore-edit');carrier=synced?.suspended||room.pending?.reanchorRetry?'로컬 저장 완료 · 현재 주입 반영 대기':'로컬 저장 완료 · 현재 주입 최신 자료집 반영';} }
+      catch (error) {
+        if(rpcmRollbackDesiredPending(room,pendingBefore,attemptedPending))await saveRoom(room).catch(()=>{});
+        carrier=`로컬 저장 완료 · 현재 주입 반영 실패: ${error.message}`;
+        notify(`자료집은 로컬 저장됨 · 현재 주입 반영 실패: ${error.message}`, 'error', 6500);
+      }
+    }
+    const section = state.modal?.querySelector('#rpcm-section-lore');
+    if (section && state.currentRoom === room) {
+      rpcmPatchHtml(section.querySelector('#rpcm-lore-list'), renderLoreListHtml(room));
+      const fresh = document.createElement('template'); fresh.innerHTML = renderLoreSectionHtml(room);
+      const nextStatus = fresh.content.querySelector('.rpcm-lore-status');
+      const status = section.querySelector('.rpcm-lore-status');
+      if (status && nextStatus) status.textContent = nextStatus.textContent;
+      for (const id of ['rpcm-lore-search','rpcm-lore-filter-pack','rpcm-lore-filter-type','rpcm-lore-filter-mode']) {
+        const live = section.querySelector('#' + id), desired = fresh.content.querySelector('#' + id);
+        if (live && desired && document.activeElement !== live) live.value = desired.value;
+      }
+      state.capacityUiRefresh?.();
+      refreshLoreOverviewStatus(state.modal, room);
+    } else renderModalIfOpen();
+    return {carrier};
+  }
+
+  function loreDialog(title, body, onSave) {
+    document.querySelector('#rpcm-lore-dialog-backdrop')?.remove();
+    const backdrop = document.createElement('div');
+    backdrop.id = 'rpcm-lore-dialog-backdrop';
+    backdrop.innerHTML = `<div class="rpcm-lore-dialog" role="dialog" aria-modal="true" aria-label="${esc(title)}"><header><strong>${esc(title)}</strong><button type="button" class="rpcm-lore-close" aria-label="닫기" data-rpcm-close="icon">✕</button></header><form><div class="rpcm-lore-dialog-body">${body}</div><footer><button type="button" class="rpcm-btn secondary rpcm-lore-cancel">취소</button><button type="submit" class="rpcm-btn primary">저장</button></footer></form></div>`;
+    document.body.appendChild(backdrop);
+    const close = () => backdrop.remove();
+    backdrop.querySelector('.rpcm-lore-close').onclick = close;
+    backdrop.querySelector('.rpcm-lore-cancel').onclick = close;
+    backdrop.onclick = event => { if (event.target === backdrop) close(); };
+    backdrop.onkeydown = event => { if (event.key === 'Escape') close(); };
+    backdrop.querySelector('form').onsubmit = async event => {
+      event.preventDefault();
+      const button = backdrop.querySelector('[type="submit"]'); button.disabled = true;
+      try { await onSave(backdrop.querySelector('form')); close(); notify('자료집 로컬 저장 완료', 'success'); }
+      catch (error) { notify(`자료집 저장 실패: ${error.message}`, 'error'); button.disabled = false; }
+    };
+    backdrop.querySelector('input,textarea,select')?.focus();
+    return backdrop;
+  }
+
+  function openLorePackEditor(room, pack = null) {
+    loreDialog(pack ? '자료팩 편집' : '자료팩 만들기', `<label>자료팩 이름<input name="title" maxlength="120" required value="${esc(pack?.title || '')}" placeholder="예: 현재 방의 진행 자료"></label><label>자료팩 종류<select name="kind"><option value="room" ${pack?.kind === 'room' ? 'selected' : ''}>방 전용 진행형 자료</option><option value="reference" ${pack?.kind !== 'room' ? 'selected' : ''}>일반 참고 자료팩</option></select></label><p>각 방에 독립 저장됩니다. 다른 방 자료는 선택 복사로 가져올 수 있습니다.${pack && lorePackManagedBy(pack) === 'ai' ? ' AI 팩의 이름·종류를 직접 바꾸면 사용자 관리로 전환됩니다.' : ''}</p>`, async form => {
+      const title = form.elements.title.value.trim(); if (!title) throw new Error('자료팩 이름을 입력해 주세요.');
+      if (!pack) Object.assign(loreUiFor(room), { search:'', type:'', mode:'', pack:'' });
+      await commitLoreMutation(room, () => {
+        if (pack) { const live = lorePacksFor(room).find(item => item.id === pack.id); if (!live) throw new Error('편집할 자료팩을 찾지 못했습니다.'); if (live.title !== title || live.kind !== form.elements.kind.value) live.managedBy = 'user'; live.title = title; live.kind = form.elements.kind.value; live.updatedAt = nowIso(); }
+        else room.lorePacks.push({ id:makeLoreId('pack'), title, kind:form.elements.kind.value, enabled:true, managedBy:'user', cards:[], createdAt:nowIso(), updatedAt:nowIso() });
+      });
+    });
+  }
+
+  async function assertLoreEditedQuote(room, fields) {
+    if (fields.type !== '핵심 대사') return;
+    if (!fields.exactQuote || !fields.speaker || !fields.context || !fields.sourceTurnKey || !fields.evidence) throw new Error('핵심 대사는 원문 대사·화자·맥락·RP 턴 키·근거가 필요합니다.');
+    const turns = await loadManualCompletedTurns(room);
+    const turn = turns.find(item => String(item.key) === fields.sourceTurnKey);
+    if (!turn || !String(turn.text || '').includes(fields.exactQuote)) throw new Error('원문 대사를 지정한 RP 턴에서 연속해서 찾지 못했습니다.');
+    const normalize = value => String(value).replace(/\[(?:USER|AI|ASSISTANT)\]/g,'').replace(/\s+/g,' ').trim();
+    if (fields.evidence.length < 2 || fields.evidence.length > 300 || !normalize(turn.text).includes(normalize(fields.evidence))) throw new Error('근거를 지정한 RP 턴에서 확인할 수 없습니다.');
+  }
+
+  function openLoreCardEditor(room, pack, card = null, legacyText = '') {
+    const split = values => [...new Set(String(values || '').split(/[,，\n]/).map(value => value.trim()).filter(Boolean))];
+    const current = loreCardContentFields(card || { content:legacyText });
+    const dialog = loreDialog(card ? '자료 카드 편집' : '자료 카드 만들기', `<label>제목<input name="title" maxlength="160" required value="${esc(card?.title || '')}"></label><label>유형<select name="type">${LORE_TYPES.map(type => `<option value="${esc(type)}" ${card?.type === type ? 'selected' : ''}>${esc(type)}</option>`).join('')}</select></label><div class="rpcm-lore-two"><label>별칭 · 쉼표 또는 줄바꿈<textarea name="aliases" rows="2">${esc(current.aliases.join(', '))}</textarea></label><label>자동 감지어 · 쉼표 또는 줄바꿈<textarea name="triggers" rows="2">${esc(current.triggers.join(', '))}</textarea></label></div><label>연결 대상 · 인물/장소/물건 정본명<textarea name="entities" rows="2">${esc(current.entities.join(', '))}</textarea></label><label>전체 내용 · full<textarea name="full" rows="9">${esc(current.full)}</textarea></label><label>짧은 요약 · compact<textarea name="compact" rows="3">${esc(current.compact)}</textarea></label><label>한 줄 · micro<textarea name="micro" rows="2">${esc(card?.micro ?? current.compact)}</textarea></label><details class="rpcm-lore-editor-source" ${card?.type === '핵심 대사' ? 'open' : ''}><summary>핵심 대사와 원문 근거</summary><div class="rpcm-lore-dialog-body"><label>원문 대사 · exactQuote<textarea name="exactQuote" rows="3">${esc(current.exactQuote)}</textarea></label><div class="rpcm-lore-two"><label>화자<input name="speaker" value="${esc(current.speaker)}"></label><label>상대<input name="target" value="${esc(current.target)}"></label></div><label>장면·상황<input name="context" value="${esc(current.context)}"></label><div class="rpcm-lore-two"><label>장소<input name="location" value="${esc(current.location)}"></label><label>날짜<input name="date" value="${esc(current.date)}"></label></div><label>RP 턴 키<input name="sourceTurnKey" value="${esc(card?.sourceTurnKey || '')}"></label><label>근거 원문<textarea name="evidence" rows="3">${esc(card?.evidence || '')}</textarea></label></div></details><div class="rpcm-lore-two"><label>주입 방식<select name="mode">${LORE_MODES.map(mode => `<option value="${mode}" ${(card?.mode ?? LORE_NEW_CARD_DEFAULTS.mode) === mode ? 'selected' : ''}>${loreModeLabel(mode)}</option>`).join('')}</select></label><label class="rpcm-lore-check"><input type="checkbox" name="enabled" ${card?.enabled === false ? '' : 'checked'}> 카드 사용</label></div><p>자동 감지는 제목·별칭·감지어로만 합니다. 연결 대상은 검색을 돕습니다. AI 관리 카드의 내용을 직접 바꾸면 이후 AI 갱신에서 보호됩니다.</p>`, async form => {
+      const fields = { title:form.elements.title.value.trim(), type:form.elements.type.value, aliases:split(form.elements.aliases.value), triggers:split(form.elements.triggers.value), entities:split(form.elements.entities.value), full:form.elements.full.value.trim(), compact:form.elements.compact.value.trim(), micro:form.elements.micro.value.trim(), exactQuote:form.elements.exactQuote.value.trim(), speaker:form.elements.speaker.value.trim(), target:form.elements.target.value.trim(), context:form.elements.context.value.trim(), location:form.elements.location.value.trim(), date:form.elements.date.value.trim(), sourceTurnKey:form.elements.sourceTurnKey.value.trim(), evidence:form.elements.evidence.value.trim(), mode:form.elements.mode.value, manualSelected:card?.manualSelected !== false, enabled:form.elements.enabled.checked, updatedAt:nowIso() };
+      if (!fields.title || !LORE_TYPES.includes(fields.type)) throw new Error('카드 제목과 유형을 확인해 주세요.');
+      if (!fields.full && !fields.compact) throw new Error('전체 내용 또는 짧은 요약을 입력해 주세요.');
+      for (const name of ['aliases','triggers','entities']) if (fields[name].length > 50 || fields[name].some(value => value.length > 120)) throw new Error(`${name}은 최대 50개, 항목당 120자입니다.`);
+      if (fields.type === '핵심 대사') await assertLoreEditedQuote(room,fields);
+      fields.content = fields.full; fields.summary = fields.compact;
+      if (!fields.micro) fields.micro = fields.compact || fields.full;
+      if (!card) Object.assign(loreUiFor(room), { search:'', type:'', mode:'', pack:pack.id });
+      await commitLoreMutation(room, () => {
+        const livePack = lorePacksFor(room).find(item => item.id === pack.id);
+        if (!livePack) throw new Error('대상 자료팩을 찾지 못했습니다.');
+        if (card) { const liveCard = (livePack.cards || []).find(item => item.id === card.id); if (!liveCard) throw new Error('편집할 카드를 찾지 못했습니다.'); const contentChanged = JSON.stringify(loreCardContentFields(liveCard)) !== JSON.stringify(loreCardContentFields(fields)) || String(liveCard.sourceTurnKey || '') !== fields.sourceTurnKey || String(liveCard.evidence || '') !== fields.evidence; Object.assign(liveCard, fields); if (contentChanged) liveCard.userLocked = true; }
+        else livePack.cards.push({ id:makeLoreId('card'), ...fields, managedBy:'user', userLocked:true, createdAt:nowIso() });
+        livePack.updatedAt = nowIso();
+      });
+    });
+    dialog.querySelector('[name="type"]').addEventListener('change', event => {
+      if (event.target.value === '핵심 대사') dialog.querySelector('.rpcm-lore-editor-source').open = true;
+    });
+  }
+
+
+  function loreImportSplitList(value) {
+    return [...new Set(String(value || '').split(/[,，\n]/).map(item => item.trim()).filter(Boolean))];
+  }
+
+  function loreImportNormalizeCard(raw, label = '자료 카드') {
+    const card = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+    const full = String(card.full ?? card.content ?? '').trim();
+    const compact = String(card.compact ?? card.summary ?? '').trim();
+    const result = {
+      title:String(card.title || '').trim(),
+      type:String(card.type || '').trim(),
+      aliases:Array.isArray(card.aliases) ? card.aliases.map(value => String(value).trim()).filter(Boolean) : loreImportSplitList(card.aliases),
+      triggers:Array.isArray(card.triggers) ? card.triggers.map(value => String(value).trim()).filter(Boolean) : loreImportSplitList(card.triggers),
+      entities:Array.isArray(card.entities) ? card.entities.map(value => String(value).trim()).filter(Boolean) : loreImportSplitList(card.entities),
+      full,
+      compact,
+      micro:String(card.micro ?? (compact || full)).trim(),
+      exactQuote:String(card.exactQuote || '').trim(),
+      speaker:String(card.speaker || '').trim(),
+      target:String(card.target || '').trim(),
+      context:String(card.context || '').trim(),
+      location:String(card.location || '').trim(),
+      date:String(card.date || '').trim(),
+      sourceTurnKey:String(card.sourceTurnKey || '').trim(),
+      evidence:String(card.evidence || '').trim(),
+    };
+    result.aliases = [...new Set(result.aliases)];
+    result.triggers = [...new Set(result.triggers)];
+    result.entities = [...new Set(result.entities)];
+    if (!result.title || result.title.length > 160) throw new Error(`${label}: 제목을 확인해 주세요.`);
+    if (!LORE_TYPES.includes(result.type)) throw new Error(`${label}: 허용되지 않은 유형 '${result.type || '(비어 있음)'}'입니다.`);
+    if (!result.full && !result.compact) throw new Error(`${label}: 전체 내용 또는 짧은 요약이 필요합니다.`);
+    for (const name of ['aliases','triggers','entities']) {
+      if (result[name].length > 50 || result[name].some(value => value.length > 120)) throw new Error(`${label}: ${name}은 최대 50개, 항목당 120자입니다.`);
+    }
+    if (result.type === '핵심 대사' && (!result.exactQuote || !result.speaker || !result.context)) throw new Error(`${label}: 핵심 대사는 exactQuote·speaker·context가 필요합니다.`);
+    return result;
+  }
+
+  function parseLoreLabelCardText(value, label = 'TXT 카드') {
+    const text = String(value || '').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').trim();
+    if (!text) throw new Error(`${label}: 빈 파일입니다.`);
+    const definitions = [
+      ['title', ['제목']],
+      ['type', ['유형']],
+      ['aliases', ['별칭 · 쉼표 또는 줄바꿈','별칭']],
+      ['triggers', ['자동 감지어 · 쉼표 또는 줄바꿈','자동 감지어']],
+      ['entities', ['연결 대상 · 인물/장소/물건 정본명','연결 대상']],
+      ['full', ['전체 내용 · full','전체 내용']],
+      ['compact', ['짧은 요약 · compact','짧은 요약']],
+      ['micro', ['한 줄 · micro','한 줄']],
+      ['exactQuote', ['핵심 대사 · exactQuote','핵심 대사']],
+      ['speaker', ['화자 · speaker','화자']],
+      ['target', ['대상 · target','대상']],
+      ['context', ['맥락 · context','맥락']],
+      ['location', ['장소 · location','장소']],
+      ['date', ['날짜 · date','날짜']],
+      ['sourceTurnKey', ['원문 턴 키 · sourceTurnKey','원문 턴 키']],
+      ['evidence', ['원문 근거 · evidence','원문 근거']],
+    ];
+    const aliases = new Map();
+    for (const [key, labels] of definitions) for (const name of labels) aliases.set(String(name).normalize('NFC'), key);
+    const lines = text.split('\n');
+    const buckets = {};
+    let current = '';
+    for (let index = 0; index < lines.length; index += 1) {
+      const rawLine = lines[index];
+      const trimmed = rawLine.trim();
+      const normalized = trimmed
+        .replace(/^#{1,6}\s*/, '')
+        .replace(/^\*\*(.*?)\*\*$/, '$1')
+        .trim()
+        .normalize('NFC');
+      if (!current && index === 0 && /^자료\s*카드\s*만들기\s*·/.test(normalized)) continue;
+      const key = aliases.get(normalized);
+      if (key) {
+        const currentValues = buckets[current] || [];
+        const hasCurrentValue = currentValues.some(value => String(value || '').trim());
+        // title/type은 필수 단일값이다.
+        // 특히 type 값 '핵심 대사'는 뒤쪽 exactQuote 라벨과 문자열이 같으므로,
+        // 아직 값이 없을 때는 라벨이 아니라 현재 필드 값으로 받아야 한다.
+        if (current && ['title','type'].includes(current) && !hasCurrentValue) {
+          buckets[current].push(rawLine);
+          continue;
+        }
+        current = key;
+        if (!buckets[key]) buckets[key] = [];
+        continue;
+      }
+      if (!current) continue;
+      buckets[current].push(rawLine);
+    }
+    const scalar = key => (buckets[key] || []).join('\n').trim();
+    const list = key => loreImportSplitList((buckets[key] || []).join('\n'));
+    return loreImportNormalizeCard({
+      title:scalar('title'), type:scalar('type'), aliases:list('aliases'), triggers:list('triggers'), entities:list('entities'),
+      full:scalar('full'), compact:scalar('compact'), micro:scalar('micro'), exactQuote:scalar('exactQuote'), speaker:scalar('speaker'),
+      target:scalar('target'), context:scalar('context'), location:scalar('location'), date:scalar('date'), sourceTurnKey:scalar('sourceTurnKey'), evidence:scalar('evidence'),
+    }, label);
+  }
+
+  function parseLoreJsonCardText(value, label = 'JSON 카드') {
+    const text = String(value || '').replace(/^\uFEFF/, '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+    let data;
+    try { data = JSON.parse(text); }
+    catch (_) { throw new Error(`${label}: JSON 형식을 읽지 못했습니다.`); }
+    if (data?.outputs?.lore && typeof data.outputs.lore === 'object') data = data.outputs.lore;
+    let cards = [];
+    if (data?.version === 'WISH_LORE_V2' && Array.isArray(data.operations)) cards = data.operations.filter(operation => operation?.op === 'card_upsert');
+    else if (data?.format === 'wish-rp-manager-lore-portable' && Array.isArray(data.packs)) cards = data.packs.flatMap(pack => Array.isArray(pack?.cards) ? pack.cards : []);
+    else if (Array.isArray(data?.cards)) cards = data.cards;
+    else if (Array.isArray(data)) cards = data;
+    else if (data?.card && typeof data.card === 'object') cards = [data.card];
+    else if (data?.title && data?.type) cards = [data];
+    if (!cards.length) throw new Error(`${label}: 가져올 자료 카드를 찾지 못했습니다.`);
+    return cards.map((card, index) => loreImportNormalizeCard(card, `${label} ${index + 1}`));
+  }
+
+  function parseLoreCardFileText(value, label = '카드 파일') {
+    const text = String(value || '').replace(/^\uFEFF/, '').trim();
+    if (!text) throw new Error(`${label}: 빈 파일입니다.`);
+    if (/^[\[{]/.test(text) || /^```(?:json)?/i.test(text)) return parseLoreJsonCardText(text, label);
+    return [parseLoreLabelCardText(text, label)];
+  }
+
+  async function verifyLoreImportedQuote(room, card) {
+    if (card.type !== '핵심 대사' || !card.sourceTurnKey || !card.exactQuote) return { checked:false, ok:true };
+    const turns = await loadManualCompletedTurns(room);
+    const turn = turns.find(item => String(item.key) === card.sourceTurnKey);
+    if (!turn) return { checked:true, ok:false, reason:'지정된 RP 턴을 찾지 못함' };
+    if (!String(turn.text || '').includes(card.exactQuote)) return { checked:true, ok:false, reason:'지정된 RP 턴에서 exactQuote를 찾지 못함' };
+    return { checked:true, ok:true };
+  }
+
+  async function readLoreImportFiles(input) {
+    const files = [...(input?.files || [])];
+    if (!files.length) throw new Error('가져올 TXT 또는 JSON 파일을 선택해 주세요.');
+    const cards = [];
+    for (const file of files) {
+      if (!/\.(?:txt|json)$/i.test(file.name)) throw new Error(`${file.name}: TXT 또는 JSON 파일만 가져올 수 있습니다.`);
+      if (file.size > 800000) throw new Error(`${file.name}: 파일이 너무 큽니다.`);
+      cards.push(...parseLoreCardFileText(await file.text(), file.name));
+    }
+    return cards;
+  }
+
+  async function openLoreCardImportDialog(room, preferredPackId = '') {
+    const packs = lorePacksFor(room);
+    if (!packs.length) {
+      notify('카드를 넣을 자료팩이 없습니다. 먼저 ‘＋ 자료팩’으로 자료팩을 만들어 주세요.', 'warn', 5200);
+      return;
+    }
+    const selectedPack = packs.find(pack => String(pack.id) === String(preferredPackId || '')) || packs[0];
+    const dialog = loreDialog('자료 카드 추가', `<p>ChatGPT·Work 등에서 만든 개별 자료카드 TXT를 그대로 추가할 수 있습니다. 여러 카드를 한 번에 선택해도 됩니다.</p><label>대상 자료팩<select name="pack">${packs.map(pack => `<option value="${esc(pack.id)}" ${selectedPack.id === pack.id ? 'selected' : ''}>${esc(pack.title || '제목 없는 팩')}</option>`).join('')}</select></label><label>개별 카드 파일<input type="file" name="files" accept=".txt,text/plain,.json,application/json" multiple required></label><label>같은 제목·유형 카드가 이미 있을 때<select name="conflict"><option value="skip">중복 건너뛰기</option><option value="replace">기존 카드 내용 교체 · 기존 주입 설정 유지</option><option value="both">둘 다 보관</option></select></label><div class="rpcm-lore-copy-summary" data-lore-import-summary><p>TXT 형식은 ‘제목 / 유형 / 별칭 / 자동 감지어 / 연결 대상 / full / compact / micro / exactQuote / speaker / target / context / location / date / sourceTurnKey / evidence’ 라벨을 읽습니다.</p></div><p>새 카드는 사용자 보호 카드로 저장되고 ‘감지어 자동’으로 시작합니다. 원치 않으면 카드나 팩 사용을 끌 수 있습니다. sourceTurnKey가 있으면 핵심 대사의 exactQuote를 해당 RP 턴에서 확인합니다.</p>`, async form => {
+      const cards = await readLoreImportFiles(form.elements.files);
+      const checks = [];
+      for (const card of cards) checks.push({ card, result:await verifyLoreImportedQuote(room, card) });
+      const failed = checks.filter(item => item.result.checked && !item.result.ok);
+      if (failed.length) throw new Error(`${failed[0].card.title}: ${failed[0].result.reason}`);
+
+      const livePacks = lorePacksFor(room);
+      const targetPack = livePacks.find(pack => pack.id === form.elements.pack.value) || null;
+      if (!targetPack) throw new Error('대상 자료팩을 찾지 못했습니다. 창을 닫고 다시 시도해 주세요.');
+      const conflict = form.elements.conflict.value;
+      let added = 0, replaced = 0, skipped = 0;
+      await commitLoreMutation(room, () => {
+        if (!Array.isArray(targetPack.cards)) targetPack.cards = [];
+        const keyOf = card => `${String(card.title || '').trim().toLocaleLowerCase('ko-KR')}\u0000${String(card.type || '')}`;
+        for (const imported of cards) {
+          const duplicate = targetPack.cards.find(card => keyOf(card) === keyOf(imported));
+          if (duplicate && conflict === 'skip') { skipped += 1; continue; }
+          const fields = { ...imported, content:imported.full, summary:imported.compact };
+          if (duplicate && conflict === 'replace') {
+            const preserved = { id:duplicate.id, mode:LORE_MODES.includes(duplicate.mode) ? duplicate.mode : 'off', manualSelected:duplicate.manualSelected !== false, enabled:duplicate.enabled !== false, createdAt:duplicate.createdAt || nowIso() };
+            Object.assign(duplicate, fields, preserved, { managedBy:'user', userLocked:true, source:'manual-card-file', updatedAt:nowIso() });
+            replaced += 1;
+          } else {
+            targetPack.cards.push({ id:makeLoreId('card'), ...fields, ...LORE_NEW_CARD_DEFAULTS, managedBy:'user', userLocked:true, source:'manual-card-file', createdAt:nowIso(), updatedAt:nowIso() });
+            added += 1;
+          }
+        }
+        targetPack.updatedAt = nowIso();
+        const ui = loreUiFor(room);
+        Object.assign(ui, { search:'', type:'', mode:'', pack:targetPack.id });
+        ui.openPacks[targetPack.id] = true;
+      });
+      notify(`카드 추가 완료 · 추가 ${added}개 · 교체 ${replaced}개 · 중복 건너뜀 ${skipped}개`, 'success', 6000);
+    });
+    const submit = dialog.querySelector('button[type="submit"]');
+    if (submit) submit.textContent = '추가';
+    const fileInput = dialog.querySelector('[name="files"]');
+    const summary = dialog.querySelector('[data-lore-import-summary]');
+    fileInput?.addEventListener('change', async () => {
+      try {
+        const cards = await readLoreImportFiles(fileInput);
+        summary.innerHTML = `<strong>${cards.length}카드 인식</strong><ul>${cards.slice(0, 12).map(card => `<li>${esc(card.type)} · ${esc(card.title)}</li>`).join('')}${cards.length > 12 ? `<li>외 ${cards.length - 12}개</li>` : ''}</ul>`;
+      } catch (error) { summary.innerHTML = `<p>파일 확인 실패 · ${esc(error.message)}</p>`; }
+    });
+  }
+
+  async function openLoreCopyDialog(room) {
+    const sources = (await getAllRooms()).filter(other => String(other.chatId) !== String(room.chatId) && lorePacksFor(other).some(pack => (pack.cards || []).length));
+    if (!sources.length) { notify('자료집 카드가 있는 다른 방이 없습니다.', 'warn'); return; }
+    document.querySelector('#rpcm-lore-copy-backdrop')?.remove();
+    const backdrop = document.createElement('div');
+    backdrop.id = 'rpcm-lore-copy-backdrop';
+    backdrop.innerHTML = `<div class="rpcm-lore-dialog rpcm-lore-copy-dialog" role="dialog" aria-modal="true" aria-label="다른 방 자료집 선택 복사"><header><strong>다른 방 자료집 선택 복사</strong><button type="button" class="rpcm-lore-close" aria-label="닫기" data-rpcm-close="icon">✕</button></header><div class="rpcm-lore-dialog-body"><label>1. 원본 방<select id="rpcm-lore-copy-source"><option value="">원본 방 선택</option>${sources.map(source => `<option value="${esc(source.chatId)}">${esc(rpcmRoomDisplayName(source))}</option>`).join('')}</select></label><div id="rpcm-lore-copy-cards"></div><div id="rpcm-lore-copy-preview"></div></div><footer><button type="button" class="rpcm-btn secondary rpcm-lore-cancel">취소</button><button type="button" class="rpcm-btn secondary" id="rpcm-lore-copy-review" disabled>중복·내용 미리보기</button><button type="button" class="rpcm-btn primary" id="rpcm-lore-copy-save" disabled>독립 사본 저장</button></footer></div>`;
+    document.body.appendChild(backdrop);
+    const close = () => backdrop.remove();
+    backdrop.querySelector('.rpcm-lore-close').onclick = close;
+    backdrop.querySelector('.rpcm-lore-cancel').onclick = close;
+    backdrop.onclick = event => { if (event.target === backdrop) close(); };
+    backdrop.onkeydown = event => { if (event.key === 'Escape') close(); };
+    const sourceSelect = backdrop.querySelector('#rpcm-lore-copy-source');
+    const cardsHost = backdrop.querySelector('#rpcm-lore-copy-cards');
+    const previewHost = backdrop.querySelector('#rpcm-lore-copy-preview');
+    const reviewButton = backdrop.querySelector('#rpcm-lore-copy-review');
+    const saveButton = backdrop.querySelector('#rpcm-lore-copy-save');
+    let reviewed = null;
+    const selected = () => {
+      const source = sources.find(item => String(item.chatId) === sourceSelect.value);
+      const ids = new Set([...cardsHost.querySelectorAll('[data-lore-copy-card]:checked')].map(node => node.dataset.loreCopyCard));
+      const packs = lorePacksFor(source).map(pack => ({ pack, cards:(pack.cards || []).filter(card => ids.has(card.id)) })).filter(item => item.cards.length);
+      return { source, packs };
+    };
+    sourceSelect.onchange = () => {
+      reviewed = null; saveButton.disabled = true; previewHost.innerHTML = '';
+      const source = sources.find(item => String(item.chatId) === sourceSelect.value);
+      cardsHost.innerHTML = source ? `<p>2. 팩과 카드를 고르세요. 상세 내용을 펼쳐 확인할 수 있습니다.</p>${lorePacksFor(source).map(pack => `<details class="rpcm-lore-copy-pack" open><summary>${esc(pack.title || '제목 없는 팩')} · ${(pack.cards || []).length}카드</summary><button type="button" class="rpcm-btn secondary" data-lore-copy-all="${esc(pack.id)}">이 팩 모두 선택</button>${(pack.cards || []).map(card => `<label class="rpcm-lore-copy-row"><input type="checkbox" data-lore-copy-card="${esc(card.id)}"><span><strong>${esc(card.title || '제목 없음')}</strong><small>${esc(card.type || '기타')} · ${esc(loreModeLabel(card.mode))}</small></span></label><details class="rpcm-lore-copy-detail"><summary>내용 확인</summary><pre>${esc(loreCardFullText(card))}</pre></details>`).join('')}</details>`).join('')}` : '';
+      reviewButton.disabled = true;
+    };
+    cardsHost.onchange = () => { reviewed = null; saveButton.disabled = true; previewHost.innerHTML = ''; reviewButton.disabled = !selected().packs.length; };
+    cardsHost.onclick = event => {
+      const button = event.target.closest('[data-lore-copy-all]'); if (!button) return;
+      const { source } = selected(); const pack = lorePacksFor(source).find(item => item.id === button.dataset.loreCopyAll);
+      for (const card of pack?.cards || []) { const check = [...cardsHost.querySelectorAll('[data-lore-copy-card]')].find(node => node.dataset.loreCopyCard === card.id); if (check) check.checked = true; }
+      cardsHost.dispatchEvent(new Event('change', { bubbles:true }));
+    };
+    reviewButton.onclick = () => {
+      const choice = selected(); if (!choice.packs.length) return;
+      const existing = lorePacksFor(room).flatMap(pack => pack.cards || []);
+      const conflicts = choice.packs.flatMap(({ pack, cards }) => cards.map(card => ({ pack, card, duplicate:existing.find(other => String(other.title || '').trim().toLocaleLowerCase('ko-KR') === String(card.title || '').trim().toLocaleLowerCase('ko-KR') && other.type === card.type) }))).filter(item => item.duplicate);
+      reviewed = { sourceId:String(choice.source.chatId), cardIds:choice.packs.flatMap(item => item.cards.map(card => card.id)), conflicts };
+      previewHost.innerHTML = `<div class="rpcm-lore-copy-summary"><strong>3. 중복·충돌 미리보기</strong><p>${choice.packs.length}팩 · ${reviewed.cardIds.length}카드 선택 · 같은 제목/유형 ${conflicts.length}건</p>${conflicts.length ? `<ul>${conflicts.map(item => `<li>${esc(item.pack.title)} / ${esc(item.card.title)} · ${JSON.stringify(loreCardContentFields(item.card)) === JSON.stringify(loreCardContentFields(item.duplicate)) ? '내용 동일' : '내용 차이 있음'}</li>`).join('')}</ul><label>동명 카드 처리<select id="rpcm-lore-copy-conflict"><option value="skip">중복 건너뛰기</option><option value="both">독립 사본으로 함께 보관</option></select></label>` : '<p>동명 카드가 없습니다.</p>'}<p>복사본은 새 ID로 저장하며 팩은 비활성 상태로 시작합니다. 원본과 자동 동기화하지 않습니다.</p></div>`;
+      saveButton.disabled = false;
+    };
+    saveButton.onclick = async () => {
+      if (!reviewed) return;
+      const choice = selected();
+      if (String(choice.source?.chatId || '') !== reviewed.sourceId || choice.packs.flatMap(item => item.cards.map(card => card.id)).join('|') !== reviewed.cardIds.join('|')) { notify('선택이 바뀌었습니다. 미리보기를 다시 확인해 주세요.', 'warn'); saveButton.disabled = true; return; }
+      const skip = backdrop.querySelector('#rpcm-lore-copy-conflict')?.value !== 'both';
+      const duplicateIds = new Set(reviewed.conflicts.map(item => item.card.id));
+      const copies = choice.packs.map(({ pack, cards }) => ({ id:makeLoreId('pack'), title:String(pack.title || '복사한 자료팩'), kind:pack.kind === 'room' ? 'room' : 'reference', enabled:false, createdAt:nowIso(), updatedAt:nowIso(), copiedFrom:{ roomId:String(choice.source.chatId), packId:String(pack.id) }, managedBy:'user', cards:cards.filter(card => !skip || !duplicateIds.has(card.id)).map(card => ({ ...JSON.parse(JSON.stringify(card)), id:makeLoreId('card'), managedBy:'user', userLocked:true, createdAt:nowIso(), updatedAt:nowIso() })) })).filter(pack => pack.cards.length);
+      if (!copies.length) { notify('중복을 제외하면 복사할 카드가 없습니다.', 'warn'); return; }
+      saveButton.disabled = true;
+      try { Object.assign(loreUiFor(room), { search:'', type:'', mode:'', pack:'' }); await commitLoreMutation(room, () => { room.lorePacks = [...lorePacksFor(room), ...copies]; }); close(); notify(`자료집 ${copies.length}팩 · ${copies.reduce((n, pack) => n + pack.cards.length, 0)}카드를 독립 사본으로 저장했습니다.`, 'success'); }
+      catch (error) { notify(`자료집 복사 실패: ${error.message}`, 'error'); saveButton.disabled = false; }
+    };
+    sourceSelect.focus();
+  }
+
+  function bindLoreSection(overlay, room) {
+    const section = overlay.querySelector('#rpcm-section-lore');
+    if (!section || section.dataset.rpcmLazy === 'true' || section.dataset.rpcmLoreBound === 'true') return;
+    section.dataset.rpcmLoreBound = 'true';
+    bindManualMoreMenus(overlay);
+    const redraw = () => { const list = section.querySelector('#rpcm-lore-list'); if (list) rpcmPatchHtml(list, renderLoreListHtml(room)); bindManualMoreMenus(overlay); };
+    section.querySelector('#rpcm-lore-search').oninput = event => { loreUiFor(room).search = event.target.value; redraw(); };
+    for (const [id, field] of [['rpcm-lore-filter-pack','pack'],['rpcm-lore-filter-type','type'],['rpcm-lore-filter-mode','mode']]) section.querySelector('#' + id).onchange = event => { loreUiFor(room)[field] = event.target.value; redraw(); };
+    section.querySelector('#rpcm-lore-add-pack').onclick = () => openLorePackEditor(room);
+    section.querySelector('#rpcm-lore-card-import').onclick = () => openLoreCardImportDialog(room).catch(error => notify(`카드 추가 실패: ${error.message}`, 'error'));
+    section.querySelector('#rpcm-lore-copy').onclick = () => openLoreCopyDialog(room).catch(error => notify(`자료집 복사 화면 실패: ${error.message}`, 'error'));
+    section.querySelector('#rpcm-lore-direct-paste').onclick=()=>rpcmDirectPasteDialog('자료집 · JSON 붙여넣기','결과 가져오기가 실패했을 때 쓰는 복구용 증분 반영입니다. WISH_LORE_V2의 현재 P/C REF를 기준으로 적용하며 사용자 보호 카드는 건드리지 않습니다. sourceTurnKey 원문 재검증과 체크포인트 이동은 하지 않습니다.','[[WISH_LORE_V2]]\n{\"version\":\"WISH_LORE_V2\",\"operations\":[...]}\n[[/WISH_LORE_V2]]',()=>JSON.stringify({version:'WISH_LORE_V2',operations:[]},null,2),value=>prepareDirectLorePaste(room,value),prepared=>applyDirectLorePaste(room,prepared));
+    section.querySelector('#rpcm-lore-json-export').onclick = () => downloadText(JSON.stringify(lorePortableExport(room),null,2), '자료집_내보내기.json');
+    section.querySelector('#rpcm-lore-guide').onclick = () => openLoreGuideDialog(room);
+    section.querySelector('#rpcm-lore-legacy').onclick = () => {
+      const packs = lorePacksFor(room);
+      if (!packs.length) { notify('먼저 자료팩을 하나 만들어 주세요.', 'warn'); return; }
+      loreDialog('기존 로어 원문 수동 이전', `<p>외부 로어 저장소는 읽거나 삭제하지 않습니다. 기존 로어에서 복사한 원문을 붙여넣고, 대상 팩을 선택하세요. 새 카드는 ‘감지어 자동’으로 시작합니다. 원치 않으면 카드나 팩 사용을 끌 수 있습니다.</p><label>대상 팩<select name="pack">${packs.map(pack => `<option value="${esc(pack.id)}">${esc(pack.title)}</option>`).join('')}</select></label><label>카드 제목<input name="title" required placeholder="원본 자료의 제목"></label><label>원문<textarea name="content" rows="15" required></textarea></label>`, async form => {
+        const pack = lorePacksFor(room).find(item => item.id === form.elements.pack.value);
+        if (!pack) throw new Error('대상 팩이 없습니다.');
+        const title = form.elements.title.value.trim(), content = form.elements.content.value.trim();
+        if (!title || !content) throw new Error('제목과 원문을 입력해 주세요.');
+        await commitLoreMutation(room, () => pack.cards.push({ id:makeLoreId('card'), type:'기타', title, aliases:[], triggers:[], summary:'', content, ...LORE_NEW_CARD_DEFAULTS, managedBy:'user', userLocked:true, createdAt:nowIso(), updatedAt:nowIso(), source:'manual-legacy-lore' }));
+      });
+    };
+    section.addEventListener('toggle', event => {
+      const pack = event.target.closest?.('[data-lore-pack]');
+      if (!pack) return;
+      const ui = loreUiFor(room);
+      if (event.target === pack) {
+        const item = lorePacksFor(room).find(value => String(value.id) === pack.dataset.lorePack);
+        const expected = !!ui.search.trim() || (ui.openPacks[pack.dataset.lorePack] ?? (item?.kind === 'room' && !item?.copiedFrom));
+        if (pack.open === expected) return;
+        ui.openPacks[pack.dataset.lorePack] = pack.open; redraw();
+      }
+      else if (event.target.matches?.('.rpcm-lore-card')) {
+        const id = event.target.dataset.loreCard;
+        if (event.target.open === (ui.openCards[id] === true)) return;
+        ui.openCards[id] = event.target.open; redraw();
+      }
+    }, true);
+    section.addEventListener('click', async event => {
+      const button = event.target.closest('button[data-lore-pack-bulk-apply]');
+      if (!button) return;
+      event.preventDefault();
+      event.stopPropagation();
+
+      const packNode = button.closest('[data-lore-pack]');
+      const packId = button.dataset.lorePackBulkApply || packNode?.dataset.lorePack;
+      const pack = lorePacksFor(room).find(item => String(item.id) === String(packId));
+      if (!pack) { notify('자료팩을 찾지 못했습니다.', 'error'); return; }
+
+      const select = packNode?.querySelector(`[data-lore-pack-bulk-mode="${CSS.escape(String(packId))}"]`);
+      const mode = String(select?.value || '');
+      if (!LORE_MODES.includes(mode)) { notify('적용할 전체 주입 방식을 선택해 주세요.', 'warn'); select?.focus(); return; }
+
+      const count = (pack.cards || []).length;
+      if (!count) { notify('이 자료팩에는 카드가 없습니다.', 'warn'); return; }
+
+      const label = loreModeLabel(mode);
+      const detail = mode === 'auto'
+        ? `카드 ${count}개를 모두 켜고 ‘감지어 자동’으로 바꿉니다. RP에서 제목·별칭·감지어가 관련되면 자동 주입 후보가 됩니다.`
+        : mode === 'always'
+          ? `카드 ${count}개를 모두 켜고 ‘항상 주입’으로 바꿉니다. 주입 용량이 크게 늘 수 있습니다.`
+          : mode === 'manual'
+            ? `카드 ${count}개를 모두 켜고 ‘직접 선택’으로 바꿉니다. 기존 직접 선택 상태는 유지합니다.`
+            : `카드 ${count}개의 주입 방식을 ‘사용 안 함’으로 바꿉니다. 카드 내용은 삭제하지 않습니다.`;
+
+      if (!confirm(`‘${pack.title || '자료팩'}’ 전체 주입 방식 변경\n\n${detail}\n\n계속할까요?`)) return;
+
+      button.disabled = true;
+      try {
+        await commitLoreMutation(room, () => {
+          const livePack = lorePacksFor(room).find(item => String(item.id) === String(packId));
+          if (!livePack) throw new Error('자료팩을 찾지 못했습니다.');
+          if (mode !== 'off') livePack.enabled = true;
+          for (const card of (livePack.cards || [])) {
+            if (!card) continue;
+            if (mode === 'off') {
+              card.mode = 'off';
+            } else {
+              card.enabled = true;
+              card.mode = mode;
+              if (mode === 'manual' && card.manualSelected === undefined) card.manualSelected = true;
+            }
+            card.updatedAt = nowIso();
+          }
+          livePack.updatedAt = nowIso();
+        });
+        notify(`‘${pack.title || '자료팩'}’ ${count}개 카드 · ${label} 일괄 적용 완료`, 'success', 4500);
+      } catch (error) {
+        notify(`자료팩 일괄 설정 실패: ${error.message}`, 'error', 6500);
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    section.onclick = event => {
+      const button = event.target.closest('button[data-lore-pack-edit],button[data-lore-card-add],button[data-lore-card-import],button[data-lore-pack-delete],button[data-lore-card-edit],button[data-lore-card-delete]'); if (!button) return;
+      const pack = lorePacksFor(room).find(item => item.id === button.closest('[data-lore-pack]')?.dataset.lorePack);
+      const card = (pack?.cards || []).find(item => item.id === button.closest('[data-lore-card]')?.dataset.loreCard);
+      if (button.dataset.lorePackEdit) openLorePackEditor(room, pack);
+      if (button.dataset.loreCardAdd) openLoreCardEditor(room, pack);
+      if (button.dataset.loreCardImport) { void openLoreCardImportDialog(room, pack?.id || button.dataset.loreCardImport).catch(error => notify(`카드 추가 실패: ${error.message}`, 'error')); return; }
+      if (button.dataset.loreCardEdit) openLoreCardEditor(room, pack, card);
+      if (button.dataset.lorePackDelete && confirm(`‘${pack.title}’ 자료팩과 카드 ${(pack.cards || []).length}개를 삭제할까요?`)) void commitLoreMutation(room, () => { room.lorePacks = lorePacksFor(room).filter(item => item.id !== pack.id); }).catch(error => notify(error.message, 'error'));
+      if (button.dataset.loreCardDelete && confirm(`‘${card.title}’ 카드를 삭제할까요?`)) void commitLoreMutation(room, () => { pack.cards = pack.cards.filter(item => item.id !== card.id); }).catch(error => notify(error.message, 'error'));
+    };
+    section.onchange = event => {
+      const packId = event.target.dataset.lorePackEnabled;
+      const cardId = event.target.dataset.loreCardEnabled || event.target.dataset.loreMode || event.target.dataset.loreManualSelect;
+      if (!packId && !cardId) return;
+      const pack = lorePacksFor(room).find(item => item.id === (packId || event.target.closest('[data-lore-pack]')?.dataset.lorePack));
+      const card = (pack?.cards || []).find(item => item.id === cardId);
+      void commitLoreMutation(room, () => { if (packId) pack.enabled = event.target.checked; else if (event.target.dataset.loreCardEnabled) card.enabled = event.target.checked; else if (event.target.dataset.loreManualSelect) card.manualSelected = event.target.checked; else { card.mode = event.target.value; if (card.mode === 'manual' && card.manualSelected === undefined) card.manualSelected = true; } }).catch(error => notify(error.message, 'error'));
+    };
+  }
+
+  const FULL_REBUILD_FORMAT = 'wish-rp-manager-full-rebuild-1.0';
+  const FULL_REBUILD_PART_TARGET = 475000;
+  // 원작의 후속 RP PART 제한은 그대로 유지하며, 1ofN에 수록할 고정 자료가
+  // 47.5만 자 목표를 초과한 경우에만 첫 PART의 목표/최종 상한을 완화합니다.
+  const FULL_REBUILD_FIRST_STATIC_TARGET = 900000;
+  const FULL_REBUILD_FIRST_STATIC_MAX = 1000000;
+  // TEMP29 · 3-A: importer의 기존 60만 자 hard limit은 유지하되 외부 AI가
+  // 작업 전에 알 수 있도록 wrapper와 생성 전 경고에 같은 값을 사용합니다.
+  const FULL_REBUILD_OUTPUT_TEXT_MAX = 600000;
+  const FULL_REBUILD_OUTPUT_TEXT_WARN = 500000;
+  const fullRebuildRuntime = { files:new Map(), busy:false, control:null };
+
+  function fullRebuildOutputSafetyText() {
+    return rpcmKnowledgeContract()+'\n\n'+'[OPTIONAL_PROVENANCE_V1]\n최종 JSON에는 선택적으로 provenance={version:1,receipts:[{partIndex:1,sha256:"PART_SHA256",completed:true}],rows:[{domain:"personInfo",rowKey:"결과 행의 정확한 key/ID 또는 일반 텍스트 행 전체",turnKeys:["sourceTurnKey"],partIndexes:[1]}]}를 추가할 수 있습니다. 제공한다면 모든 PART의 완료 영수증을 정확히 한 번 포함하고, 결과 행의 실제 원문 턴과 PART를 연결하세요. JSON 필드명이나 부분 문구는 rowKey로 쓰지 마세요. 텍스트 행이 중복되면 outputKey, 1부터 시작하는 lineIndex, 줄바꿈 제외 원문 전체 rowText를 함께 쓰세요. 일부 행만 근거가 있으면 미연결 행이 별도로 집계됩니다. 원문을 확인하지 못한 구간을 완료로 표시하지 마세요. 근거가 없는 행을 꾸미지 말고 검토 대상으로 남기세요. 프로그램의 hash/위치 검증은 의미 누락 검증과 다릅니다.\n[/OPTIONAL_PROVENANCE_V1]\n\n'+`[OUTPUT_SAFETY_LIMITS]\ncurrentStateText<=${FULL_REBUILD_OUTPUT_TEXT_MAX}\nimportantItemsText<=${FULL_REBUILD_OUTPUT_TEXT_MAX}\ndateLogsText<=${FULL_REBUILD_OUTPUT_TEXT_MAX}\npersonInfoText<=${FULL_REBUILD_OUTPUT_TEXT_MAX}\ntimelineText<=${FULL_REBUILD_OUTPUT_TEXT_MAX}\n[/OUTPUT_SAFETY_LIMITS]\n\n위 다섯 output 문자열은 각각 ${FULL_REBUILD_OUTPUT_TEXT_MAX.toLocaleString('en-US')}자를 넘기지 마세요. 이는 Manager 가져오기의 hard limit입니다. 제한을 넘긴 결과는 지침을 따랐더라도 해당 영역이 검증 실패합니다. 필요한 전체 내용을 이 제한 안에 담을 수 없다면 성공 JSON으로 가장하지 말고 출력 한도 충돌을 명시하세요. lore는 이 문자열 상한 대상이 아니며 기존 WISH_LORE_V2 계약을 따릅니다.`;
+  }
+
+  function fullRebuildCurrentOutputSizes(room) {
+    const snapshot=structuredClone(room),rows=[];
+    const slot=id=>String((snapshot.slots||[]).find(item=>item.id===id)?.content||'');
+    rows.push({field:'currentStateText',label:'현재상태',chars:slot('currentState').length});
+    rows.push({field:'importantItemsText',label:'중요 물품',chars:String(allImportantItemRawText(snapshot)||'').length});
+    rows.push({field:'dateLogsText',label:'날짜로그',chars:slot('logSummary').length});
+    rows.push({field:'personInfoText',label:'인물정보',chars:String(personStateExportText(snapshot)||'').length});
+    try {
+      const timelineRun=createStoryTimelineRun(snapshot,activeLogTimelineLabel(snapshot),'update','FULL');
+      rows.push({field:'timelineText',label:'타임라인',chars:String(manualExistingResult(snapshot,'timeline',timelineRun)||'').length});
+    } catch (_) {}
+    return rows;
+  }
+
+  function fullRebuildOutputLimitWarning(room) {
+    const near=fullRebuildCurrentOutputSizes(room).filter(row=>row.chars>=FULL_REBUILD_OUTPUT_TEXT_WARN).sort((a,b)=>b.chars-a.chars);
+    if(!near.length)return '';
+    const lines=near.map(row=>`- ${row.label} (${row.field}): ${Number(row.chars).toLocaleString('ko-KR')}자${row.chars>FULL_REBUILD_OUTPUT_TEXT_MAX?' · 현재 상한 초과':' · 상한 근접'}`).join('\n');
+    return `전체 재구축 출력 안전상한 사전 확인\n\n${lines}\n\n최종 JSON의 위 문자열 필드는 각각 ${FULL_REBUILD_OUTPUT_TEXT_MAX.toLocaleString('ko-KR')}자 이하여야 합니다. 현재 저장본이 큰 영역은 AI 재구축 결과가 상한을 넘으면 해당 영역을 가져올 수 없습니다. 이 제한을 작업 TXT에도 명시합니다.\n\n그래도 전체 재구축 파일을 만들까요?`;
+  }
+
+  async function fullRebuildSha256(value) {
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(value)));
+    return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+  }
+
+  const FULL_REBUILD_VOLATILE_FIELDS = new Set(['lastAutoMatch','lastAutoConfidence','lastAutoReason','lastAutoDetectedAt']);
+  const FULL_REBUILD_SLOT_RUNTIME_FIELDS = new Set(['enabled','autoChosenByRp',...FULL_REBUILD_VOLATILE_FIELDS]);
+
+  function fullRebuildStableValue(value) {
+    // 자동 기억 감지 메타데이터는 재구축 대상 본문이 아니므로 snapshot 해시에서 제외합니다.
+    // 실제 기억 본문·선택·체크포인트 변경은 기존 0.17.12의 fail-closed 검증을 그대로 유지합니다.
+    if (Array.isArray(value)) return value.map(fullRebuildStableValue);
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(Object.entries(value).filter(([key]) => !FULL_REBUILD_VOLATILE_FIELDS.has(key)).map(([key, child]) => [key, fullRebuildStableValue(child)]));
+  }
+  function fullRebuildStableSlot(slot) {
+    const next=structuredClone(slot||{});
+    for(const key of FULL_REBUILD_SLOT_RUNTIME_FIELDS)delete next[key];
+    return next;
+  }
+  function fullRebuildRestoreSlotRuntime(slot,live) {
+    const next=structuredClone(slot||{});
+    if(!live)return next;
+    for(const key of FULL_REBUILD_SLOT_RUNTIME_FIELDS){
+      if(Object.prototype.hasOwnProperty.call(live,key))next[key]=structuredClone(live[key]);
+      else delete next[key];
+    }
+    return next;
+  }
+
+  function fullRebuildDataView(room) {
+    return fullRebuildStableValue({ slots:(room.slots || []).map(fullRebuildStableSlot), knowledgeCards:room.knowledgeCards || [], personStateRecords:room.personStateRecords || [], storyTimelineCards:room.storyTimelineCards || [], lorePacks:room.lorePacks || [], activeTimeline:activeLogTimelineLabel(room) });
+  }
+
+  async function synchronizeFullRebuildStoredRoomStrict(room, job, writer = 'full-rebuild-preview-sync') {
+    // 여기서 막아야 하는 것은 다른 방/다른 job/원문 교정으로 stale 된 작업과
+    // 저장 도중의 실제 경합뿐입니다. 재구축 파일 생성 뒤 정상적으로 진행된 RP,
+    // 자동 주기 갱신, 사용자 메모·지침 변경은 현재 저장본 기준 Diff를 다시 만들 수
+    // 있으므로 전역 hard reject 사유로 취급하지 않습니다.
+    if (state.currentRoom !== room || room.fullRebuildJob?.jobId !== job.jobId || job.stale) throw new Error(job.staleReason || '다른 방이 열렸거나 전체 재구축 작업이 변경되었습니다.');
+    await saveRoom(room,writer);
+    if (state.currentRoom !== room || room.fullRebuildJob?.jobId !== job.jobId || job.stale) throw new Error(job.staleReason || '저장 중 다른 방이 열렸거나 전체 재구축 작업이 변경되었습니다.');
+    const stored = await readManualStoredRoom(room);
+    if (!stored || String(stored.chatId || '') !== String(room.chatId || '') || String(stored.fullRebuildJob?.jobId || '') !== String(job.jobId || '')) {
+      throw new Error('전체 재구축 작업 기록을 로컬 저장본에서 확인하지 못했습니다.');
+    }
+    if (JSON.stringify(stored) !== JSON.stringify(room)) {
+      throw new Error('로컬 저장 직후 화면 데이터가 다시 변경됐습니다. 동일 JSON으로 다시 Diff를 확인해 주세요.');
+    }
+    return stored;
+  }
+
+  async function fullRebuildSoftDrift(room, job, sourceState = null) {
+    const warnings = [];
+    const currentDataHash = await fullRebuildSha256(JSON.stringify(fullRebuildDataView(structuredClone(room))));
+    const dataChanged = !!job.dataSha256 && currentDataHash !== job.dataSha256;
+    const memoChanged = !!job.memoHash && await fullRebuildSha256(userCanonMemoBlock(room)) !== job.memoHash;
+    let guidesChanged = false;
+    try {
+      guidesChanged = JSON.stringify(fullRebuildGuides(structuredClone(room)).manifest) !== JSON.stringify(job.guides) || JSON.stringify(fullRebuildMasterMeta()) !== JSON.stringify(job.master);
+    } catch { guidesChanged = true; }
+    if (dataChanged) warnings.push('재구축 파일 생성 후 현재 기억 데이터가 변경되었습니다. 현재 저장본을 기준으로 Diff를 다시 계산했습니다.');
+    if (memoChanged) warnings.push('재구축 파일 생성 후 사용자 메모가 변경되었습니다. 현재 메모는 유지되며, 가져온 결과가 이전 메모 기준일 수 있으므로 Diff를 확인하세요.');
+    if (guidesChanged) warnings.push('재구축 파일 생성 후 현재 지침이 변경되었습니다. JSON은 생성 당시 지침 manifest와 일치하는지 검증했으며, 현재 지침과의 차이는 경고로 표시합니다.');
+    return { warnings, dataChanged, memoChanged, guidesChanged, newerTurns:Math.max(0,Number(sourceState?.newerTurns || 0)) };
+  }
+
+  function fullRebuildGuides(room) {
+    const keys = { currentItems:'currentItems', dateLogs:'logSummary', personInfo:'personInfo', timeline:'timeline', lore:'lore' };
+    const texts = {}, manifest = {};
+    for (const [key, task] of Object.entries(keys)) {
+      const meta = manualGuideMetadata(room, task);
+      if (!meta.text.trim()) throw new Error(`${MANUAL_UPDATE_TASKS[task].title} 지침이 비어 있습니다.`);
+      texts[key] = meta.text;
+      manifest[key] = { name:meta.name, version:meta.version, hash:meta.hash };
+    }
+    return { texts, manifest };
+  }
+
+  function fullRebuildMasterMeta() {
+    const text = FULL_REBUILD_MASTER_GUIDE_V1;
+    return { name:text.split(/\r?\n/,1)[0].trim(), version:'v1.0.5', hash:`fnv1a32:${simpleHash(text)}:${text.length}` };
+  }
+
+  function fullRebuildReferenceText(room, loreRefs, timelineRun) {
+    const snapshot = structuredClone(room);
+    // TEMP28: the detached date-log UI already renders chronologically, but the stored
+    // source text may contain older manual-order inversions. Sort only the rebuild
+    // reference copy; never mutate the room just to create an external work packet.
+    const dateSnapshot=structuredClone(snapshot);
+    const dateSlot=(dateSnapshot.slots||[]).find(item=>item.id==='logSummary');
+    if(dateSlot)dateSlot.content=sortDatedLogTextByTimeline(String(dateSlot.content||''),dateSnapshot);
+    return `[EXISTING_CURRENT_ITEMS]\n${manualExistingResult(snapshot,'currentItems')}\n[/EXISTING_CURRENT_ITEMS]\n\n[EXISTING_DATE_LOGS]\n${manualExistingResult(dateSnapshot,'logSummary')}\n[/EXISTING_DATE_LOGS]\n\n[EXISTING_PERSON_INFO]\n${manualExistingResult(snapshot,'personInfo')}\n[/EXISTING_PERSON_INFO]\n\n[EXISTING_TIMELINE]\n${manualExistingResult(snapshot,'timeline',timelineRun)}\n[/EXISTING_TIMELINE]\n\n[LORE_REF_SNAPSHOT]\n${JSON.stringify({packs:loreRefs.packs,cards:loreRefs.cards},null,2)}\n[/LORE_REF_SNAPSHOT]`;
+  }
+
+  function fullRebuildTurnText(turn) {
+    return `[RP_TURN sourceTurnKey=${JSON.stringify(String(turn.key))}]\n${String(turn.text)}\n[/RP_TURN]`;
+  }
+
+  // 임시24: 기존 자료/지침이 TXT 한 장을 초과하면 텍스트를 버리지 않고
+  // RP source PART와 분리된 AUX TXT로 나눕니다. source/parts/hash/가져오기 계약은 그대로 둡니다.
+  function fullRebuildSplitAuxiliaryText(raw,maxChars=410000) {
+    const text=String(raw),pieces=[];
+    for(let start=0;start<text.length;){
+      let end=Math.min(text.length,start+maxChars);
+      if(end<text.length){
+        const lastNewline=text.lastIndexOf('\n',end-1);
+        if(lastNewline>start+Math.floor(maxChars*0.75))end=lastNewline+1;
+        // surrogate 쌍(이모지 등)을 파일 경계에서 분리하면 UTF-8 저장 시 손실됩니다.
+        if(end<text.length&&end>start){
+          const code=text.charCodeAt(end-1),next=text.charCodeAt(end);
+          if(code>=0xD800&&code<=0xDBFF&&next>=0xDC00&&next<=0xDFFF)end--;
+        }
+      }
+      if(end<=start)throw new Error('보조 자료 분할 위치를 확정하지 못했습니다.');
+      pieces.push(text.slice(start,end));start=end;
+    }
+    if(pieces.join('')!==text)throw new Error('지침·기존 자료 분할 후 원문 검증에 실패했습니다.');
+    return pieces;
+  }
+
+  function fullRebuildAuxiliaryFileText(jobId,source,master,fullHash,partHash,piece,index,total) {
+    return `[RP_MANAGER_FULL_REBUILD_AUX]\nREBUILD_JOB_ID=${jobId}\nAUX_INDEX=${index}\nAUX_TOTAL=${total}\nSOURCE_SHA256=${source.sha256}\nMASTER_GUIDE_HASH=${master.hash}\nAUX_FULL_SHA256=${fullHash}\nAUX_PART_SHA256=${partHash}\nAUX_CHAR_LENGTH=${piece.length}\n[/RP_MANAGER_FULL_REBUILD_AUX]\n\n보조 자료는 RP PART_TOTAL에 포함되지 않습니다. 모든 AUX를 AUX_INDEX 순서대로 합쳐 원래의 지침·사용자 메모·기존 기억자료를 복원한 다음 RP PART 1..N과 함께 읽으세요. 아래 [AUX_PAYLOAD_BEGIN] 다음 문자를 정확히 AUX_CHAR_LENGTH개 읽은 것이 페이로드입니다. 표시용 개행과 [AUX_PAYLOAD_END]는 제외합니다. 조각 경계에 걸친 태그도 결합 후 해석하세요. 한 조각 또는 RP PART라도 누락되면 성공 JSON을 만들지 마세요.\n\n[AUX_PAYLOAD_BEGIN]\n${piece}\n[AUX_PAYLOAD_END]\n[END_REBUILD_AUX index=${index} total=${total}]`;
+  }
+
+  async function createFullRebuildFiles(room) {
+    if (state.currentRoom !== room || fullRebuildRuntime.busy || state.saveStatus === 'saving' || state.saveStatus === 'error' || state.autoSaveTimers.has(String(room.chatId || ''))) throw new Error('현재 방의 로컬 저장이 끝난 뒤 전체 재구축 파일을 만들어 주세요.');
+    fullRebuildRuntime.busy = true;
+    const control=fullRebuildRuntime.control||null;
+    try {
+      // 전체 RP 조회는 오래 걸릴 수 있으므로 생성 시작 시점의 room 전체 JSON을 끝까지
+      // 동결 조건으로 사용하지 않습니다. 먼저 현재 편집을 저장하고, 원문 조회가 끝난 뒤
+      // 다시 한 번 정상 로컬 변경을 합친 최신 저장본을 snapshot으로 채택합니다.
+      await saveRoom(room,'full-rebuild-export-sync');
+      if (state.currentRoom !== room) throw new Error('전체 재구축 준비 중 다른 방으로 이동했습니다.');
+      const turns = (await loadManualCompletedTurns(room,{finalFresh:true,control})).map(turn => ({ key:String(turn.key), text:String(turn.text) }));
+      if (state.currentRoom !== room) throw new Error('RP 조회 중 다른 방으로 이동했습니다.');
+      if (!turns.length) throw new Error('완료된 RP 턴이 없습니다.');
+      // 조회 중 자동감지·주기 갱신·사용자 편집이 정상적으로 저장됐더라도 새 파일을
+      // 폐기하지 않고, 조회 완료 시점의 최신 room을 이번 재구축 snapshot으로 사용합니다.
+      await saveRoom(room,'full-rebuild-export-snapshot');
+      if (state.currentRoom !== room) throw new Error('재구축 snapshot 저장 중 다른 방으로 이동했습니다.');
+      const snapshotRoom = structuredClone(room);
+      const guides = fullRebuildGuides(snapshotRoom), master = fullRebuildMasterMeta();
+      const memoBlock = userCanonMemoBlock(snapshotRoom);
+      const memoHash = await fullRebuildSha256(memoBlock);
+      const source = { roomId:String(room.chatId || ''), chatId:String(apiChatIdOf(snapshotRoom)), firstTurnKey:turns[0].key, lastTurnKey:turns.at(-1).key, turnCount:turns.length, sha256:await manualFullHistoryHash(turns) };
+      const loreRefs = manualLoreRefs(snapshotRoom);
+      const timelineRun = createStoryTimelineRun(snapshotRoom,activeLogTimelineLabel(snapshotRoom),'update','FULL');
+      const guideBodies = `[MASTER_GUIDE]\n${FULL_REBUILD_MASTER_GUIDE_V1}\n[/MASTER_GUIDE]\n\n` +
+        Object.entries({currentItems:'CURRENT_ITEMS_GUIDE',dateLogs:'DATE_LOG_GUIDE',personInfo:'PERSON_INFO_GUIDE',timeline:'TIMELINE_GUIDE',lore:'LORE_GUIDE'})
+          .map(([key,tag]) => `[${tag}]\n${guides.texts[key]}\n[/${tag}]`).join('\n\n');
+      const reference = fullRebuildReferenceText(snapshotRoom,loreRefs,timelineRun);
+      const outputSafetyBlock = fullRebuildOutputSafetyText();
+      const fixedOverhead = JSON.stringify({source,guides:guides.manifest,master}).length + memoBlock.length + outputSafetyBlock.length + 6200;
+      const firstExtra = `${guideBodies}\n\n${reference}`+rpcmDateHintBlock(snapshotRoom,turns,Math.max(0,FULL_REBUILD_PART_TARGET-guideBodies.length-reference.length-fixedOverhead));
+      // 첫 PART의 지침·활성 메모·기존 기억자료 등이 기존 목표를 초과할 때만
+      // 고정 자료 포함 첫 PART의 크기 허용량을 높입니다. RP 턴/후속 PART 한도는 불변.
+      const expandFirstStatic = firstExtra.length + fixedOverhead > FULL_REBUILD_PART_TARGET;
+      const firstPartTarget = expandFirstStatic ? FULL_REBUILD_FIRST_STATIC_TARGET : FULL_REBUILD_PART_TARGET;
+      const firstTurnLength = fullRebuildTurnText(turns[0]).length + 2;
+      const initialSeparateAux = firstExtra.length + fixedOverhead + firstTurnLength > firstPartTarget;
+      const jobId = `rebuild-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,9)}`;
+      const turnItemLength = turn => `[RP_TURN sourceTurnKey=${JSON.stringify(String(turn.key))}]\n`.length + String(turn.text).length + '\n[/RP_TURN]'.length;
+
+      const planSourceFiles = useAux => {
+        const partOverhead = useAux ? JSON.stringify({source,guides:guides.manifest,master}).length + outputSafetyBlock.length + 8500 : fixedOverhead;
+        // USER_CANON_MEMO는 비-AUX 모드에서 모든 RP PART에 실제로 반복 수록되므로
+        // 후속 PART 예산도 첫 PART와 같은 memoBlock 길이를 포함해야 합니다.
+        const laterPartOverhead = partOverhead;
+        let firstReserve=0,laterReserve=0;
+
+        const splitTurns = () => {
+          const firstTarget = (useAux ? FULL_REBUILD_PART_TARGET : firstPartTarget) - firstReserve;
+          const laterTarget = FULL_REBUILD_PART_TARGET - laterReserve;
+          if(firstTarget<=0||laterTarget<=0||laterPartOverhead>=laterTarget){
+            const error=new Error('PART 공통 manifest가 파일 목표 크기를 넘습니다. 불완전한 자료는 출력하지 않습니다.');
+            error.code='RPCM_FULL_REBUILD_PACKING_LIMIT';throw error;
+          }
+          const chunks=[];
+          let current=[],size=(useAux?0:firstExtra.length)+partOverhead,partTarget=firstTarget;
+          for(const turn of turns){
+            const itemLength=turnItemLength(turn);
+            if(current.length&&size+itemLength+2>partTarget){
+              chunks.push(current);current=[];size=laterPartOverhead;partTarget=laterTarget;
+            }
+            if(size+itemLength+2>partTarget){
+              const error=new Error(`RP 턴 ${turn.key} 하나가 TXT 안전 크기를 넘습니다. 원문을 훼손하거나 턴을 잘라 저장하지 않았습니다.`);
+              error.code='RPCM_FULL_REBUILD_PACKING_LIMIT';throw error;
+            }
+            current.push(turn);size+=itemLength+2;
+          }
+          if(current.length)chunks.push(current);
+          return chunks;
+        };
+
+        const provisionalParts = chunks => chunks.map((part,index)=>({
+          index:index+1,total:chunks.length,firstTurnKey:part[0].key,lastTurnKey:part.at(-1).key,turnCount:part.length,sha256:'0'.repeat(64)
+        }));
+
+        const sourceFileParts = (part,info,parts,materialize=false) => {
+          const header = `[RP_MANAGER_FULL_REBUILD]\nREBUILD_JOB_ID=${jobId}\nPART_INDEX=${info.index}\nPART_TOTAL=${info.total}\nSOURCE_FIRST_TURN=${source.firstTurnKey}\nSOURCE_LAST_TURN=${source.lastTurnKey}\nSOURCE_TURN_COUNT=${source.turnCount}\nSOURCE_SHA256=${source.sha256}\nPART_FIRST_TURN=${info.firstTurnKey}\nPART_LAST_TURN=${info.lastTurnKey}\nPART_TURN_COUNT=${info.turnCount}\nPART_SHA256=${info.sha256}\nMASTER_GUIDE_NAME=${master.name}\nMASTER_GUIDE_VERSION=${master.version}\nMASTER_GUIDE_HASH=${master.hash}\nUSER_CANON_MEMO_SHA256=${memoHash}\n[/RP_MANAGER_FULL_REBUILD]\n\n[SOURCE_MANIFEST]\n${JSON.stringify(source,null,2)}\n[/SOURCE_MANIFEST]\n\n[PARTS_MANIFEST]\n${JSON.stringify(parts,null,2)}\n[/PARTS_MANIFEST]\n\n[GUIDE_MANIFEST]\n${JSON.stringify(guides.manifest,null,2)}\n[/GUIDE_MANIFEST]\n\n${outputSafetyBlock}`;
+          const auxNote = useAux
+            ? '\n\n지침·사용자 메모·기존 기억자료는 00-보조자료 AUX TXT들에 있습니다. 보조자료 전체를 번호순으로 결합하여 읽으세요. AUX 파일은 RP PART_TOTAL에 포함되지 않습니다.'
+            : (info.index === 1 ? `\n\n${firstExtra}` : '\n\n전문 지침과 기존 자료는 1ofN 파일에 있습니다. 같은 작업의 모든 파일을 번호순으로 읽으세요.');
+          const prefix = `${externalChatTitleInstruction("rebuild")}\n\n${header}${!useAux&&memoBlock ? `\n\n${memoBlock}` : ''}${auxNote}\n\n[RP_SOURCE_PART]\n`;
+          const suffix = `\n[/RP_SOURCE_PART]\n\n[END_REBUILD_PART index=${info.index} total=${info.total}]`;
+          if(materialize)return prefix+part.map(fullRebuildTurnText).join('\n\n')+suffix;
+          const bodyLength=part.reduce((sum,turn)=>sum+turnItemLength(turn),0)+Math.max(0,part.length-1)*2;
+          return prefix.length+bodyLength+suffix.length;
+        };
+
+        for(let attempt=0;attempt<12;attempt++){
+          const chunks=splitTurns(),parts=provisionalParts(chunks);
+          let firstOverflow=0,laterOverflow=0;
+          for(let index=0;index<chunks.length;index++){
+            const info=parts[index],length=sourceFileParts(chunks[index],info,parts,false);
+            const finalLimit=info.index===1&&!useAux&&expandFirstStatic?FULL_REBUILD_FIRST_STATIC_MAX:500000;
+            const overflow=length-finalLimit;
+            if(overflow>0){
+              if(info.index===1)firstOverflow=Math.max(firstOverflow,overflow);
+              else laterOverflow=Math.max(laterOverflow,overflow);
+            }
+          }
+          if(!firstOverflow&&!laterOverflow)return {chunks,sourceFileParts};
+          if(firstOverflow)firstReserve+=firstOverflow+1024;
+          if(laterOverflow)laterReserve+=laterOverflow+1024;
+        }
+        const error=new Error('PART manifest 증가를 반영한 안전 재분할이 수렴하지 않았습니다. 원문을 자르지 않았습니다.');
+        error.code='RPCM_FULL_REBUILD_PACKING_LIMIT';throw error;
+      };
+
+      let separateAux=initialSeparateAux,plan;
+      try{plan=planSourceFiles(separateAux);}
+      catch(error){
+        // 첫 PART 확장 모드가 manifest/메모 반복까지 포함하면 안전 크기에 들어가지 않는 경우
+        // 원문을 줄이지 않고 기존 AUX 안전 분할로 한 번만 후퇴합니다.
+        if(!separateAux&&error?.code==='RPCM_FULL_REBUILD_PACKING_LIMIT'){separateAux=true;plan=planSourceFiles(true);}
+        else throw error;
+      }
+      const chunks=plan.chunks;
+      const parts = await Promise.all(chunks.map(async (part,index) => ({ index:index+1, total:chunks.length, firstTurnKey:part[0].key, lastTurnKey:part.at(-1).key, turnCount:part.length, sha256:await manualFullHistoryHash(part) })));
+      const sourceFiles = chunks.map((part,index) => {
+        const info=parts[index],text=plan.sourceFileParts(part,info,parts,true);
+        const finalLimit=info.index===1&&!separateAux&&expandFirstStatic?FULL_REBUILD_FIRST_STATIC_MAX:500000;
+        if(text.length>finalLimit)throw new Error(`${info.index}구간이 최종 안전 크기를 넘었습니다. 원문을 자르지 않았습니다.`);
+        return {name:`Wish-전체재구축-${info.index}of${info.total}.txt`,text,kind:'rp',turnCount:info.turnCount};
+      });
+
+      let auxFiles=[];
+      if(separateAux){
+        const auxiliaryFullText=`${memoBlock}${memoBlock ? '\n\n' : ''}${firstExtra}`;
+        const auxPieces=fullRebuildSplitAuxiliaryText(auxiliaryFullText);
+        const auxFullHash=await fullRebuildSha256(auxiliaryFullText);
+        auxFiles=await Promise.all(auxPieces.map(async (piece,index)=>{
+          const sha=await fullRebuildSha256(piece);
+          const text=fullRebuildAuxiliaryFileText(jobId,source,master,auxFullHash,sha,piece,index+1,auxPieces.length);
+          if(text.length>500000)throw new Error(`보조자료 ${index+1}구간이 안전 크기를 넘습니다.`);
+          return {name:`Wish-전체재구축-00-보조자료-${String(index+1).padStart(3,'0')}of${String(auxPieces.length).padStart(3,'0')}.txt`,text,kind:'aux',turnCount:0};
+        }));
+        if(auxPieces.join('')!==auxiliaryFullText)throw new Error('지침·메모·기존 자료의 전체 결합 검증 실패');
+      }
+      const files=[...auxFiles,...sourceFiles];
+      const dataSha256 = await fullRebuildSha256(JSON.stringify(fullRebuildDataView(snapshotRoom)));
+      if (state.currentRoom !== room) throw new Error('파일 생성 중 다른 방으로 이동했습니다.');
+      const job = { jobId, createdAt:nowIso(), sourceKeys:turns.map(turn=>String(turn.key)),source, parts, guides:guides.manifest, master, memoHash, dataSha256, loreRefs, timelineRun };
+      if(control?.cancelled)throw rpcmHistoryUserAbort('전체 재구축 파일 생성을 중단했습니다.');
+      if(control)control.commitStarted=true;
+      // job 기록은 실제 room 객체에 추가한 뒤 saveRoom의 revision/rebase 경로로 저장합니다.
+      // 별도 clone을 저장한 뒤 room을 통째로 덮어쓰지 않으므로 생성 막바지의 정상 편집을 잃지 않습니다.
+      const previousJob = room.fullRebuildJob ? structuredClone(room.fullRebuildJob) : null;
+      room.fullRebuildJob = job;
+      try { await saveRoom(room,'full-rebuild-export-job'); }
+      catch (error) { if (room.fullRebuildJob?.jobId === jobId) { if (previousJob) room.fullRebuildJob=previousJob; else delete room.fullRebuildJob; } throw error; }
+      if (state.currentRoom !== room || room.fullRebuildJob?.jobId !== jobId) throw new Error('파일 준비 기록을 저장하는 동안 방 또는 재구축 작업이 변경됐습니다.');
+      // Large TXT payloads are owned by the download dialog only; do not retain
+      // a duplicate permanently in fullRebuildRuntime.files.
+      return { job, files };
+    } finally { fullRebuildRuntime.busy = false; if(fullRebuildRuntime.control===control)fullRebuildRuntime.control=null; }
+  }
+
+  async function assertFullRebuildSource(room,job) {
+    if(job.stale)throw new Error(job.staleReason||'재구축 source에 포함된 과거 RP 원문이 교정되었습니다. 새 source로 다시 작업해 주세요.');
+    if (state.currentRoom !== room || room.fullRebuildJob?.jobId !== job.jobId) throw new Error('다른 방 또는 다른 전체 재구축 작업입니다.');
+    const turns = await loadManualCompletedTurns(room,{finalFresh:true});
+    if (turns.length < job.source.turnCount) throw new Error('재구축 파일 생성 후 RP 원문이 줄었습니다. 결과를 적용하지 않았습니다.');
+    const prefix = turns.slice(0,job.source.turnCount);
+    if (String(prefix[0]?.key) !== job.source.firstTurnKey || String(prefix.at(-1)?.key) !== job.source.lastTurnKey || await manualFullHistoryHash(prefix) !== job.source.sha256) throw new Error('재구축 파일 생성 후 RP 원문/분기가 변경됐습니다. 파일을 다시 만들어 주세요.');
+    return { sourceTurns:prefix.map(turn => [String(turn.key),String(turn.text)]), newerTurns:turns.length-job.source.turnCount, currentTurns:turns };
+  }
+
+
+  function assertFullRebuildPartsManifest(data) {
+    const parts = data?.parts, source = data?.source;
+    const exactKeys = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join('|') === [...keys].sort().join('|');
+    if (!Array.isArray(parts) || !parts.length) throw new Error('part manifest가 비어 있습니다.');
+    let turnCount = 0;
+    for (const [index, part] of parts.entries()) {
+      if (!exactKeys(part,['index','total','firstTurnKey','lastTurnKey','turnCount','sha256']) || part.index !== index + 1 || part.total !== parts.length || !Number.isInteger(part.turnCount) || part.turnCount < 1 || typeof part.firstTurnKey !== 'string' || !part.firstTurnKey || typeof part.lastTurnKey !== 'string' || !part.lastTurnKey || typeof part.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(part.sha256)) throw new Error('part가 누락·중복되었거나 순서/범위/hash 형식이 다릅니다.');
+      turnCount += part.turnCount;
+    }
+    if (!source || parts[0].firstTurnKey !== source.firstTurnKey || parts.at(-1).lastTurnKey !== source.lastTurnKey || turnCount !== source.turnCount) throw new Error('part manifest의 전체 범위 또는 턴 수가 source와 다릅니다.');
+    return parts;
+  }
+
+  async function assertFullRebuildPartsAgainstSource(data, sourceTurns) {
+    const parts = assertFullRebuildPartsManifest(data);
+    let cursor = 0;
+    for (const part of parts) {
+      const rows = sourceTurns.slice(cursor,cursor + part.turnCount).map(row => [String(row[0]),String(row[1])]);
+      if (rows.length !== part.turnCount || rows[0]?.[0] !== part.firstTurnKey || rows.at(-1)?.[0] !== part.lastTurnKey || await fullRebuildSha256(JSON.stringify(rows)) !== part.sha256) throw new Error(`${part.index}번 part가 현재 RP 원문의 해당 범위/hash와 다릅니다.`);
+      cursor += part.turnCount;
+    }
+    if (cursor !== sourceTurns.length) throw new Error('part manifest가 현재 RP 원문 전체를 정확히 덮지 않습니다.');
+    return true;
+  }
+
+  function parseFullRebuildJson(raw,job,room) {
+    let data;
+    try { data = JSON.parse(String(raw || '').replace(/^\uFEFF/,'').trim()); }
+    catch (_) { throw new Error('최종 결과는 설명이나 코드블록이 없는 UTF-8 JSON 객체여야 합니다.'); }
+    const exact = (value,keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join('|') === [...keys].sort().join('|');
+    const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key,canonical(value[key])])) : value;

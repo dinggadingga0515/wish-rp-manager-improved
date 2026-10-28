@@ -1,0 +1,1000 @@
+      storyTimelineGuideRevisionV14: true,
+      storyTimelineGuideFullRevisionV14: true,
+      autoScanLastMessageId: '',
+      autoScanLastUserMessageId: '',
+      autoRecallContextText: '',
+      aiSummaryLastAppliedTurnKey: '',
+      aiSummaryLastAppliedAt: '',
+      aiSummaryLastAppliedTurnKeys: { logSummary:'', currentState:'' },
+      aiSummaryLastAppliedAts: { logSummary:'', currentState:'' },
+      aiSummaryUndo: null,
+      aiSummaryDraft: null,
+      aiSummaryHistory: [],
+      aiReviewInbox: [],
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+    await saveRoom(created);
+    return created;
+  }
+
+  function updateSaveStatusUi(status = state.saveStatus) {
+    state.saveStatus = status;
+    const el = state.modal?.querySelector('#rpcm-save-status');
+    const retry = state.modal?.querySelector('#rpcm-save-retry');
+    if (retry) retry.hidden = status !== 'error';
+    if (!el) return;
+    if (status === 'saving') { rpcmClearErrorHelp(el); el.textContent = '로컬 저장 중…'; el.className = 'rpcm-save-status saving'; return; }
+    if (status === 'error') {
+      el.textContent = '로컬 저장 실패'; el.className = 'rpcm-save-status error';
+      rpcmSetErrorHelp(el, state.lastSaveError || '브라우저 로컬 저장을 완료하지 못했습니다.', '로컬 저장 실패');
+      return;
+    }
+    rpcmClearErrorHelp(el); state.lastSaveError = '';
+    const when = state.lastSavedAt ? new Date(state.lastSavedAt).toLocaleTimeString('ko-KR', { hour:'2-digit', minute:'2-digit', second:'2-digit' }) : '';
+    el.textContent = when ? `로컬 저장됨 · ${when}` : '로컬 저장됨';
+    el.className = 'rpcm-save-status saved';
+  }
+
+  function renderCarrierSyncStatusUi(room = state.currentRoom) {
+    const el = state.modal?.querySelector('#rpcm-carrier-status');
+    if (!el) return;
+    el.hidden = !room?.pending;
+    if (!room?.pending) return;
+    const sessionKey = String(room.pending.sessionStartedAt || room.pending.armedAt || room.pending.messageId || '');
+    const saved = state.carrierSyncStatuses.get(String(room.chatId));
+    const entry = saved?.sessionKey === sessionKey ? saved : { phase:'idle' };
+    const labels = { idle:'현재 주입 유지 중', queued:'현재 주입 반영 대기…', syncing:'현재 주입 반영 중…', applied:'현재 주입 반영됨', suspended:'현재 주입 복구 대기', error:'현재 주입 반영 실패' };
+    el.textContent = labels[entry.phase] || labels.idle;
+    el.className = `rpcm-carrier-status ${entry.phase}`;
+    el.title = entry.phase === 'error' ? '로컬 저장 상태와 별개로 현재 주입 갱신에 실패했습니다. 오류 표시에 마우스를 올리거나 눌러 원인과 해결 방법을 확인하세요.' : '현재 주입 중인 carrier의 반영 상태';
+    if (entry.phase === 'error') rpcmSetErrorHelp(el, entry.detail || '현재 주입 내용을 서버에 반영하거나 검증하는 과정이 실패했습니다.', '현재 주입 반영 실패', '오류 원문과 복구 상태를 확인하고 현재 내용을 백업하세요. 다른 탭의 동시 작업을 멈춘 뒤 다시 시도하며, 복구 확인 전에는 강제 덮어쓰기를 하지 마세요.');
+    else rpcmClearErrorHelp(el);
+    const arm = state.modal?.querySelector('#rpcm-arm');
+    const armLabel = arm?.querySelector('.rpcm-footer-arm-label');
+    if (armLabel) {
+      armLabel.textContent = entry.phase === 'error' ? '반영 오류' : entry.phase === 'syncing' || entry.phase === 'queued' ? '재검증 중' : room.pending.reanchorRetry ? '복구 대기' : room.pending.verified ? '주입 중' : '서버 확인 필요';
+      arm.title = `${armLabel.textContent} · 누르면 주입 해제`;
+    }
+  }
+
+  function setCarrierSyncStatusUi(room, phase) {
+    if (!room?.chatId) return 0;
+    const key = String(room.chatId);
+    const revision = (state.carrierSyncStatuses.get(key)?.revision || 0) + 1;
+    const sessionKey = String(room.pending?.sessionStartedAt || room.pending?.armedAt || room.pending?.messageId || '');
+    state.carrierSyncStatuses.set(key, { phase, revision, sessionKey });
+    if (key === String(state.currentChatId)) renderCarrierSyncStatusUi(room);
+    return revision;
+  }
+
+  function finishCarrierSyncStatusUi(room, revision, phase, error = '') {
+    const key = String(room?.chatId || '');
+    if (state.carrierSyncStatuses.get(key)?.revision !== revision) return;
+    const sessionKey = String(room.pending?.sessionStartedAt || room.pending?.armedAt || room.pending?.messageId || '');
+    state.carrierSyncStatuses.set(key, { phase, revision, sessionKey, detail:phase === 'error' ? String(error?.message || error || '') : '' });
+    if (key === String(state.currentChatId)) renderCarrierSyncStatusUi(room);
+  }
+
+  // Keep the live input element intact while typing, including Korean IME.
+  const rpcmComposingEditors = new Set();
+  function rpcmHasActiveComposition() {
+    for (const editor of rpcmComposingEditors) if (!editor.isConnected) rpcmComposingEditors.delete(editor);
+    return rpcmComposingEditors.size > 0;
+  }
+  function rpcmTextEditor(node) {
+    return !!node?.matches?.('textarea,input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=file]):not([type=hidden]),[contenteditable=true]');
+  }
+  let rpcmEditingGuardsBound = false;
+  function rpcmBindEditingGuards() {
+    if (rpcmEditingGuardsBound) return;
+    rpcmEditingGuardsBound = true;
+    const owned = node => rpcmTextEditor(node) && !!node.closest('[id^="rpcm-"],[id^="wish-rpcore-"]');
+    const flush = () => requestAnimationFrame(() => {
+      const overlay = state.modal;
+      if (!overlay?._rpcmDeferredEditorRender || rpcmHasActiveComposition()
+          || (overlay.contains(document.activeElement) && rpcmTextEditor(document.activeElement))) return;
+      overlay._rpcmDeferredEditorRender = false;
+      renderModalIfOpen();
+    });
+    document.addEventListener('compositionstart', event => {
+      if (owned(event.target)) rpcmComposingEditors.add(event.target);
+    }, true);
+    document.addEventListener('compositionend', event => {
+      if (!rpcmComposingEditors.delete(event.target)) return;
+      // The final input event follows compositionend in some browsers.
+      if (state.currentRoom && state.modal?.contains(event.target)) queueRoomAutoSave(state.currentRoom, 150);
+      flush();
+    }, true);
+    document.addEventListener('focusout', event => {
+      if (owned(event.target)) flush();
+    }, true);
+  }
+
+  function queueRoomAutoSave(room, delay = 500) {
+    invalidateAiMemoryHistory();
+    if (!room) return;
+    const key = String(room.chatId || '');
+    const previous = state.autoSaveTimers.get(key);
+    if (previous) clearTimeout(previous);
+    updateSaveStatusUi('saving');
+    const timer = setTimeout(async () => {
+      state.autoSaveTimers.delete(key);
+      if (rpcmHasActiveComposition()) { queueRoomAutoSave(room, 200); return; }
+      try { await saveRoom(room,'auto-save'); }
+      catch (e) { state.lastSaveError=String(e?.message||e||'자동저장 실패'); updateSaveStatusUi('error'); console.warn('[🪽위시 RP Manager] 자동저장 실패', e); }
+    }, delay);
+    state.autoSaveTimers.set(key, timer);
+  }
+
+
+  // UI-only metadata stays outside room data, AI evidence, and commit hashes.
+  const rpcmNewBadgeCache = new Map();
+  let rpcmNewBadgeFrame = 0;
+  function rpcmNewBadgeState(room) {
+    const id=String(room?.chatId||'');
+    if(!rpcmNewBadgeCache.has(id)){
+      let saved;try{saved=JSON.parse(localStorage.getItem('RPCM_new_items_v1:'+id)||'null');}catch(_){}
+      rpcmNewBadgeCache.set(id,{clock:Number(saved?.clock)||0,lastTime:Number(saved?.lastTime)||0,seen:Array.isArray(saved?.seen)?saved.seen.slice(-64):[],items:saved?.items&&typeof saved.items==='object'?saved.items:{},inventory:Array.isArray(saved?.inventory)?saved.inventory:null});
+    }
+    return rpcmNewBadgeCache.get(id);
+  }
+  function rpcmNewBadgePersist(room,meta) {
+    try{localStorage.setItem('RPCM_new_items_v1:'+String(room.chatId),JSON.stringify(meta));}catch(_){}
+    rpcmNewBadgeSchedule();
+  }
+  function rpcmNewBadgeStamp(room,keys) {
+    if(!room?.chatId||!keys.length)return;
+    const meta=rpcmNewBadgeState(room);let changed=false;
+    for(const key of keys)if(key&&!Object.hasOwn(meta.items,key)){meta.items[key]=meta.clock;changed=true;}
+    if(changed)rpcmNewBadgePersist(room,meta);
+  }
+  function rpcmNewBadgeEntityKeys(room) {
+    const keys=new Set(),add=(type,rows,id='id')=>{for(const row of rows||[])if(row?.[id])keys.add(type+':'+String(row[id]));};
+    add('slot',room.slots);add('knowledge',room.knowledgeCards);add('person',room.personStateRecords);add('timeline',room.storyTimelineCards,'cardId');add('memo',room.userCanonMemos);
+    const actor=name=>{if(String(name||'').trim())keys.add('actor:'+String(name).trim());};
+    for(const row of room.personUiActors||[])actor(row.name);
+    for(const row of room.slots||[])if(row.group==='character')actor(row.title);
+    for(const row of room.knowledgeCards||[])actor(row.person);
+    for(const row of room.personStateRecords||[]){actor(row.person);actor(row.target);}
+    for(const pack of room.lorePacks||[]){if(pack.id)keys.add('pack:'+pack.id);for(const card of pack.cards||[])if(card.id)keys.add('lore:'+pack.id+':'+card.id);}
+    const log=(room.slots||[]).find(slot=>slot.id==='logSummary');
+    for(const block of parseDatedLogBlocks(log?.content||''))keys.add('log:'+block.key);
+    return keys;
+  }
+  function rpcmNewBadgeCommitted(room,before,writer='') {
+    // Initial room creation, migrations, undo, and backup restoration are not new updates.
+    if(!before?.chatId||/migrat|restor|undo|rollback/i.test(writer))return;
+    const previous=rpcmNewBadgeEntityKeys(before),next=rpcmNewBadgeEntityKeys(room);
+    rpcmNewBadgeStamp(room,[...next].filter(key=>!previous.has(key)));
+    for(const slot of room.slots||[])if(String(slot.content||'').trim()&&!String((before.slots||[]).find(row=>row.id===slot.id)?.content||'').trim())rpcmNewBadgeStamp(room,['slot:'+slot.id]);
+  }
+  function rpcmNewBadgeInventory(room,inventory) {
+    const meta=rpcmNewBadgeState(room),ids=inventory.map(longTermId).filter(Boolean);
+    if(meta.inventory){const old=new Set(meta.inventory);rpcmNewBadgeStamp(room,ids.filter(id=>!old.has(id)).map(id=>'longterm:'+id));}
+    if(JSON.stringify(meta.inventory)!==JSON.stringify(ids)){meta.inventory=ids;rpcmNewBadgePersist(room,meta);}
+  }
+  function rpcmNewBadgeObserveMessages(chatId,messages,chronological=false) {
+    const room=state.currentRoom;if(!room||String(apiChatIdOf(room))!==String(chatId))return;
+    const ordered=chronological?messages:[...messages].reverse(),assistantToUser=new Map(),times=new Map();let userId='';
+    for(const message of ordered){const role=messageRoleOf(message);if(role==='user'){userId=String(messageIdOf(message)||message.turnId||'');const time=Date.parse(message.createdAt||message.created_at||'')||(/^[0-9a-f]{24}$/i.test(userId)?parseInt(userId.slice(0,8),16)*1000:0);times.set(userId,time);}else if(userId&&['assistant','character','bot'].includes(role))assistantToUser.set(String(messageIdOf(message)||''),userId);}
+    const keys=[...new Set(buildCompletedAiDialogueTurns(ordered).map(turn=>assistantToUser.get(turn.reviewSources?.[0]?.id)||String(turn.key)))];
+    if(!keys.length)return;
+    const meta=rpcmNewBadgeState(room);
+    if(!meta.seen.length){meta.seen=keys.slice(-64);meta.lastTime=times.get(keys.at(-1))||0;rpcmNewBadgePersist(room,meta);return;}
+    const anchor=keys.lastIndexOf(meta.seen.at(-1));
+    // Older/out-of-order pages cannot advance the clock. Re-edits and rerolls share a user ID.
+    const seen=new Set(meta.seen),fresh=(anchor>=0?keys.slice(anchor+1):meta.lastTime?keys.filter(key=>(times.get(key)||0)>meta.lastTime):[]).filter(key=>!seen.has(key));
+    if(!fresh.length)return;
+    meta.clock+=fresh.length;meta.seen=[...meta.seen,...fresh].slice(-64);
+    meta.lastTime=Math.max(meta.lastTime,...fresh.map(key=>times.get(key)||0));
+    for(const [key,born] of Object.entries(meta.items))if(meta.clock-born>100)delete meta.items[key];
+    rpcmNewBadgePersist(room,meta);
+  }
+  function rpcmNewBadgeRemaining(room,key) {
+    const meta=rpcmNewBadgeState(room);return Object.hasOwn(meta.items,key)?Math.max(0,5-(meta.clock-meta.items[key])):0;
+  }
+  function rpcmNewBadgeSchedule() {
+    if(rpcmNewBadgeFrame)return;
+    rpcmNewBadgeFrame=requestAnimationFrame(()=>{rpcmNewBadgeFrame=0;rpcmNewBadgePaint();});
+  }
+  function rpcmNewBadgePaint() {
+    const room=state.currentRoom;if(!room)return;
+    const specs=[
+      ['.rpcm-slot[data-slot-id]','slot','slotId','summary .rpcm-slot-title,summary strong,summary .rpcm-slot-name'],
+      ['.rpcm-knowledge-card[data-knowledge-id]','knowledge','knowledgeId','summary strong'],
+      ['.rpcm-person-record[data-person-record]','person','personRecord','summary strong'],
+      ['.m3-panel[data-new-knowledge-ids]','knowledge-set','newKnowledgeIds','.m3-row b'],
+      ['.m3-panel[data-new-person-id]','person','newPersonId','.m3-row b'],
+      ['.m3-who[data-new-actor]','actor','newActor','.m3-person-open b'],
+      ['.rpcm-profile[data-person-name]','actor','personName','summary strong'],
+      ['.rpcm-user-memo-card[data-memo-id]','memo','memoId','.rpcm-user-memo-row strong'],
+      ['[data-inline-story-id]','timeline','inlineStoryId','summary strong'],
+      ['.rpcm-story-card[data-story-card-id]','timeline','storyCardId','.rpcm-story-card-top'],
+      ['.rpcm-lore-pack[data-lore-pack]','pack','lorePack','summary strong'],
+      ['.rpcm-lore-card[data-lore-card]','lore','loreCard','summary strong'],
+      ['.rpcm-ltm-memory[data-ltm-card-id]','longterm','ltmCardId','label strong'],
+      ['.rpcm-log-row[data-log-key],.rpcm-detached-log-card[data-log-key]','log','logKey','.rpcm-log-row-head strong,summary strong,h3,strong'],
+    ];
+    for(const [selector,type,attr,heading] of specs)for(const node of document.querySelectorAll(selector)){
+      const surface=node.closest('[data-room-id]');if(surface&&surface.dataset.roomId!==String(room.chatId))continue;
+      let key=type+':'+(type==='lore'?(node.closest('[data-lore-pack]')?.dataset.lorePack||'')+':':'')+node.dataset[attr];
+      if(type==='knowledge-set'){const ids=JSON.parse(node.dataset[attr]||'[]');key=ids.map(id=>'knowledge:'+id).find(id=>rpcmNewBadgeRemaining(room,id)>0)||'knowledge-set:expired';for(const old of node.querySelectorAll('[data-rpcm-new-key]'))if(old.dataset.rpcmNewKey!==key)old.remove();}
+      const remaining=rpcmNewBadgeRemaining(room,key),existing=node.querySelector('[data-rpcm-new-key="'+CSS.escape(key)+'"]');
+      if(!remaining){existing?.remove();continue;}
+      const target=node.querySelector(heading);if(!target)continue;
+      const badge=existing||document.createElement('span');badge.className='rpcm-new-badge';badge.dataset.rpcmNewKey=key;badge.textContent='NEW';badge.title='새로 추가됨 · 완료 RP '+remaining+'턴 뒤 표시 종료';badge.setAttribute('aria-label',badge.title);
+      if(!existing)target.insertAdjacentElement('afterend',badge);
+    }
+  }
+
+  // Separate from site IndexedDB: best-effort userscript-manager recovery copies.
+  // Never includes API credentials (they live in separate authentication settings).
+  const rescueRuntime={queue:Promise.resolve(),error:'',seeded:false,pending:new Map(),timer:null};
+  let rpcmStartupRescuePromise=Promise.resolve();
+  function rescueKey(kind,id=''){return `RPCM_RESCUE_V1:${location.origin}:${kind}:${id}`;}
+  function rescueUseful(kind,value){return kind==='library'?!!value?.scopeId&&((value.characters||[]).length||(value.extras||[]).length):!!value?.chatId&&((value.slots||[]).some(s=>String(s.content||'').trim())||(value.knowledgeCards||[]).length||(value.personStateRecords||[]).length||(value.storyTimelineCards||[]).length||(value.lorePacks||[]).length||(value.userCanonMemos||[]).length||Object.values(value.aiMemoryAutomation?.areas||{}).some(row=>row?.draft)||(value.aiMemoryAutomation?.undo||[]).length);}
+  function rescueCopy(value){const copy=structuredClone(value);copy.pending=null;for(const key of ['fullRebuildJob','manualIntegratedJob','manualPendingJobs','manualFullBuild','compressionJob','compressionDraft','storyTimelineApiDraft'])delete copy[key];return copy;}
+  function rescueRecordError(kind,id,error){
+    rescueRuntime.errors ||= new Map();const key=kind+':'+id;
+    if(error)rescueRuntime.errors.set(key,error);else rescueRuntime.errors.delete(key);
+    rescueRuntime.error=[...rescueRuntime.errors.values()].join(' · ');
+  }
+  async function rescueWithLock(task){
+    const locks=globalThis.navigator?.locks;
+    if(locks?.request)return locks.request('RPCM_RESCUE_WRITE:'+location.origin,{mode:'exclusive'},task);
+    return task();
+  }
+  async function rescueReadIndex(){
+    try{const raw=await GM_getValue(rescueKey('index'),'[]'),rows=typeof raw==='string'?JSON.parse(raw):raw;
+      return Array.isArray(rows)?rows.filter(row=>row&&['room','library'].includes(row.kind)&&typeof row.id==='string'&&row.id).map(row=>({...row})):[];
+    }catch(_){return [];}
+  }
+  async function rescueValidateEnvelope(entry,kind,id){
+    if(entry?.format!=='RPCM_RESCUE_V1'||entry.origin!==location.origin||entry.kind!==kind||entry.id!==id||!entry.data||entry.hash!==await longTermHash(JSON.stringify(entry.data)))throw new Error('보관본 무결성 확인 실패');
+    if(String(kind==='room'?entry.data.chatId:entry.data.scopeId)!==id)throw new Error('식별자 불일치');
+    return entry;
+  }
+  function rescueRawEqual(left,right){
+    return typeof left===typeof right&&(typeof left==='string'?left===right:JSON.stringify(left)===JSON.stringify(right));
+  }
+  async function rescueSeedDeletionMarkers(){
+    return rescueWithLock(async()=>{for(const row of await rescueReadIndex()){
+      if(!row.deletedAt)continue;const key=rescueKey('deleted-'+row.kind,row.id);
+      if(await GM_getValue(key,null)!==null)continue;
+      const text=JSON.stringify({format:'RPCM_RESCUE_DELETION_V1',origin:location.origin,kind:row.kind,id:row.id,deleted:true,at:String(row.deletedAt)});
+      await GM_setValue(key,text);if(await GM_getValue(key,null)!==text)throw new Error('기존 삭제 표시 보존 실패');
+    }});
+  }
+  async function rescueWriteDeletion(kind,id,deleted){
+    const entry={format:'RPCM_RESCUE_DELETION_V1',origin:location.origin,kind,id:String(id),deleted:!!deleted,at:nowIso()},text=JSON.stringify(entry),key=rescueKey('deleted-'+kind,id);
+    await GM_setValue(key,text);if(await GM_getValue(key,null)!==text)throw new Error('비상 보관본 삭제 표시 저장 확인 실패');
+  }
+  async function rescueListEntries(){
+    const rows=await rescueReadIndex(),map=new Map(rows.map(row=>[row.kind+':'+row.id,row]));rescueRuntime.discoveryWarning='';
+    if(typeof GM_listValues==='function'){
+      try{const keys=await GM_listValues();if(!Array.isArray(keys))throw new Error('보관본 목록을 탐색하지 못했습니다.');
+        const prefixes=['RPCM_RESCUE_V1:'+location.origin+':','RPCM_RESCUE_V2:'+location.origin+':'];
+        for(const key of keys){if(typeof key!=='string')continue;const prefix=prefixes.find(prefix=>key.startsWith(prefix));if(!prefix)continue;
+          const tail=key.slice(prefix.length),separator=tail.indexOf(':');if(separator<0)continue;
+          const role=tail.slice(0,separator),id=tail.slice(separator+1),kind=role.replace(/^previous-/,'');
+          if(!id||!['room','library','previous-room','previous-library'].includes(role))continue;
+          if(!map.has(kind+':'+id))map.set(kind+':'+id,{kind,id,label:id,deletionState:'unknown'});
+        }
+      }catch(error){rescueRuntime.discoveryWarning='일부 비상 보관본 탐색 실패: '+String(error.message||error);}
+    }else rescueRuntime.discoveryWarning='비상 보관본 전체 탐색을 지원하지 않아 기존 목록만 확인했습니다.';
+    for(const row of map.values()){
+      row.deletionState=row.deletedAt?'deleted':row.deletionState||'active';
+      try{const raw=await GM_getValue(rescueKey('deleted-'+row.kind,row.id),null);
+        if(raw!==null){const entry=typeof raw==='string'?JSON.parse(raw):raw;
+          if(entry?.format!=='RPCM_RESCUE_DELETION_V1'||entry.origin!==location.origin||entry.kind!==row.kind||entry.id!==row.id||typeof entry.deleted!=='boolean')throw new Error('삭제 표시를 확인하지 못했습니다.');
+          // A legacy deleted index can be newer than an old active marker.
+          if(row.deletedAt&&(!entry.deleted&&String(row.deletedAt)>=String(entry.at)))row.deletionState='deleted';
+          else{row.deletionState=entry.deleted?'deleted':'active';row.deletedAt=entry.deleted?entry.at:null;}
+        }
+      }catch(_){row.deletionState='unknown';rescueRuntime.discoveryWarning='삭제 여부를 확인하지 못한 비상 보관본이 있습니다. 직접 선택해서 복구해 주세요.';}
+    }
+    return [...map.values()];
+  }
+  function registerRescueMenus(){
+    if(rescueRuntime.menusRegistered)return;
+    try{GM_registerMenuCommand('RP 저장소 점검·복구',openStorageRecovery);rescueRuntime.menusRegistered=true;}
+    catch(error){rescueRuntime.error='복구 메뉴 준비 실패: '+String(error.message||error);}
+  }
+  async function collectRpcmStorageUsage(){
+    const bytes=value=>utf8ByteLength(typeof value==='string'?value:JSON.stringify(value));
+    const categories={rescuePackedCurrent:0,rescuePackedPrevious:0,maintenanceControls:0,rescueCurrent:0,rescuePrevious:0,rescueMetadata:0,correctionArchive:0,processHistory:0,legacyPolicies:0,settingsAndOther:0};
+    let keyCount=0;const errors=[];
+    if(typeof GM_listValues!=='function')errors.push('이 환경에서는 사용자 스크립트 저장공간 전체 탐색을 지원하지 않습니다.');
+    else{
+      const keys=await GM_listValues();if(!Array.isArray(keys))throw new Error('저장공간 목록 조회 실패');
+      const prefix='RPCM_RESCUE_V1:'+location.origin+':';
+      for(const key of keys){try{const value=await GM_getValue(key,undefined);if(value===undefined)continue;let category='settingsAndOther';
+        if(String(key).startsWith('RPCM_RESCUE_V1:')&&!String(key).startsWith(prefix))continue;
+        const packedPrefix='RPCM_RESCUE_V2:'+location.origin+':',maintenancePrefix='RPCM_STORAGE_V11:'+location.origin+':';
+        if(String(key).startsWith('RPCM_RESCUE_V2:')&&!String(key).startsWith(packedPrefix)||String(key).startsWith('RPCM_STORAGE_V11:')&&!String(key).startsWith(maintenancePrefix))continue;
+        if(String(key).startsWith(prefix)){const role=key.slice(prefix.length).split(':',1)[0];category=['room','library'].includes(role)?'rescueCurrent':['previous-room','previous-library'].includes(role)?'rescuePrevious':'rescueMetadata';}
+        else if(String(key).startsWith(packedPrefix))category=String(key).slice(packedPrefix.length).startsWith('previous-')?'rescuePackedPrevious':'rescuePackedCurrent';
+        else if(String(key).startsWith(maintenancePrefix)||key==='RPCM_STORAGE_INSTALL_V11')category='maintenanceControls';
+        else if(String(key).startsWith('wish-rp-correction-text-archive-v1:'))category='correctionArchive';
+        else if(String(key).startsWith('wish-rp-core-response-refiner-history:'))category='processHistory';
+        else if(key==='RPCM_legacy_per_room_policy_before_global_v1')category='legacyPolicies';
+        categories[category]+=bytes(value);keyCount++;if(keyCount%16===0)await sleep(0);
+      }catch(_){errors.push('사용자 스크립트 저장값 일부를 계측하지 못했습니다.');}}
+    }
+    let maintenance=null;try{if(typeof wrpmStorageMaintenanceV11!=='undefined')maintenance=await wrpmStorageMaintenanceV11.usage();}catch(error){errors.push('추가 저장소 계측 실패: '+error.message);}
+    const original={};
+    for(const storeName of [APP.storeName,APP.libraryStoreName]){
+      try{if(!state.db)throw new Error('주 저장소를 열지 못했습니다.');
+        original[storeName]=await new Promise((resolve,reject)=>{const tx=state.db.transaction(storeName,'readonly'),request=tx.objectStore(storeName).openCursor();let entries=0,logicalBytes=0;
+          request.onsuccess=()=>{const cursor=request.result;if(!cursor)return;try{logicalBytes+=bytes(cursor.value);entries++;cursor.continue();}catch(error){tx.abort();reject(error);}};
+          request.onerror=()=>tx.abort();tx.oncomplete=()=>resolve({entries,logicalBytes});tx.onabort=()=>reject(tx.error||new Error('주 자료 계측 취소'));tx.onerror=()=>reject(tx.error||new Error('주 자료 계측 실패'));});
+      }catch(_){original[storeName]={entries:null,logicalBytes:null};errors.push('주 자료 저장량 일부를 계측하지 못했습니다.');}
+    }
+    const local={entries:0,logicalBytes:0};try{for(let i=0;i<localStorage.length;i++){const key=localStorage.key(i);if(!/^(RPCM_|rpcm-|rpcm_|WISH_RP_|wish-rp-core-response-refiner-|wish-operation-errors-v1)/.test(key||''))continue;const raw=localStorage.getItem(key);if(raw===null)throw new Error('열거 중 값이 바뀌었습니다.');local.entries++;local.logicalBytes+=utf8ByteLength(raw);}}catch(error){local.logicalBytes=null;errors.push('사이트 설정 저장량 미확인: '+error.message);}
+    let siteEstimate=null;try{const value=await globalThis.navigator?.storage?.estimate?.();if(value)siteEstimate={usage:Number(value.usage)||0,quota:Number(value.quota)||0};}catch(_){errors.push('사이트 전체 저장량을 확인하지 못했습니다.');}
+    return {measuredAt:nowIso(),metric:'logical UTF-8 bytes; not disk usage',gm:{keyCount,categories,totalLogicalBytes:Object.values(categories).reduce((a,b)=>a+b,0)},original,maintenance,local,siteEstimate,errors:[...new Set(errors)]};
+  }
+  function formatRpcmStorageUsage(value){
+    const amount=rpcmStorageAmount,c=value.gm.categories;
+    return ['현재 사이트·공용 설정의 사용자 스크립트 저장량: '+amount(value.gm.totalLogicalBytes)+' ('+value.gm.keyCount+'개 값)',
+      '비상 현재: '+amount(c.rescueCurrent)+' / 직전: '+amount(c.rescuePrevious)+' / 복구 목록·삭제 표시: '+amount(c.rescueMetadata),
+      '교정문: '+amount(c.correctionArchive)+' / 처리기록: '+amount(c.processHistory)+' / 이전 정책 백업: '+amount(c.legacyPolicies),
+      '설정·기타: '+amount(c.settingsAndOther),
+      ...(value.maintenance?['압축 GM 최근: '+amount(value.maintenance.categories.packedCurrent)+' / 직전: '+amount(value.maintenance.categories.packedPrevious),'보존 중인 기존 표현: '+amount(value.maintenance.categories.retainedSources)+' (기존 GM 항목에 이미 포함)','저장 경로·이전 표지: '+amount(value.maintenance.categories.controls),'보조 IDB 기록 전체: '+amount(value.maintenance.auxiliary.logicalBytes)+' / '+value.maintenance.auxiliary.records+'개','보조 IDB 현재 사용: '+amount(value.maintenance.auxiliary.activeBytes)+' / 복원 후 보존 사본: '+amount(value.maintenance.auxiliary.retainedBytes),...value.maintenance.errors]:[]),
+      ...Object.entries(value.original).map(([name,row])=>(name===APP.storeName?'RP 원본':'설정집 원본')+': '+amount(row.logicalBytes)+' / '+(row.entries??'미확인')+'개'),
+      ...(value.local?['사이트 설정·작업 복구 기록: '+amount(value.local.logicalBytes)+' / '+value.local.entries+'개']:[]),
+      '위 수치는 현재 내용의 UTF-8 크기이며 실제 디스크 점유량과 다를 수 있습니다. 다른 사이트 주소의 비상본은 제외했습니다.',
+      value.siteEstimate?'사이트 전체 사용량 추정: '+amount(value.siteEstimate.usage)+' (RP Manager 외의 사이트 자료 포함)':'사이트 전체 사용량: 미확인',
+      ...value.errors].join('\n');
+  }
+
+  async function rpcmStorageOptimizationScopes(){
+    const scopes=new Set();
+    if(state.currentRoom?.chatId)scopes.add('chat:'+String(state.currentRoom.chatId));
+    for(const row of await rescueListEntries())if(row.kind==='room'){
+      try{let raw=await rescueReadStored(rescueKey('room',row.id));if(raw===null)raw=await rescueReadStored(rescueKey('previous-room',row.id));if(raw!==null){const value=typeof raw==='string'?JSON.parse(raw):raw;await rescueValidateEnvelope(value,'room',row.id);scopes.add('chat:'+row.id);}}catch(_){}
+    }
+    return [...scopes];
+  }
+  function rpcmStoragePickJson(){
+    return new Promise(resolve=>{const input=document.createElement('input');input.type='file';input.accept='.json,application/json';input.hidden=true;document.body.append(input);
+      input.oncancel=()=>{input.remove();resolve(null);};input.onchange=async()=>{const file=input.files?.[0];input.remove();if(!file){resolve(null);return;}try{if(file.size>wrpmFullBackupV2.PROCESS_LIMIT)throw new Error('백업 파일이 128MiB 처리 한도를 넘었습니다. 원문은 유지합니다.');resolve(JSON.parse(await file.text()));}catch(error){resolve({readError:String(error.message||error)});}};input.click();});
+  }
+  function openStorageOptimization(mode='optimize'){
+    if(state.fullBackupRestoreBusy||state.fullBackupRestoreNeedsReload||wrpmFullBackupV2.isBusy()){notify('다른 백업·복원 작업이 끝난 뒤 저장방식을 점검해 주세요.','warn');return;}
+    const previous=document.querySelector('#rpcm-full-rebuild-dialog');previous?.remove();
+    const backdrop=document.createElement('div');backdrop.id='rpcm-full-rebuild-dialog';
+    backdrop.innerHTML=`<section class="rpcm-update-dialog rpcm-full-rebuild-dialog" role="dialog" aria-modal="true" aria-label="저장방식 변경"><header><div><h2>${mode==='rollback'?'저장 방식 되돌리기':'용량 줄이기'}</h2></div><button class="rpcm-update-dialog-close" aria-label="닫기">${rpcmUiIcon('close')}</button></header><div class="rpcm-update-result-body"><p>기억과 초안의 원문을 그대로 보존합니다. 작업할 때 다른 RP매니저 탭을 닫아 주세요. 구버전 탭은 새 잠금에 참여하지 않으므로 함께 실행하면 전환이 보류될 수 있습니다.</p><p>${mode==='rollback'?'최적화 후 새로 생긴 기록까지 현재 자료로 기존 저장방식을 다시 만듭니다. 완료된 뒤 구버전을 설치할 수 있습니다. 복원 실패 항목이 있으면 현재 버전을 유지하세요.':'큰 비상본은 크기가 줄어드는 경우에만 무손실 압축합니다. 처리기록·교정문은 이 사이트의 저장소로 옮깁니다. API 키·설정은 그대로 보관합니다. 원본을 정리하기 전에는 저장량이 일시적으로 늘 수 있습니다.'}</p><label><input type="checkbox" data-maintenance-tabs> 다른 RP매니저 탭을 닫았습니다.</label><button class="rpcm-btn secondary" data-maintenance-full-backup>전체 백업 받기</button><button class="rpcm-btn secondary" data-maintenance-verify-full>저장한 전체 백업 복원 검증</button><pre data-maintenance-result role="status" style="white-space:pre-wrap">${mode==='rollback'?'현재 자료를 복원할 준비가 됐습니다.':'대상과 크기를 확인하고 있습니다…'}</pre><p data-maintenance-notice>기기 밖의 전체 백업 JSON을 주기적으로 보관하세요. 사이트 저장소가 지워지면 이전한 처리기록·교정문은 외부 백업으로 복원해야 합니다.</p></div><footer><button class="rpcm-btn secondary rpcm-update-dialog-close">닫기</button><button class="rpcm-btn secondary" data-maintenance-cleanup hidden>최신 전체 백업 선택 · 기존 사본 정리</button><button class="rpcm-btn primary" data-maintenance-apply disabled>${mode==='rollback'?'최신 자료로 저장 방식 되돌리기':'복구 파일 받기 · 용량 관리 적용'}</button></footer></section>`;
+    const output=backdrop.querySelector('[data-maintenance-result]'),apply=backdrop.querySelector('[data-maintenance-apply]'),cleanup=backdrop.querySelector('[data-maintenance-cleanup]'),tabs=backdrop.querySelector('[data-maintenance-tabs]');let preflight=null,busy=false,backupVerified=false;
+    const ready=()=>{apply.disabled=busy||!tabs.checked||(mode!=='rollback'&&(!preflight||!backupVerified));cleanup.disabled=busy||!tabs.checked;};tabs.onchange=ready;
+    const details=result=>`${result.done?.length||0}개 확인/완료 · ${result.errors?.length||0}개 보류\n`+(result.errors||[]).map(row=>row.key+'\n  '+row.reason).join('\n');
+    const measured=async()=>{try{const result=await collectRpcmStorageUsage();output.textContent+='\n\n'+formatRpcmStorageUsage(result);}catch(error){output.textContent+='\n사용량 미확인: '+error.message;}};
+    backdrop.querySelector('[data-maintenance-full-backup]').onclick=async()=>{try{const payload=await rpcmCreateFullBackup();downloadText(wrpmFullBackupV2.fileText(payload),'RP_최적화전_전체백업.json');output.textContent+='\n전체 백업을 저장한 뒤 복원 검증 버튼에서 파일을 선택해 주세요.';}catch(error){output.textContent+='\n전체 백업 미완료: '+error.message;}};
+    backdrop.querySelector('[data-maintenance-verify-full]').onclick=async()=>{if(busy||!preflight)return;busy=true;ready();try{const payload=await rpcmStoragePickJson();if(!payload)return;if(payload.readError)throw new Error(payload.readError);await wrpmFullBackupV2.verifyOptimization(payload,preflight);backupVerified=true;output.textContent+='\n전체 백업의 시험 복원과 최적화 원문 대조를 확인했습니다.';}catch(error){backupVerified=false;output.textContent+='\n전체 백업 검증 미완료: '+error.message;}finally{busy=false;ready();}};
+    apply.onclick=async()=>{if(busy||!tabs.checked)return;busy=true;ready();try{
+      if(mode==='rollback'){const result=await wrpmStorageMaintenanceV11.rollback();output.textContent=details(result)+'\n새 사본은 복원 완료 후에도 보존했습니다.';}
+      else{await wrpmFullBackupV2.requireOptimization(preflight);const file=wrpmStorageMaintenanceV11.rollbackFile(preflight);downloadText(JSON.stringify(file,null,2),'RP_저장방식변경_적용전_퇴피.json');const result=await wrpmStorageMaintenanceV11.apply(preflight);output.textContent=details(result)+'\n기존 사본을 보존했습니다. 아직 공간 정리는 완료되지 않았습니다.';cleanup.hidden=false;apply.hidden=true;}
+      await measured();
+    }catch(error){output.textContent='작업 보류: '+error.message;}finally{busy=false;ready();}};
+    cleanup.onclick=async()=>{if(busy||!tabs.checked)return;busy=true;ready();try{
+      const latest=await rpcmStoragePickJson();if(!latest)return;if(latest.readError)throw new Error(latest.readError);
+      const file=await wrpmFullBackupV2.prepareCleanup(latest);
+      const result=await wrpmStorageMaintenanceV11.cleanup(file,wrpmFullBackupV2.requireCleanup);output.textContent=details(result)+'\n검증된 기존 표현만 정리했습니다. 압축 비상본의 최근/직전 내용은 남아 있습니다.';await measured();
+    }catch(error){output.textContent='정리 보류: '+error.message;}finally{busy=false;ready();}};
+    const close=()=>{if(!busy)backdrop.remove();};backdrop.querySelectorAll('.rpcm-update-dialog-close').forEach(button=>button.onclick=close);backdrop.onclick=event=>{if(event.target===backdrop)close();};backdrop.onkeydown=event=>{if(event.key==='Escape')close();};document.body.append(backdrop);
+    if(mode==='rollback')ready();else void(async()=>{try{await flushRescueCopies();preflight=await wrpmStorageMaintenanceV11.scan(await rpcmStorageOptimizationScopes());const items=preflight.items.filter(item=>!item.already),raw=items.reduce((sum,item)=>sum+item.rawBytes,0),packed=items.reduce((sum,item)=>sum+item.packedBytes,0);output.textContent=`이전 가능 ${items.length}개 · 기존 전환 ${preflight.items.length-items.length}개 · 보류/기존 유지 ${preflight.errors.length}개\n대상 기존 GM ${rpcmStorageAmount(raw)} / 새 압축 비상본 ${rpcmStorageAmount(packed)}\n`+preflight.errors.map(row=>row.key+'\n  '+row.reason).join('\n');cleanup.hidden=!preflight.items.some(item=>item.already);ready();}catch(error){output.textContent='점검 보류: '+error.message;}})();
+  }
+  async function rescueReadStored(key){
+    if(typeof wrpmStorageMaintenanceV11!=='undefined')return wrpmStorageMaintenanceV11.readRescue(key);
+    return GM_getValue(key,null);
+  }
+  async function rescueWriteStored(key,value,expected,freshCheck){
+    if(typeof wrpmStorageMaintenanceV11!=='undefined')return wrpmStorageMaintenanceV11.writeRescue(key,value,expected,freshCheck);
+    if(freshCheck)await freshCheck();await GM_setValue(key,value);if(!rescueRawEqual(await GM_getValue(key,null),value))throw new Error('비상 보관본 저장 확인 실패');
+  }
+  function rescueContent(copy){
+    const ignored=['_rpcmRevision','updatedAt','manualApplyReceipts','aiApiUsage','notifications','noticeCenter','lastNewBadgeRefresh','rpcmNewEntries'],areas=new Set(Object.values(copy?.aiMemoryAutomation?.areas||{}));
+    return JSON.stringify(copy,function(key,value){if(this===copy&&ignored.includes(key)||key==='status'&&areas.has(this))return;return value;});
+  }
+
+  async function rescueStore(kind,value){
+    let allowCleared=false;
+    if(!rescueUseful(kind,value)){
+      const id=String(kind==='room'?value?.chatId||'':value?.scopeId||'');if(!id)return;const markerRaw=await GM_getValue(rescueKey('deleted-'+kind,id),null);let marker=null;try{marker=typeof markerRaw==='string'?JSON.parse(markerRaw):markerRaw;}catch(_){}
+      if(marker?.format!=='RPCM_RESCUE_DELETION_V1'||marker.origin!==location.origin||marker.kind!==kind||marker.id!==id||marker.deleted!==false)return;
+      const old=await rescueReadStored(rescueKey(kind,id));if(old===null)return;await rescueValidateEnvelope(typeof old==='string'?JSON.parse(old):old,kind,id);allowCleared=true;
+    }
+    return rescueWithLock(async()=>{
+      const id=String(kind==='room'?value.chatId:value.scopeId);
+      if(typeof state!=='undefined'&&state.db){const current=kind==='room'?await readManualStoredRoom({chatId:id}):await getCharacterLibrary(id);if(!current||!rescueUseful(kind,current)&&!allowCleared)return;value=current;}
+      const data=rescueCopy(value),hash=await longTermHash(JSON.stringify(data));
+      const key=rescueKey(kind,id);if(typeof wrpmStorageMaintenanceV11!=='undefined')await wrpmStorageMaintenanceV11.finishRotation(key);const previous=await rescueReadStored(key);let prior=null;
+      if(previous!==null){try{prior=typeof previous==='string'?JSON.parse(previous):previous;await rescueValidateEnvelope(prior,kind,id);}catch(error){
+        const quarantine=rescueKey('invalid-'+kind,id);await GM_setValue(quarantine,previous);
+        if(!rescueRawEqual(await GM_getValue(quarantine,null),previous))throw new Error('손상된 비상 보관본의 원문 보존 실패');prior=null;
+      }}
+      let dataContentHash=null,unchanged=prior?.hash===hash;
+      if(!unchanged&&prior?.data){dataContentHash=await longTermHash(rescueContent(data));unchanged=await longTermHash(rescueContent(prior.data))===dataContentHash;}
+      if(unchanged){
+        const raw=await GM_getValue(rescueKey('deleted-'+kind,id),null);let marker=null;try{marker=typeof raw==='string'?JSON.parse(raw):raw;}catch(_){}
+        if(marker?.format==='RPCM_RESCUE_DELETION_V1'&&marker.origin===location.origin&&marker.kind===kind&&marker.id===id&&marker.deleted===false&&(await rescueReadIndex()).some(row=>row.kind===kind&&row.id===id&&!row.deletedAt))return;
+      }
+      if(!unchanged){
+        const envelope={format:'RPCM_RESCUE_V1',origin:location.origin,kind,id,at:nowIso(),hash,data},serialized=JSON.stringify(envelope);
+        if(!rescueRawEqual(await rescueReadStored(key),previous))throw new Error('다른 탭이 비상 보관본을 바꿔 저장을 보류했습니다.');
+        const freshCheck=async()=>{if(typeof state!=='undefined'&&state.db){const fresh=kind==='room'?await readManualStoredRoom({chatId:id}):await getCharacterLibrary(id);dataContentHash??=await longTermHash(rescueContent(data));if(!fresh||await longTermHash(rescueContent(rescueCopy(fresh)))!==dataContentHash){if(fresh)queueRescueCopy(kind,fresh);throw new Error('압축 중 원본이 갱신되어 최신 비상본 저장을 다시 예약했습니다.');}}};
+        if(prior&&prior.hash!==hash&&typeof wrpmStorageMaintenanceV11!=='undefined')await wrpmStorageMaintenanceV11.protectRotation(key,JSON.stringify(prior),hash);
+        await rescueWriteStored(key,serialized,previous,freshCheck);
+        if(prior&&prior.hash!==hash){const priorText=JSON.stringify(prior),priorKey=rescueKey('previous-'+kind,id);if(typeof wrpmStorageMaintenanceV11!=='undefined')await wrpmStorageMaintenanceV11.finishRotation(key);else await rescueWriteStored(priorKey,priorText);}
+      }
+      await rescueWriteDeletion(kind,id,false);
+      const entries=await rescueReadIndex();const next=entries.filter(row=>!(row.kind===kind&&row.id===id));next.push({kind,id,at:nowIso(),label:String(value.label||value.title||value.name||id)});
+      await GM_setValue(rescueKey('index'),JSON.stringify(next));
+    });
+  }
+  function flushRescueCopies(){
+    clearTimeout(rescueRuntime.timer);rescueRuntime.timer=null;
+    const entries=[...rescueRuntime.pending.values()];rescueRuntime.pending.clear();
+    rescueRuntime.queue=rescueRuntime.queue.catch(()=>{}).then(async()=>{
+      for(const {kind,id} of entries){try{const stored=kind==='room'?await readManualStoredRoom({chatId:id}):await getCharacterLibrary(id);if(stored){await rescueStore(kind,stored);rescueRecordError(kind,id,'');}}catch(error){rescueRecordError(kind,id,String(error.message||error));}}
+    });return rescueRuntime.queue;
+  }
+  function queueRescueCopy(kind,value){
+    if(!rescueUseful(kind,value)){const id=String(kind==='room'?value?.chatId||'':value?.scopeId||'');if(!id)return;let marker=null;try{const raw=GM_getValue(rescueKey('deleted-'+kind,id),null);marker=typeof raw==='string'?JSON.parse(raw):raw;}catch(_){}if(marker?.format!=='RPCM_RESCUE_DELETION_V1'||marker.origin!==location.origin||marker.kind!==kind||marker.id!==id||marker.deleted!==false)return;}
+    const id=String(kind==='room'?value.chatId:value.scopeId);rescueRuntime.pending.set(kind+':'+id,{kind,id});
+    clearTimeout(rescueRuntime.timer);rescueRuntime.timer=setTimeout(flushRescueCopies,500);
+  }
+  async function seedRescueCopies(){
+    if(rescueRuntime.seeded)return;rescueRuntime.seeded=true;
+    try{await rescueSeedDeletionMarkers();const [rooms,libraries]=await Promise.all([getAllRooms(),getAllCharacterLibraries()]);rescueRuntime.queue=rescueRuntime.queue.catch(()=>{}).then(async()=>{for(const [kind,values] of [['room',rooms],['library',libraries]])for(const value of values){const id=String(kind==='room'?value.chatId:value.scopeId);try{await rescueStore(kind,value);rescueRecordError(kind,id,'');}catch(error){rescueRuntime.seeded=false;rescueRecordError(kind,id,String(error.message||error));}}}).catch(error=>{rescueRuntime.seeded=false;rescueRecordError('seed','all',String(error.message||error));});
+      const index=await rescueListEntries();
+      const missing=index.filter(row=>!row.deletedAt&&(row.kind==='room'?!rooms.some(room=>String(room.chatId)===row.id):!libraries.some(lib=>String(lib.scopeId)===row.id)));
+      if(missing.length)notify(`사이트 저장소에서 찾지 못한 비상 보관본 ${missing.length}개가 있습니다. 자료 관리 → 도구·복사·백업·복원 → 저장소 점검·복구에서 확인하세요.`,'warn',10000);}catch(error){rescueRuntime.seeded=false;rescueRuntime.error=error.message;}
+  }
+  async function rescueMarkDeleted(kind,id,throwOnError=false){
+    await flushRescueCopies();let failure=null;
+    rescueRuntime.queue=rescueRuntime.queue.catch(()=>{}).then(()=>rescueWithLock(async()=>{
+      await rescueWriteDeletion(kind,String(id),true);
+      const rows=await rescueReadIndex();let row=rows.find(item=>item.kind===kind&&item.id===String(id));
+      if(!row){row={kind,id:String(id),label:String(id)};rows.push(row);}row.deletedAt=nowIso();await GM_setValue(rescueKey('index'),JSON.stringify(rows));
+    })).catch(error=>{failure=error;rescueRuntime.error=String(error.message||error);});await rescueRuntime.queue;
+    if(failure&&throwOnError)throw new Error('비상 보관본 삭제 상태 기록 실패: '+String(failure.message||failure));
+    return !failure;
+  }
+  async function rescuePayload(previous=false){
+    await flushRescueCopies();const entries=await rescueListEntries(),rooms=[],characterLibraries=[],errors=[];
+    for(const row of entries){try{
+      let raw=await rescueReadStored(rescueKey((previous?'previous-':'')+row.kind,row.id));if(raw===null&&previous)raw=await rescueReadStored(rescueKey(row.kind,row.id));if(raw===null)continue;
+      const entry=typeof raw==='string'?JSON.parse(raw):raw;await rescueValidateEnvelope(entry,row.kind,row.id);
+      if(row.kind==='room')rooms.push(entry.data);else characterLibraries.push(entry.data);
+    }catch(error){errors.push(row.label+': '+error.message);}}
+    return {_rpContextManagerBackup:true,version:APP.version,exportedAt:nowIso(),rooms,characterLibraries,errors,rescueEntries:entries.map(row=>({kind:row.kind,id:row.id,deletionState:row.deletionState,deletedAt:row.deletedAt||null})),discoveryWarning:rescueRuntime.discoveryWarning||''};
+  }
+  async function restoreRescueSelection(previous=false){
+    if(state.fullBackupRestoreBusy||wrpmFullBackupV2.isBusy())throw new Error('다른 백업·복원 작업이 끝난 뒤 선택해 주세요.');
+    const data=await rescuePayload(previous);
+    if(data.errors.length||data.discoveryWarning)throw new Error('복구 사본 일부를 검증하지 못했습니다. 원문은 유지하며 저장소 진단에서 확인해 주세요.');
+    if(!data.rooms.length&&!data.characterLibraries.length)throw new Error('선택한 시점의 복구 사본이 없습니다.');
+    const current=await rpcmCreateFullBackup();
+    const payload=await wrpmFullBackupV2.forRecovery(current,data);
+    const choice=await openBackupImportDialog(payload,current.rooms,current.characterLibraries,{restoreOnly:true});if(!choice)return;
+    if(choice.mode==='clone-current')throw new Error('비상 복구에서는 원래 방에 복원을 선택하세요. 다른 방 복사는 전체 백업 불러오기를 사용하세요.');
+    await rpcmRestoreFullBackup(payload,{...choice,includeOptions:false,recoveryOnly:true});
+    notify('선택한 복구 사본을 원래 방·설정집에 복원했습니다. 다른 시점 사본은 보존합니다.','success');
+  }
+  function openStorageRecovery(){
+    document.querySelector('#rpcm-full-rebuild-dialog')?.remove();const backdrop=document.createElement('div');backdrop.id='rpcm-full-rebuild-dialog';
+    const button=(attr,label,help,primary=false)=>`<button class="rpcm-btn ${primary?'primary':'secondary'}" data-storage-${attr} title="${esc(help)}">${label}</button>`;
+    backdrop.innerHTML=`<section class="rpcm-update-dialog rpcm-full-rebuild-dialog rpcm-storage-dialog" role="dialog" aria-modal="true" aria-label="저장소 점검·복구"><header><h2 style="margin:0">저장소 점검·복구</h2><button class="rpcm-update-dialog-close" style="margin-left:auto" aria-label="닫기">${rpcmUiIcon('close')}</button></header><div class="rpcm-update-result-body"><p>사이트 저장소에는 RP 원본, 확장 저장소에는 설정과 비상 사본을 보관합니다. 전체 백업 JSON은 양쪽 자료를 하나의 파일로 받습니다. 내용이 다른 과거 사본은 지우거나 자동 합치지 않고 복구 자료로 보존합니다.</p><p data-storage-status role="status">저장소 확인 중…</p><div class="rpcm-update-actions">${button('export','전체 백업 JSON','모든 방·설정집·설정과 현재 탭의 작업 초안, 최근/직전 복구 사본을 한 파일로 받습니다. API 키는 제외합니다.',true)}${button('verify','백업 파일 확인','저장한 전체 JSON을 시험 DB에 복원하고 다시 읽어 검사합니다. 현재 자료는 덮어쓰지 않습니다.')}${button('usage','사용량 보기','어떤 원본·사본이 얼마나 공간을 쓰는지 색상 막대와 B/KB/MB로 확인합니다. 자료를 바꾸지 않습니다.')}</div><details style="margin:16px 0"><summary>용량 관리 · 버튼 설명</summary><p>용량 줄이기는 저장방식을 바꾸는 작업이고, 복구 사본 불러오기는 선택한 방의 내용을 되돌리는 작업입니다.</p><div class="rpcm-update-actions">${button('optimize','용량 줄이기','큰 비상 사본을 더 작을 때만 무손실 압축하고, 교정/처리 이력을 사이트 DB로 옮깁니다. 전체 백업 검증이 필요하며 기존 사본은 우선 남깁니다.')}${button('rollback','저장 방식 되돌리기','최적화 이후의 최신 자료를 기존 GM 저장 방식으로 되돌립니다. RP 내용을 과거 시점으로 되돌리는 기능이 아닙니다. GM 용량이 늘 수 있습니다.')}${button('persist','자동 삭제 방지 요청','공간 부족 때 브라우저가 사이트 데이터를 자동 정리하지 않도록 요청합니다. 승인은 브라우저가 결정합니다. 사용자의 사이트/프로필 삭제는 막지 않으며 외부 백업을 대신하지 않습니다.')}</div></details><div class="rpcm-update-actions"><label title="최근과 직전은 서로 다른 시점의 복구 사본입니다. 같은 방 ID에는 선택한 사본을 덮어쓰며 두 시점을 자동 합치지 않습니다.">복구 시점 <select data-storage-version><option value="current">최근 사본</option><option value="previous">직전 사본</option></select></label>${button('restore','복구할 자료 선택','선택한 시점의 비상 사본을 현재 방·설정집과 비교한 뒤 필요한 것만 원래 ID에 복원합니다. 적용 전 전체 퇴피 파일을 준비합니다.')}</div><div data-storage-usage-result hidden></div></div><footer><button class="rpcm-btn secondary rpcm-update-dialog-close">닫기</button></footer></section>`;
+    const status=backdrop.querySelector('[data-storage-status]');let busy=false;
+    const run=async(button,work)=>{if(busy)return;busy=true;const controls=[...backdrop.querySelectorAll('[data-storage-export],[data-storage-verify],[data-storage-usage],[data-storage-optimize],[data-storage-rollback],[data-storage-persist],[data-storage-restore],[data-storage-version]')];controls.forEach(x=>x.disabled=true);try{await work();}catch(error){status.textContent='작업 미완료: '+error.message;}finally{busy=false;controls.forEach(x=>x.disabled=false);}};
+    const refresh=async()=>{try{const [core,data,persisted]=await Promise.all([rpcmStrictCoreBackup(),rescuePayload(),navigator.storage?.persisted?.()]);status.textContent=`현재 RP ${core.rooms.length}개 · 설정집 ${core.characterLibraries.length}개 / 최근 복구 RP ${data.rooms.length}개 · 설정집 ${data.characterLibraries.length}개 · 자동 삭제 방지 ${persisted===true?'승인됨':persisted===false?'미승인':'미확인'}${data.errors.length?' · 복구 사본 검증 오류 '+data.errors.length+'개':''}`;}catch(error){status.textContent='저장소 확인 미완료: '+error.message;}};
+    backdrop.querySelector('[data-storage-usage]').onclick=event=>run(event.currentTarget,async()=>{const output=backdrop.querySelector('[data-storage-usage-result]');output.hidden=false;output.textContent='사용량 확인 중…';try{output.innerHTML=renderRpcmStorageUsage(await collectRpcmStorageUsage());}catch(error){output.textContent='사용량 미확인: '+error.message;throw error;}});
+    backdrop.querySelector('[data-storage-export]').onclick=event=>run(event.currentTarget,async()=>{const payload=await rpcmCreateFullBackup();downloadText(wrpmFullBackupV2.fileText(payload),`RP_매니저_전체백업_${new Date().toISOString().slice(0,10)}.json`);status.textContent='전체 백업 준비 완료 · 저장한 파일을 백업 파일 확인에서 검사하세요. API 키 제외';});
+    backdrop.querySelector('[data-storage-verify]').onclick=event=>run(event.currentTarget,()=>rpcmVerifyFullBackupFile());
+    backdrop.querySelector('[data-storage-persist]').onclick=event=>run(event.currentTarget,async()=>{if(!navigator.storage?.persist)throw new Error('이 브라우저에서 지원하지 않습니다.');const allowed=await navigator.storage.persist();await refresh();if(!allowed)status.textContent+=' · 브라우저가 요청을 승인하지 않았습니다.';});
+    backdrop.querySelector('[data-storage-restore]').onclick=event=>run(event.currentTarget,async()=>{backdrop.style.visibility='hidden';try{await restoreRescueSelection(backdrop.querySelector('[data-storage-version]').value==='previous');await refresh();}finally{backdrop.style.visibility='';}});
+    backdrop.querySelector('[data-storage-optimize]').onclick=()=>{if(!busy)openStorageOptimization('optimize');};backdrop.querySelector('[data-storage-rollback]').onclick=()=>{if(!busy)openStorageOptimization('rollback');};
+    const close=()=>{if(!busy)backdrop.remove();};backdrop.querySelectorAll('.rpcm-update-dialog-close').forEach(b=>b.onclick=close);backdrop.onclick=e=>{if(e.target===backdrop)close();};backdrop.onkeydown=e=>{if(e.key==='Escape')close();};document.body.append(backdrop);void refresh();
+  }
+
+  function traceRoomWrite(room,writer,status,expectedRevision,actualRevision,hash='',details={}) {
+    if(status==='committed'||status==='readback-verified'){try{rpcmNewBadgeCommitted(room,details.before,writer);queueRescueCopy('room',room);}catch(_){}}
+    try {
+      const key='RPCM_room_write_trace_v1',rows=JSON.parse(localStorage.getItem(key)||'[]'),at=nowIso();
+      const before=details.before,after=details.after||room;
+      const changedKeys=before?Array.from(new Set([...Object.keys(before),...Object.keys(after||{})])).filter(key=>JSON.stringify(before[key])!==JSON.stringify(after?.[key])):[];
+      rows.push({at,roomId:String(room?.chatId||''),writer,status,expectedRevision,actualRevision,beforeRevision:expectedRevision,afterRevision:actualRevision,startedAt:details.startedAt||at,committedAt:status==='committed'||status==='readback-verified'?at:null,changedKeys,staleRejected:status==='stale-rejected',hash:String(hash||'')});
+      localStorage.setItem(key,JSON.stringify(rows.slice(-200)));
+    } catch (_) {}
+  }
+
+  function rpcmRoomClone(value){return value===undefined?undefined:structuredClone(value);}
+  function rpcmRoomSig(has,value){if(!has)return '__RPCM_MISSING__';try{return JSON.stringify(value);}catch(_){return String(value);}}
+  function rpcmRoomPlain(value){return !!value&&typeof value==='object'&&!Array.isArray(value)&&Object.getPrototypeOf(value)===Object.prototype;}
+  function rpcmRoomArrayKey(rows){
+    if(!rows.every(row=>row&&typeof row==='object'&&!Array.isArray(row)))return '';
+    for(const key of ['id','cardId','slotId','jobId','key','ref']){
+      const values=rows.map(row=>row?.[key]).filter(value=>value!==undefined&&value!==null&&String(value)!=='').map(String);
+      if(values.length===rows.length&&new Set(values).size===values.length)return key;
+    }
+    return '';
+  }
+  function rpcmThreeWayNode(baseHas,base,localHas,local,remoteHas,remote,path,conflicts){
+    const b=rpcmRoomSig(baseHas,base),l=rpcmRoomSig(localHas,local),r=rpcmRoomSig(remoteHas,remote);
+    if(l===b)return remoteHas?{has:true,value:rpcmRoomClone(remote)}:{has:false};
+    if(r===b)return localHas?{has:true,value:rpcmRoomClone(local)}:{has:false};
+    if(l===r)return localHas?{has:true,value:rpcmRoomClone(local)}:{has:false};
+    if((baseHas?rpcmRoomPlain(base):true)&&(localHas?rpcmRoomPlain(local):true)&&(remoteHas?rpcmRoomPlain(remote):true)){
+      const out={},baseObj=baseHas?base:{},localObj=localHas?local:{},remoteObj=remoteHas?remote:{};
+      const keys=new Set([...Object.keys(baseObj),...Object.keys(localObj),...Object.keys(remoteObj)]);
+      for(const key of keys){
+        if(!path&&['_rpcmRevision','updatedAt'].includes(key)){if(Object.hasOwn(remoteObj,key))out[key]=rpcmRoomClone(remoteObj[key]);continue;}
+        const child=rpcmThreeWayNode(Object.hasOwn(baseObj,key),baseObj[key],Object.hasOwn(localObj,key),localObj[key],Object.hasOwn(remoteObj,key),remoteObj[key],path?`${path}.${key}`:key,conflicts);
+        if(child.has)out[key]=child.value;
+      }
+      return {has:true,value:out};
+    }
+    if(baseHas&&localHas&&remoteHas&&Array.isArray(base)&&Array.isArray(local)&&Array.isArray(remote)){
+      const key=[base,local,remote].map(rpcmRoomArrayKey).find(candidate=>candidate&&[base,local,remote].every(rows=>!rows.length||rpcmRoomArrayKey(rows)===candidate))||'';
+      if(key){
+        const bm=new Map(base.map(row=>[String(row[key]),row])),lm=new Map(local.map(row=>[String(row[key]),row])),rm=new Map(remote.map(row=>[String(row[key]),row]));
+        const order=[...remote.map(row=>String(row[key])),...local.map(row=>String(row[key])).filter(id=>!rm.has(id))],out=[];
+        for(const id of order){
+          const child=rpcmThreeWayNode(bm.has(id),bm.get(id),lm.has(id),lm.get(id),rm.has(id),rm.get(id),`${path}[${key}=${id}]`,conflicts);
+          if(child.has)out.push(child.value);
+        }
+        return {has:true,value:out};
+      }
+    }
+    conflicts.push(path||'(root)');
+    return remoteHas?{has:true,value:rpcmRoomClone(remote)}:{has:false};
+  }
+  function rpcmRememberRoomBaseline(room){
+    if(!room?.chatId)return;
+    state.roomObjectEpochs ||= new WeakMap();
+    if(!state.roomObjectEpochs.has(room))state.roomObjectEpochs.set(room,Number(state.roomResetEpochs?.get(String(room.chatId))||0));
+    state.roomSaveBaselines ||= new Map();
+    state.roomSaveBaselines.set(String(room.chatId),{revision:Number(room._rpcmRevision||0),snapshot:rpcmRoomClone(room)});
+  }
+  function rpcmRebaseRoomOntoStored(room,stored){
+    const key=String(room?.chatId||''),entry=rpcmLocalCandidateBaselines.get(room)||state.roomSaveBaselines?.get(key),priorRevision=Number(room?._rpcmRevision||0);
+    if(!entry||entry.revision!==priorRevision)return {ok:false,reason:'기준 저장본이 없어 자동 병합할 수 없습니다.',conflicts:[]};
+    const conflicts=[],merged=rpcmThreeWayNode(true,entry.snapshot,true,room,true,stored,'',conflicts).value;
+    if(conflicts.length)return {ok:false,reason:`동시에 수정된 항목이 있습니다: ${conflicts.slice(0,4).join(', ')}${conflicts.length>4?' 외':''}`,conflicts};
+    return {ok:true,room:merged,conflicts:[]};
+  }
+  function rpcmReconcileEditorValue(target,source,cardPool=null,field='') {
+    if(rpcmRoomPlain(target)&&rpcmRoomPlain(source)){
+      for(const key of Object.keys(target))if(!Object.hasOwn(source,key))delete target[key];
+      for(const [key,value] of Object.entries(source))target[key]=rpcmReconcileEditorValue(target[key],value,cardPool,key);
+      return target;
+    }
+    if(Array.isArray(target)&&Array.isArray(source)){
+      const key=rpcmRoomArrayKey(source);
+      if(key&&(!target.length||rpcmRoomArrayKey(target)===key)){
+        const previous=new Map(target.map(row=>[String(row[key]),row]));
+        const next=source.map(row=>rpcmReconcileEditorValue(previous.get(String(row[key]))||(field==='cards'?cardPool?.get(String(row[key])):null),row,cardPool));
+        target.length=0;for(const row of next)target.push(row);return target;
+      }
+    }
+    return rpcmRoomClone(source);
+  }
+
+  function rpcmReplaceRoomObject(target,source){
+    for(const key of Object.keys(target))if(!Object.hasOwn(source,key))delete target[key];
+    const next=rpcmRoomClone(source);
+    // Open editors retain card references. Keep them across commits.
+    for (const field of ['slots','knowledgeCards','personStateRecords']) {
+      const previous = new Map((target[field] || []).map(row => [String(row.id), row]));
+      if (!Array.isArray(next[field])) continue;
+      next[field] = next[field].map(row => {
+        const existing = previous.get(String(row.id));
+        if (!existing) return row;
+        for (const key of Object.keys(existing)) if (!Object.hasOwn(row, key)) delete existing[key];
+        Object.assign(existing, row);
+        return existing;
+      });
+    }
+    const cardPool=new Map((target.lorePacks||[]).flatMap(pack=>(pack.cards||[]).map(card=>[String(card.id),card])));
+    for(const field of ['lorePacks','storyTimelineCards'])if(Array.isArray(next[field]))next[field]=rpcmReconcileEditorValue(target[field],next[field],cardPool);
+    if(rpcmRoomPlain(target.aiMemoryAutomation)&&rpcmRoomPlain(next.aiMemoryAutomation)){
+      const config=target.aiMemoryAutomation,areas=config.areas||{},fresh=next.aiMemoryAutomation;
+      const nextAreas={};
+      for(const [key,row]of Object.entries(fresh.areas||{})){
+        const existing=areas[key];
+        if(rpcmRoomPlain(existing)&&rpcmRoomPlain(row)){
+          for(const field of Object.keys(existing))if(!Object.hasOwn(row,field))delete existing[field];
+          Object.assign(existing,row);nextAreas[key]=existing;
+        }else nextAreas[key]=row;
+      }
+      for(const key of Object.keys(config))if(!Object.hasOwn(fresh,key))delete config[key];
+      Object.assign(config,fresh,{areas:nextAreas});next.aiMemoryAutomation=config;
+    }
+    if(rpcmRoomPlain(target.longTermMemory)&&rpcmRoomPlain(next.longTermMemory))next.longTermMemory=longTermReconcileObject(target.longTermMemory,next.longTermMemory);
+    Object.assign(target,next);
+    return target;
+  }
+
+  function rpcmKeepLateEdits(before,live,stored){
+    if(rpcmRoomSig(true,before)===rpcmRoomSig(true,live))return rpcmRoomClone(stored);
+    if(rpcmRoomPlain(before)&&rpcmRoomPlain(live)&&rpcmRoomPlain(stored)){
+      const out=rpcmRoomClone(stored);
+      for(const key of new Set([...Object.keys(before),...Object.keys(live)])){
+        if(['_rpcmRevision','updatedAt'].includes(key))continue;
+        const bh=Object.hasOwn(before,key),lh=Object.hasOwn(live,key);
+        if(rpcmRoomSig(bh,before[key])===rpcmRoomSig(lh,live[key]))continue;
+        if(!lh)delete out[key];else out[key]=bh&&Object.hasOwn(stored,key)?rpcmKeepLateEdits(before[key],live[key],stored[key]):rpcmRoomClone(live[key]);
+      }
+      return out;
+    }
+    if(Array.isArray(before)&&Array.isArray(live)&&Array.isArray(stored)){
+      const key=rpcmRoomArrayKey(before)||rpcmRoomArrayKey(live)||rpcmRoomArrayKey(stored);
+      if(key&&[before,live,stored].every(rows=>!rows.length||rpcmRoomArrayKey(rows)===key)){
+        const bm=new Map(before.map(row=>[String(row[key]),row])),lm=new Map(live.map(row=>[String(row[key]),row]));
+        const out=stored.filter(row=>!bm.has(String(row[key]))||lm.has(String(row[key]))).map(row=>{
+          const id=String(row[key]);return bm.has(id)&&lm.has(id)?rpcmKeepLateEdits(bm.get(id),lm.get(id),row):row;
+        });
+        const ids=new Set(out.map(row=>String(row[key])));
+        for(const row of live)if(!bm.has(String(row[key]))&&!ids.has(String(row[key])))out.push(rpcmRoomClone(row));
+        return out;
+      }
+    }
+    return rpcmRoomClone(live);
+  }
+
+  async function saveRoom(room,writer='saveRoom',validateBeforeWrite=null,onCommitted=null,timing=null) {
+    const areaEpoch=areaResetEpoch(room);
+    if(areaResetRuntime.active&&areaResetPaused(room))throw new Error('영역 초기화 중에는 다른 저장을 보류합니다.');
+    if(writer==='saveRoom')writer=String(new Error().stack?.split('\n')[2]?.match(/at ([^ (]+)/)?.[1]||writer);
+    if((state.fullBackupRestoreBusy||state.fullBackupRestoreNeedsReload)&&writer!=='backup-restore')throw new Error('백업 복원 중 또는 화면 재읽기 전 일반 저장을 보류했습니다. 원문은 유지합니다.');
+    const key=String(room.chatId||''),saveRequestedAt=Date.now();
+    state.roomObjectEpochs ||= new WeakMap();
+    const resetEpoch=Number(state.roomResetEpochs?.get(key)||0);
+    if(!state.roomObjectEpochs.has(room))state.roomObjectEpochs.set(room,resetEpoch);
+    const assertResetCurrent=()=>{if(state.roomObjectEpochs.get(room)!==Number(state.roomResetEpochs?.get(key)||0))throw new Error('초기화 전 화면의 저장 요청을 취소했습니다. 현재 방을 다시 열어 주세요.');};
+    assertResetCurrent();
+    state.roomSaveQueues ||= new Map();
+    const previous=state.roomSaveQueues.get(key)||Promise.resolve();
+    if(timing&&typeof timing==='object'){timing.requestedAt=saveRequestedAt;timing.blockedByWriter=String(previous?.rpcmWriter||'');}
+    const run=previous.catch(()=>{}).then(async()=>{
+      const saveStartedAt=Date.now();if(timing&&typeof timing==='object'){timing.queueMs=saveStartedAt-saveRequestedAt;timing.startedAt=saveStartedAt;}
+      assertResetCurrent();
+      const manualCommitLock=manualUpdateRuntime.commitLocks.get(key);
+      if(manualCommitLock)await manualCommitLock;
+      if(areaResetEpoch(room)!==areaEpoch)throw new Error('영역 초기화 전에 시작한 저장은 취소했습니다.');
+      const stampedEdits=await stampManualExplicitEdits(room);
+      let committedRoom=null,writtenLocal=null,storedForTrace=null,staleReason='';
+      const priorRevision=Number(room._rpcmRevision||0),priorSnapshot=rpcmRoomClone(room),startedAt=nowIso();
+      await new Promise((resolve,reject)=>{
+        const tx=state.db.transaction(APP.storeName,'readwrite'),store=tx.objectStore(APP.storeName),get=store.get(room.chatId);
+        let abortedForStale=false,validationError=null;
+        get.onsuccess=()=>{
+          let stored;try{stored=wishLocalStorageRecord(get.result);}catch(error){validationError=error;tx.abort();return;}storedForTrace=stored||{};
+          const revision=Number(stored?._rpcmRevision||0);
+          let candidate=rpcmRoomClone(room);writtenLocal=rpcmRoomClone(candidate);
+          if(stored&&rescueUseful('room',stored)&&!rescueUseful('room',candidate)&&!state.roomSaveBaselines?.has(key)&&writer!=='backup-restore'){staleReason='빈 초기 데이터로 기존 기억을 덮어쓰려는 저장을 차단했습니다.';abortedForStale=true;tx.abort();return;}
+          if(priorRevision!==revision){
+            if(!stored){staleReason='저장본이 사라져 자동 병합할 수 없습니다.';abortedForStale=true;tx.abort();return;}
+            const rebased=rpcmRebaseRoomOntoStored(room,stored);
+            if(!rebased.ok){staleReason=rebased.reason;traceRoomWrite(room,writer,'stale-rejected',priorRevision,revision,'',{startedAt,before:stored,after:room});abortedForStale=true;tx.abort();return;}
+            candidate=rebased.room;
+            traceRoomWrite(candidate,writer,'stale-rebased',priorRevision,revision,'',{startedAt,before:stored,after:candidate});
+          }
+          try { assertResetCurrent();if (validateBeforeWrite) validateBeforeWrite(candidate,stored); }
+          catch (error) { validationError=error;tx.abort();return; }
+          candidate._rpcmRevision=revision+1;candidate.updatedAt=nowIso();committedRoom=candidate;try{store.put(candidate);}catch(error){validationError=error;tx.abort();}
+        };
+        get.onerror=()=>tx.abort();
+        tx.oncomplete=()=>{try{onCommitted?.(committedRoom);resolve();}catch(error){reject(error);}};
+        tx.onabort=()=>reject(validationError || new Error(abortedForStale?`최신 저장본과 자동 병합하지 못했습니다. ${staleReason} 다른 탭에서 같은 항목을 수정했다면 최신 화면을 다시 열어 주세요.`:`IndexedDB 저장이 취소됐습니다.${tx.error?.name?` (${tx.error.name}: ${tx.error.message||''})`:''}`));
+        tx.onerror=()=>{const error=tx.error||new Error('IndexedDB 저장 실패');const name=String(error?.name||'').toLowerCase(),message=String(error?.message||error||'');reject(/quota/.test(name+' '+message.toLowerCase())?new Error(`브라우저 IndexedDB 저장공간 한도를 초과했습니다. RP Manager 데이터가 너무 커졌거나 브라우저가 이 사이트 저장공간을 제한하고 있습니다. (${message||error.name})`):error);};
+      });
+      if(!committedRoom)throw new Error('저장 결과를 만들지 못했습니다.');
+      rpcmReplaceRoomObject(room,rpcmKeepLateEdits(writtenLocal,room,committedRoom));rpcmRememberRoomBaseline(committedRoom);
+      try{queueSemanticIndexRefresh(room,'saved');}catch(error){console.warn('[Wish semantic] index scheduling',error);}
+      traceRoomWrite(room,writer,'committed',priorRevision,room._rpcmRevision,'',{startedAt,before:storedForTrace||{},after:room});
+      const editTasks=manualExplicitEdits.get(key);for(const [task,version] of stampedEdits)if(editTasks?.get(task)===version)editTasks.delete(task);
+      if(room.chatId===state.currentChatId){state.lastSavedAt=Date.now();updateSaveStatusUi('saved');}
+    });
+    run.rpcmWriter=writer;state.roomSaveQueues.set(key,run);
+    try{return await run;}
+    catch(error){
+      if(room.chatId===state.currentChatId){state.lastSaveError=String(error?.message||error||'저장 실패');updateSaveStatusUi('error');}
+      throw error;
+    }finally{if(timing&&typeof timing==='object'){timing.totalMs=Date.now()-saveRequestedAt;timing.workMs=Math.max(0,timing.totalMs-Number(timing.queueMs||0));}if(state.roomSaveQueues.get(key)===run)state.roomSaveQueues.delete(key);}
+  }
+
+  async function rpcmStrictCoreBackup(){
+    if(!state.db)throw new Error('메인 저장소가 준비되지 않았습니다.');
+    return new Promise((resolve,reject)=>{
+      const tx=state.db.transaction([APP.storeName,APP.libraryStoreName],'readonly'),out={};
+      for(const [store,key]of [[APP.storeName,'rooms'],[APP.libraryStoreName,'characterLibraries']]){
+        const req=tx.objectStore(store).getAll();req.onsuccess=()=>out[key]=req.result;req.onerror=()=>tx.abort();
+      }
+      tx.oncomplete=()=>Array.isArray(out.rooms)&&Array.isArray(out.characterLibraries)?resolve(out):reject(new Error('메인 저장소 읽기 결과 오류'));
+      tx.onabort=()=>reject(tx.error||new Error('메인 저장소 읽기 중단'));tx.onerror=()=>reject(tx.error||new Error('메인 저장소 읽기 실패'));
+    });
+  }
+
+  async function rpcmFullBackupIdle(){
+    const deadline=Date.now()+20000;
+    for(let attempt=0;attempt<30;attempt++){
+      const queues=[...state.roomSaveQueues?.values()||[],...state.librarySaveQueues?.values()||[],...state.pendingCarrierSyncQueues?.values()||[]];
+      if(queues.length){let timer;try{await Promise.race([Promise.all(queues),new Promise((_,reject)=>timer=setTimeout(()=>reject(new Error('저장 대기열이 끝나지 않아 전체 백업을 보류했습니다.')),Math.max(1,deadline-Date.now())))]);}finally{clearTimeout(timer);}}
+      await flushRescueCopies();await wrpmStorageMaintenanceV11.flushArchives();
+      if(!state.roomSaveQueues?.size&&!state.librarySaveQueues?.size&&!state.pendingCarrierSyncQueues?.size)return;
+      if(Date.now()>=deadline)break;
+    }
+    throw new Error('저장이 계속 진행 중입니다. 전체 백업을 완료하지 않았습니다.');
+  }
+
+  async function rpcmCreateFullBackup(){
+    const room=state.currentRoom;
+    if(room){syncOpenModalIntoRoom(room);await saveRoom(room,'full-backup');}
+    return wrpmFullBackupV2.exportFull();
+  }
+  async function rpcmCreateRestorePreimage(){
+    try{return await rpcmCreateFullBackup();}
+    catch(_){return await wrpmFullBackupV2.exportRawPreimage();}
+  }
+
+
+  function rpcmStorageDiagnosticHelp(){return '자료가 어느 저장소에 얼마나 있고 읽기/무결성 오류가 있는지 확인합니다. RP 본문이나 API 키 값은 보고서에 넣지 않습니다. 문제가 생기면 진단 JSON을 개발자나 분석 도우미(Codex 등)에게 전달해 원인을 점검할 수 있습니다. 사이트 주소·저장 ID·해시는 포함됩니다. 원문 복구용 전체 백업을 대신하지 않습니다.';}
+
+  function rpcmBackupFileHelp(){return '이미 내려받은 전체 백업 JSON을 선택해 시험 공간에 복원한 뒤 다시 읽어 검사합니다. 현재 RP나 설정을 덮어쓰지 않습니다. 검사 결과 JSON은 확인 기록이며 원문 백업 파일이 아닙니다. 실제 복원은 백업 불러오기에서 따로 선택합니다.';}
+
+  function rpcmBackupDialogShell(id,title,description){
+    document.querySelector('#'+id)?._rpcmClose?.();document.querySelector('#'+id)?.remove();
+    const previous=document.activeElement,backdrop=document.createElement('div');backdrop.id=id;backdrop.className='rpcm-ltm-backdrop';
+    Object.assign(backdrop.style,{position:'fixed',inset:'0',zIndex:'2147483647',display:'grid',placeItems:'center',padding:'12px',background:'var(--wish-scrim,rgba(0,0,0,.6))'});
+    backdrop.innerHTML=`<section class="rpcm-update-dialog" role="dialog" aria-modal="true" aria-labelledby="${id}-title" style="display:flex;flex-direction:column;width:min(920px,96vw);max-height:90dvh;overflow:hidden;padding:0"><header style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px"><h2 id="${id}-title" style="margin:0;font-size:18px">${esc(title)}</h2><button type="button" class="rpcm-btn secondary" data-dialog-close aria-label="닫기">✕</button></header><div class="rpcm-update-result-body" style="min-height:0;overflow:auto;padding:16px"><p style="margin-top:0">${esc(description)}</p><div data-dialog-content></div></div><footer style="display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;padding:14px"><button type="button" class="rpcm-btn secondary" data-dialog-close>닫기</button><span data-dialog-actions></span></footer></section>`;
+    const keydown=event=>{
+      if(!backdrop.isConnected)return;
+      if(event.key==='Escape'){event.preventDefault();event.stopPropagation();close();return;}
+      if(event.key==='Tab'){const nodes=[...backdrop.querySelectorAll('button:not(:disabled),input:not(:disabled),summary,[tabindex="0"]')].filter(node=>node.getClientRects().length);const first=nodes[0],last=nodes.at(-1);if(first&&(event.shiftKey&&document.activeElement===first||!event.shiftKey&&document.activeElement===last||!backdrop.contains(document.activeElement))){event.preventDefault();(event.shiftKey?last:first).focus();}}
+    };
+    const close=()=>{document.removeEventListener('keydown',keydown,true);backdrop.remove();if(previous?.isConnected)previous.focus?.({preventScroll:true});};
+    backdrop._rpcmClose=close;backdrop.querySelectorAll('[data-dialog-close]').forEach(button=>button.onclick=close);backdrop.onclick=event=>{if(event.target===backdrop)close();};
+    document.body.append(backdrop);document.addEventListener('keydown',keydown,true);backdrop.querySelector('[data-dialog-close]').focus({preventScroll:true});
+    return backdrop;
+  }
+
+
+  async function rpcmOpenFullStorageDiagnostics(){
+    const backdrop=rpcmBackupDialogShell('rpcm-storage-diag-v2','저장 상태 확인',rpcmStorageDiagnosticHelp());
+    const content=backdrop.querySelector('[data-dialog-content]'),actions=backdrop.querySelector('[data-dialog-actions]');
+    content.innerHTML='<p data-diag-status role="status" aria-live="polite">자료를 변경하지 않고 저장소를 읽는 중…</p><details><summary>상세 진단 보기</summary><pre data-diag-result style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>';
+    actions.innerHTML='<button type="button" class="rpcm-btn primary" data-diag-download disabled title="저장 오류가 생겼을 때 개발자나 분석 도우미에게 전달하는 진단 보고서입니다. 원문 백업은 별도로 보관하세요.">진단 JSON 받기</button>';
+    try{
+      const result=await wrpmFullBackupV2.diagnose();if(!backdrop.isConnected)return result;
+      const rows=result.records,count=store=>Array.isArray(rows)?rows.filter(row=>row.store===store).length:'미확인';
+      const damaged=Array.isArray(rows)?rows.filter(row=>row.status==='damaged').length:'미확인';
+      backdrop.querySelector('[data-diag-status]').textContent=`${result.complete&&result.integrityPassed?'읽기·기록 검증 정상':'미확인 또는 오류 항목 있음'} · RP ${result.rooms??'미확인'}개 · 설정집 ${result.libraries??'미확인'}개 · 확장 저장값 ${count('GM')}개 · 사이트 설정 ${count('localStorage')}개 · 검증 오류 ${damaged}개${result.auxStatus==='absent'?' · 보조 보관 DB는 아직 만들어지지 않았습니다.':''}`;
+      backdrop.querySelector('[data-diag-result]').textContent=JSON.stringify(result,null,2);
+      const button=backdrop.querySelector('[data-diag-download]');button.disabled=false;button.onclick=()=>downloadText(JSON.stringify(result,null,2),'RP_저장상태_진단.json');
+      return result;
+    }catch(error){if(backdrop.isConnected)backdrop.querySelector('[data-diag-status]').textContent='진단 미완료: '+error.message;return null;}
+  }
+
+  async function rpcmVerifyFullBackupFile(){
+    if(state.fullBackupRestoreBusy||wrpmFullBackupV2.isBusy())throw new Error('다른 백업·복원 작업이 끝난 뒤 확인해 주세요.');
+    const backdrop=rpcmBackupDialogShell('rpcm-backup-check-v2','백업 파일 확인',rpcmBackupFileHelp()),content=backdrop.querySelector('[data-dialog-content]'),actions=backdrop.querySelector('[data-dialog-actions]');
+    content.innerHTML='<p data-backup-status role="status" aria-live="polite">확인할 전체 백업 JSON을 선택해 주세요.</p><details hidden data-backup-details><summary>상세 검사 결과</summary><pre data-backup-result style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>';
+    actions.innerHTML='<button type="button" class="rpcm-btn secondary" data-backup-download disabled>검사 결과 JSON 받기</button> <button type="button" class="rpcm-btn primary" data-backup-select>백업 JSON 선택</button>';
+    const select=backdrop.querySelector('[data-backup-select]'),download=backdrop.querySelector('[data-backup-download]');let checking=false,result=null;
+    const check=async()=>{
+      if(checking)return null;checking=true;select.disabled=true;download.disabled=true;result=null;backdrop.querySelector('[data-backup-details]').hidden=true;
+      try{
+        let payload=await rpcmStoragePickJson();if(!payload){if(backdrop.isConnected)backdrop.querySelector('[data-backup-status]').textContent='파일 선택을 취소했습니다. 다시 선택하거나 닫을 수 있습니다.';return null;}
+        if(payload.readError)throw new Error(payload.readError);if(!backdrop.isConnected)return null;payload=await rpcmNormalizeIncomingBackup(payload);
+        backdrop.querySelector('[data-backup-status]').textContent=payload.backupMode==='legacy-import'?'기존 형식의 방·설정집을 시험 공간에 복원·재읽기 중입니다. 원본 파일에는 검증 해시와 전역 설정이 없습니다. 현재 자료는 변경하지 않습니다…':'파일 해시와 형식을 확인하고 시험 공간에 복원·재읽기 중입니다. 현재 RP 자료는 변경하지 않습니다…';
+        result=await wrpmFullBackupV2.verifySandbox(payload);if(payload.backupMode==='legacy-import')result.legacyImport={sourceVersion:payload.version,originalFileSignatureAvailable:false,missing:payload.importCompatibility.missing};if(!backdrop.isConnected)return result;
+        backdrop.querySelector('[data-backup-status]').textContent=`검사 통과 · RP ${result.rooms}개 · 설정집 ${result.libraries}개 · 확장 저장값 ${result.gm}개 · 사이트 설정 ${result.local}개 · 현재 자료 덮어쓰기 없음 · ${payload.backupMode==='legacy-import'?'기존 형식: 원본 검증 해시·전역 설정 없음':'API 키 제외'}`;
+        backdrop.querySelector('[data-backup-details]').hidden=false;backdrop.querySelector('[data-backup-result]').textContent=JSON.stringify(result,null,2);download.disabled=false;
+        downloadText(JSON.stringify(result,null,2),'RP_전체백업_복원검증.json');return result;
+      }catch(error){if(backdrop.isConnected)backdrop.querySelector('[data-backup-status]').textContent='검사 미완료: '+error.message;throw error;}
+      finally{checking=false;if(backdrop.isConnected)select.disabled=false;}
+    };
+    select.onclick=()=>check().catch(error=>notify('백업 파일 확인 미완료: '+error.message,'error',7000));
+    download.onclick=()=>{if(result)downloadText(JSON.stringify(result,null,2),'RP_전체백업_복원검증.json');};
+    // Keep the existing one-click file-picker workflow, with a visible explanation/result panel.
+    return check();
+  }
+
+  function rpcmPreserveIncomingPending(room,payload=null){
+    if(room.pending){room.rpcmBackupRecovery||={};room.rpcmBackupRecovery.pending=structuredClone(room.pending);room.rpcmBackupRecovery.sourceChatId=String(room.chatId);room.rpcmBackupRecovery.reason='복원한 주입은 자동 활성화하지 않습니다. 서버 원문 대조가 필요합니다.';}
+    if(payload?.storageSnapshot){
+      room.rpcmBackupRecovery||={};
+      room.rpcmBackupRecovery.previousInputDrafts=rpcmIncomingDraftsForRoom(payload,room.chatId,true);
+      if(room.rpcmTemp48PolicyRestore)room.rpcmBackupRecovery.policyRestoreMarker=structuredClone(room.rpcmTemp48PolicyRestore);
+      room.rpcmTemp48PolicyRestore={at:nowIso(),restored:['verified-saved-room-policy'],missing:[],source:payload.backupMode==='legacy-import'?'legacy-data-backup':'verified-full-backup-v2'};
+      const raw=payload.storageSnapshot.sections.local.find(row=>row.key===pendingBackupKey(room.chatId));
+      if(raw){room.rpcmBackupRecovery||={};room.rpcmBackupRecovery.pendingBackupRaw=raw.value;}
+    }
+    room.pending=null;return room;
+  }
+
+  function rpcmIncomingDraftsForRoom(payload,roomId,previousOnly=false){
+    const s=payload.storageSnapshot?.sections;if(!s)return [];
+    return [...(previousOnly?[]:s.session||[]),...(s.sessionRetained||[])].filter(row=>JSON.parse(row.key.slice('wish-rpcm-result-draft:'.length))[0]===String(roomId)).map(row=>structuredClone(row));
+  }
+
+  async function rpcmWriteRestoredLibrary(library,expected,onCommitted=null){
+    library.updatedAt=nowIso();let conflict=false,failure=null;
+    await new Promise((resolve,reject)=>{
+      const tx=state.db.transaction(APP.libraryStoreName,'readwrite'),store=tx.objectStore(APP.libraryStoreName),get=store.get(library.scopeId);
+      get.onsuccess=()=>{
+        if(wrpmFullBackupV2.signature(get.result||null)!==wrpmFullBackupV2.signature(expected||null)){conflict=true;tx.abort();return;}
+        try{library._rpcmLibraryRevision=Number(get.result?._rpcmLibraryRevision||0)+1;store.put(library);}catch(error){failure=error;tx.abort();}
+      };
+      get.onerror=()=>tx.abort();tx.oncomplete=()=>{try{onCommitted?.(library);resolve();}catch(error){reject(error);}};
+      tx.onabort=()=>reject(failure||tx.error||new Error(conflict?'복원 직전 자료실이 바뀌어 덮어쓰기를 중단했습니다.':'자료실 복원 저장 중단'));tx.onerror=()=>reject(failure||tx.error||new Error('자료실 복원 저장 실패'));
+    });
+    const stored=await getCharacterLibrary(library.scopeId);
+    if(wrpmFullBackupV2.signature(stored)!==wrpmFullBackupV2.signature(library))throw new Error('자료실 복원 재읽기 불일치');
+    queueRescueCopy('library',stored);return stored;
+  }
+
+  function rpcmStampLibraryEpoch(library,fromRead=false){
+    if(!library)return library;
+    state.libraryObjectEpochs||=new WeakMap();state.libraryResetEpochs||=new Map();
+    if(!state.libraryObjectEpochs.has(library))state.libraryObjectEpochs.set(library,Number(state.libraryResetEpochs.get(String(library.scopeId))||0));
+    if(fromRead){state.librarySaveBaselines||=new Map();state.librarySaveBaselines.set(String(library.scopeId),wrpmFullBackupV2.signature(library));}
+    return library;
+  }
+
+  async function rpcmRestoreFullBackup(payload,choice){
+    if(state.fullBackupRestoreBusy||state.fullBackupRestoreNeedsReload||wrpmFullBackupV2.isBusy())throw new Error('다른 백업·복원 작업을 마치고 화면을 다시 읽은 뒤 복원해 주세요.');
+    if(choice.otherTabsClosed!==true)throw new Error('다른 RP매니저 탭을 닫은 뒤 복원해 주세요.');
+    await wrpmFullBackupV2.validate(payload);await wrpmFullBackupV2.verifySandbox(payload);
+    const roomIds=new Set(choice.roomIds.map(String)),libraryIds=new Set(choice.libraryIds.map(String));
+    const globalOnly=!roomIds.size&&!libraryIds.size&&choice.includeOptions&&!choice.recoveryOnly&&wrpmFullBackupV2.hasGlobalOptions(payload);
+    if(!roomIds.size&&!libraryIds.size&&!globalOnly)throw new Error('복원 대상을 선택해 주세요.');
+    if([...roomIds].some(id=>!payload.rooms.some(row=>row.chatId===id))||[...libraryIds].some(id=>!payload.characterLibraries.some(row=>row.scopeId===id)))throw new Error('선택 범위가 백업과 다릅니다.');
+    const preimage=await rpcmCreateRestorePreimage(),epoch=state.routeEpoch,completed=[],committed=[];
+    for(const row of preimage.rooms)if(roomIds.has(row.chatId)&&row.pending)throw new Error('복원 대상 방의 현재 주입을 먼저 해제해 주세요.');
+    for(const row of preimage.rooms)if(roomIds.has(row.chatId)&&rpcmStoredCarrierRestoreLock(row))throw new Error('복원 대상 방의 AI 원문 복원 확인을 먼저 끝내 주세요.');
+    for(const id of roomIds)if(rpcmStoredCarrierRestoreLock(loadPendingBackup(id)))throw new Error('복원 대상 방의 AI 원문 복원 확인을 먼저 끝내 주세요.');
+    downloadText(wrpmFullBackupV2.fileText(preimage),(preimage.format==='WRPM_RESTORE_PREIMAGE_RAW_V1'?'RP_복원전_원형퇴피_':'RP_복원전_전체퇴피_')+new Date().toISOString().slice(0,10)+'.json');
+    const originalRooms=new Map(preimage.rooms.map(row=>[row.chatId,row])),originalLibraries=new Map(preimage.characterLibraries.map(row=>[row.scopeId,row]));
+    const scope=()=>{if(epoch!==state.routeEpoch)throw new Error('복원 중 방이 바뀌었습니다. 완료한 항목은 진행 기록에 남겼습니다.');};
+    const sourceHash=await wrpmFullBackupV2.digest(payload.storageSnapshot.manifest);
+    wrpmFullBackupV2.journal({phase:'prepared',sourceHash,roomIds:[...roomIds],libraryIds:[...libraryIds],completed});
+    const recordCommitted=row=>{committed.push({...row,status:'committed-unverified'});wrpmFullBackupV2.journal({phase:'committed-unverified',sourceHash,completed,committed,globalOnly});};
+    state.fullBackupRestoreBusy=true;
+    try{
+      for(const source of payload.rooms){
+        if(!roomIds.has(source.chatId))continue;scope();
+        const current=(await rpcmStrictCoreBackup()).rooms.find(row=>row.chatId===source.chatId);
+        if(await wrpmFullBackupV2.digest(current||null)!==await wrpmFullBackupV2.digest(originalRooms.get(source.chatId)||null))throw new Error('복원 준비 후 방 자료가 바뀌었습니다: '+source.chatId);
+        const restored=rpcmStampImportReview(rpcmPreserveIncomingPending(structuredClone(source),payload),choice,source.chatId);
+        if(!Array.isArray(restored.lorePacks))restored.lorePacks=[];normalizeRoomSlots(restored);
+        restored._rpcmRevision=Number(current?._rpcmRevision||0);
+        await saveRestoredRoom(restored,current||null,()=>recordCommitted({store:'rooms',id:source.chatId}));completed.push({store:'rooms',id:source.chatId});
+        wrpmFullBackupV2.journal({phase:'data',sourceHash,completed,committed});
+      }
+      for(const source of payload.characterLibraries){
+        if(!libraryIds.has(source.scopeId))continue;scope();
+        const current=(await rpcmStrictCoreBackup()).characterLibraries.find(row=>row.scopeId===source.scopeId);
+        if(await wrpmFullBackupV2.digest(current||null)!==await wrpmFullBackupV2.digest(originalLibraries.get(source.scopeId)||null))throw new Error('복원 준비 후 자료실이 바뀌었습니다: '+source.scopeId);
+        await rpcmWriteRestoredLibrary(structuredClone(source),current||null,()=>recordCommitted({store:'characterLibraries',id:source.scopeId}));
+        const saved=(await rpcmStrictCoreBackup()).characterLibraries.find(row=>row.scopeId===source.scopeId);
+        if(!saved)throw new Error('자료실 복원 재읽기 실패');completed.push({store:'characterLibraries',id:source.scopeId});
+        wrpmFullBackupV2.journal({phase:'data',sourceHash,completed,committed});
+      }
+      scope();if(!globalOnly){if(!choice.recoveryOnly)await wrpmStorageMaintenanceV11.importExtension(payload.storageMaintenance,choice);completed.push({store:'managed',selection:choice.roomIds.length+choice.libraryIds.length});wrpmFullBackupV2.journal({phase:'managed',sourceHash,completed,committed});}
+      scope();const options=choice.recoveryOnly?{completed:[]}:await wrpmFullBackupV2.importOptions(payload,{...choice,globalOnly},recordCommitted);completed.push(...options.completed);
+      scope();const recovery=choice.recoveryOnly||globalOnly?{retained:0}:await wrpmFullBackupV2.retainRecovery(payload,choice);
+      wrpmFullBackupV2.journal({phase:'complete',sourceHash,completed,committed:committed.map(row=>({...row,status:'verified'})),recovery,globalOnly});
+      return {completed,options,recovery,globalOnly,pendingActivation:false};
+    }catch(error){
+      const partial=[...completed,...error.completed||[]];try{wrpmFullBackupV2.journal({phase:'partial',sourceHash,completed:partial,committed,globalOnly,error:String(error.message||error)});}catch(_){}
+      error.code='WRPM_RESTORE_PARTIAL';error.message='복원 미완료 · 쓰기 '+committed.length+'개 / 재읽기 완료 '+partial.length+'개 · 진행 기록과 복원 전 퇴피 JSON을 확인해 주세요. '+error.message;throw error;
+    }finally{
+      state.fullBackupRestoreBusy=false;
+      state.roomResetEpochs||=new Map();
+      for(const row of new Map([...completed,...committed].filter(row=>row.store==='rooms').map(row=>[row.id,row])).values())state.roomResetEpochs.set(row.id,Number(state.roomResetEpochs.get(row.id)||0)+1);
+      state.libraryResetEpochs||=new Map();
+      for(const row of new Map([...completed,...committed].filter(row=>row.store==='characterLibraries').map(row=>[row.id,row])).values())state.libraryResetEpochs.set(row.id,Number(state.libraryResetEpochs.get(row.id)||0)+1);
+      if(epoch===state.routeEpoch&&roomIds.has(String(state.currentRoom?.chatId))){
+        try{await ensureCurrentRoom(getChatIdFromPath(),true);renderModalIfOpen();}
+        catch(error){state.fullBackupRestoreNeedsReload=true;notify('복원 후 화면 재읽기 실패 · 추가 편집 전 사이트를 새로고침해 주세요: '+error.message,'error',9000);}
+      }
+    }
+  }
+
+
+  async function rpcmInitializeGlobalCarrierEncoding(){
+    if(GM_getValue('RPCM_carrier_encoding_global_v1',null)!==null){rpcmCarrierEncoding();return;}
+    const rooms=await getAllRooms();
+    const encoding=rooms.some(room=>room.carrierEncoding==='utf-16le')?'utf-16le':'utf-8';
+    // Another tab may have completed migration while this tab was reading IndexedDB.
+    if(GM_getValue('RPCM_carrier_encoding_global_v1',null)!==null){rpcmCarrierEncoding();return;}
+    await GM_setValue('RPCM_carrier_encoding_global_v1',{version:1,encoding,source:'legacy-room-migration'});
+    if(rpcmCarrierEncoding()!==encoding)throw new Error('전역 인코딩 초기 설정이 바뀌었습니다. 현재 선택을 확인해 주세요.');
+  }
+
+  function rpcmStorageAmount(value){
+    if(value===null||value===undefined||!Number.isFinite(Number(value)))return '미확인';
+    const n=Number(value),unit=n>=1e9?'GB':n>=1e6?'MB':n>=1e3?'KB':'B',div=unit==='GB'?1e9:unit==='MB'?1e6:unit==='KB'?1e3:1;
+    return unit==='B'?formatCount(n)+' B':(n/div).toLocaleString('ko-KR',{maximumFractionDigits:2})+' '+unit+' ('+formatCount(n)+' B)';
+  }
+
+  function rpcmStorageUsageRows(value){
+    const c=value.gm.categories,rows=[
+      ['최근 비상 사본',c.rescueCurrent,'확장 저장소'],['직전 비상 사본',c.rescuePrevious,'확장 저장소'],
+      ['압축 비상 사본 · 최근',c.rescuePackedCurrent,'확장 저장소'],['압축 비상 사본 · 직전',c.rescuePackedPrevious,'확장 저장소'],
+      ['복구 목록·삭제 표시',c.rescueMetadata,'확장 저장소'],['교정 전후 기록',c.correctionArchive,'확장 저장소'],
+      ['처리 이력',c.processHistory,'확장 저장소'],['이전 정책 사본',c.legacyPolicies,'확장 저장소'],
+      ['저장 경로 표지',c.maintenanceControls,'확장 저장소'],['설정·기타',c.settingsAndOther,'확장 저장소']];
+    for(const [name,row]of Object.entries(value.original))rows.push([name===APP.storeName?'RP 원본':'설정집 원본',row.logicalBytes,'사이트 IndexedDB']);
+    if(value.maintenance)rows.push(['보조 보관 기록',value.maintenance.auxiliary.logicalBytes,'사이트 IndexedDB']);
+    if(value.local)rows.push(['설정·작업 복구 기록',value.local.logicalBytes,'사이트 localStorage']);
+    return rows.map(([label,bytes,store])=>({label,bytes,store}));
+  }
+
+  function renderRpcmStorageUsage(value){
+    const rows=rpcmStorageUsageRows(value),total=rows.reduce((n,row)=>n+(Number(row.bytes)||0),0),partial=value.errors.length||rows.some(row=>row.bytes===null||row.bytes===undefined);
+    const colors=['#5aa2f8','#ad8cff','#e4a5c9','#3bccab','#f7c755','#92a1b8','#eb7bb9','#67cbd1','#d4b783','#acb9cc','#f29766','#8495ed','#80bb8c','#c6ad75'];
+    const known=rows.filter(row=>Number(row.bytes)>0),segment=row=>Math.max(0,Number(row.bytes)||0)/Math.max(total,1)*100;
+    return `<section data-storage-chart aria-label="저장공간 구성별 사용량"><style>.rpcm-storage-usage-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 20px;margin-top:12px}@media(max-width:650px){.rpcm-storage-usage-grid{grid-template-columns:1fr}}</style><h3>구성별 사용량 · ${partial?'확인된 내용 합계':'내용 크기 합계'} ${rpcmStorageAmount(total)}</h3><div style="display:flex;height:12px;border-radius:6px;overflow:hidden;background:#596174" aria-label="구성별 비율">${known.map(row=>`<span title="${esc(row.label+' · '+rpcmStorageAmount(row.bytes))}" style="width:${segment(row)}%;background:${colors[rows.indexOf(row)%colors.length]}"></span>`).join('')}</div><div class="rpcm-storage-usage-grid">${rows.filter(row=>Number(row.bytes)>0||row.bytes===null||row.bytes===undefined).map((row)=>`<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid #596174"><span><span aria-hidden="true" style="color:${colors[rows.indexOf(row)%colors.length]}">●</span> ${esc(row.label)}<small style="display:block;opacity:.75">${esc(row.store)}</small></span><strong style="text-align:right;font-size:13px;max-width:58%;flex-shrink:0">${rpcmStorageAmount(row.bytes)}${row.bytes===null||row.bytes===undefined?'':` · ${segment(row)<0.1?'&lt;0.1':segment(row).toFixed(1)}%`}</strong></div>`).join('')}</div><p style="font-size:13px">원본과 복구 사본은 실제로 각각 저장되어 각각 표시됩니다. 기존 사본 보존량은 이미 해당 GM 항목에 포함되어 합계에 다시 더하지 않습니다. 수치는 UTF-8 내용 크기이며 실제 디스크 점유량과 다릅니다. KB/MB는 1,000 기준입니다.</p>${value.siteEstimate?`<p style="font-size:13px">사이트 전체 사용량 추정: ${rpcmStorageAmount(value.siteEstimate.usage)} · WRPM 외 자료 포함, 위 합계에 더하지 않음</p>`:''}${partial?`<p role="status">일부 영역 미확인: ${esc(value.errors.join(' · ')||'저장값을 확인하지 못했습니다.')}</p>`:''}<details><summary>자세한 수치</summary><pre style="white-space:pre-wrap">${esc(formatRpcmStorageUsage(value))}</pre></details></section>`;
+  }
+
+  async function getAllRooms() {
+    return new Promise((resolve, reject) => {
+      const tx = state.db.transaction(APP.storeName, 'readonly');
+      const req = tx.objectStore(APP.storeName).getAll();
+      req.onsuccess = () => wishResolveStorageRecord(req,[],resolve,reject);
+      req.onerror = () => reject(req.error);
+      tx.onabort = () => reject(tx.error || new Error('IndexedDB 조회가 취소되었습니다.'));
+      tx.onerror = () => reject(tx.error || new Error('IndexedDB 조회 실패'));
+    });
+  }
+
+  function rpcmRoomDisplayName(room, override = null) {
+    const base = String(room?.label || '').trim();
+    const chatTitle = String(override?.chatTitle ?? room?.chatTitle ?? '').trim();
+    const status = String(override?.status || '').trim();
+    const fallback = base || chatTitle || ('RP ' + shortId(room?.chatId));
+    if (status) return (base || ('RP ' + shortId(room?.chatId))) + '[' + status + ']';
+    if (base && chatTitle && normalizedLibraryLabel(base) !== normalizedLibraryLabel(chatTitle)) return base + '[' + chatTitle + ']';
+    return fallback;
+  }
+
+  async function rpcmBuildBackupRoomDisplayMeta(rooms, concurrency = 4) {
+    const result = new Map();
+    const targets = (rooms || []).filter(room => room?.chatId && !String(room.chatTitle || '').trim());
+    if (!targets.length) return result;
+    let cursor = 0;
+    const worker = async () => {
+      for (;;) {
+        const index = cursor++;
+        if (index >= targets.length) return;
+        const room = targets[index], key = String(room.chatId || ''), apiId = String(apiChatIdOf(room) || '');
+        if (!apiId) { result.set(key, { status:'조회 실패' }); continue; }
+        try {
+          const meta = await fetchRoomMeta(apiId, { throwOnError:true });
+          const chatTitle = String(meta?.chatTitle || '').trim();
+          if (chatTitle) result.set(key, { chatTitle });
+        } catch (error) {
+          const status = rpcmNetStatus(error);
+          result.set(key, { status:[404,410].includes(status) ? '삭제되어 조회불가' : [401,403].includes(status) ? '조회 권한 없음' : '조회 실패' });
+        }
+      }
+    };
+    const workers = Math.min(4, Math.max(1, Number(concurrency) || 4), targets.length);
+    await Promise.all(Array.from({ length:workers }, () => worker()));
+    return result;
+  }
+
+  function rpcmInjectedRoomRows(rooms, currentChatId = state.currentChatId) {
+    return (rooms || []).filter(room => room?.pending).map(room => ({
+      chatId: String(room.chatId || ''),
+      label: rpcmRoomDisplayName(room),
+      current: String(room.chatId) === String(currentChatId),
+      status: room.pending.reanchorRetry ? '복구 대기' : room.pending.verified ? '주입 중' : '서버 확인 필요',
+    }));
+  }
+

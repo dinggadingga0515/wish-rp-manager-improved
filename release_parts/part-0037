@@ -1,0 +1,1000 @@
+      #rpcm-modal .rpcm-ai-memory-shortcut p{flex:1 1 240px;margin:0}
+      #rpcm-modal .rpcm-ai-memory-shortcut span{font-size:11px;color:var(--wish-muted)}
+      #rpcm-modal .rpcm-ai-overview-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+      #rpcm-modal .rpcm-ai-overview-grid>div{display:grid;gap:3px;min-width:0;padding:9px;border:1px solid var(--wish-line-2);border-radius:8px;background:var(--wish-card-2)}
+      #rpcm-modal .rpcm-ai-overview-grid strong{color:var(--wish-fg);font-size:12px}#rpcm-modal .rpcm-ai-overview-grid span{color:var(--wish-accent-strong);font-size:11px}#rpcm-modal .rpcm-ai-overview-grid small{color:var(--wish-muted);font-size:10px;overflow-wrap:anywhere}
+      #rpcm-modal .rpcm-ai-memory-row{display:grid;grid-template-columns:minmax(140px,1fr) auto auto;gap:5px 12px;align-items:center;padding:10px 0;border-top:1px solid var(--wish-line-2)}
+      #rpcm-modal .rpcm-ai-memory-row>label{display:flex;align-items:center;gap:8px;color:var(--wish-fg);font-size:13px}
+      #rpcm-modal .rpcm-ai-memory-row input[type=number]{width:62px;min-height:30px;padding:4px;background:var(--wish-card-2);border:1px solid var(--wish-line);border-radius:7px;color:var(--wish-fg);text-align:center}
+      #rpcm-modal .rpcm-ai-memory-row>small{grid-column:1/-1;color:var(--wish-muted);overflow-wrap:anywhere}
+      #rpcm-modal .rpcm-ai-memory-row>div{grid-column:1/-1;display:flex;gap:6px;flex-wrap:wrap}
+      #rpcm-ai-memory-backdrop,#rpcm-ai-memory-baseline-dialog{position:fixed;inset:0;z-index:2147483645;display:grid;place-items:center;padding:12px;background:#000a}
+      #rpcm-ai-memory-backdrop .rpcm-update-dialog{width:min(950px,96vw);max-height:94vh;display:flex;flex-direction:column}
+      #rpcm-ai-memory-backdrop .rpcm-update-result-body{overflow:auto}
+      #rpcm-ai-memory-backdrop .rpcm-ai-memory-selection{display:grid;gap:8px;margin:10px 0;color:var(--wish-fg);font-size:12px}
+      #rpcm-ai-memory-backdrop .rpcm-ai-memory-selection>div{display:grid;gap:5px;max-height:210px;overflow:auto}
+      #rpcm-ai-memory-backdrop .rpcm-ai-memory-selection label{display:flex;align-items:center;gap:8px;padding:7px;border:1px solid var(--wish-line);border-radius:7px;background:var(--wish-card-2)}
+      #rpcm-ai-memory-backdrop .rpcm-ai-memory-selection label span{flex:1;min-width:0;overflow-wrap:anywhere}
+      #rpcm-ai-memory-backdrop .rpcm-ai-memory-selection label small{color:var(--wish-muted)}
+      #rpcm-ai-memory-backdrop textarea{width:100%;min-height:180px;height:32vh;box-sizing:border-box;padding:12px;border:1px solid var(--wish-line);border-radius:8px;background:var(--wish-card-2);color:var(--wish-fg);font:12px/1.6 ui-monospace,monospace}
+      #rpcm-ai-memory-baseline-dialog>section{width:min(620px,94vw);display:grid;gap:10px;padding:20px;border:1px solid var(--wish-line);border-radius:12px;background:var(--wish-card);color:var(--wish-fg)}
+      #rpcm-ai-memory-baseline-dialog select{width:100%;min-height:40px;background:var(--wish-card-2);color:var(--wish-fg)}
+      #rpcm-ai-memory-baseline-dialog>section>div{display:flex;justify-content:flex-end;gap:8px}
+      @media(max-width:600px){#rpcm-modal .rpcm-pref-card{padding:12px}#rpcm-modal .rpcm-pref-row{flex-wrap:wrap}#rpcm-modal .rpcm-pref-row>span{flex:1 1 190px}#rpcm-modal .rpcm-ai-overview-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+      /* v0.14.64 · Corrected light mode overrides + smaller help + stronger person tabs */
+      #rpcm-modal .rpcm-core-help{width:18px!important;height:18px!important;min-width:18px!important;min-height:18px!important;margin-left:5px!important;border-width:1px!important;font-size:10px!important;font-weight:700!important;line-height:1!important}
+      #rpcm-modal .rpcm-pref-row>span{display:block!important}
+      #rpcm-modal .rpcm-pref-row>span>.rpcm-core-help{display:inline-grid!important;vertical-align:1px!important;margin-left:4px!important}
+      #rpcm-modal .rpcm-pref-row small{display:block;margin-top:3px}
+      .rpcm-core-tip{box-shadow:var(--wish-lift,0 18px 45px rgba(0,0,0,.18))!important}
+
+      /* Person top tabs: keep inactive labels readable in light mode and make the active tab unmistakable. */
+      #rpcm-person-core .m3-tabs{padding:4px!important;border:1px solid var(--wish-line)!important;background:color-mix(in srgb,var(--wish-card-2) 82%,var(--wish-accent-soft) 18%)!important}
+      #rpcm-person-core .m3-tabsind{top:4px!important;bottom:4px!important;left:4px!important;border:1px solid var(--wish-accent-line)!important;background:var(--wish-card)!important;box-shadow:0 1px 3px color-mix(in srgb,var(--wish-fg) 10%,transparent),0 0 0 1px var(--wish-hi)!important}
+      #rpcm-person-core .m3-tabs button{color:color-mix(in srgb,var(--wish-fg-2) 88%,var(--wish-fg) 12%)!important;font-weight:600!important}
+      #rpcm-person-core .m3-tabs button:hover{background:var(--wish-hi)!important;color:var(--wish-fg)!important}
+      #rpcm-person-core .m3-tabs button[aria-selected=true]{color:var(--wish-accent-strong)!important;font-weight:750!important}
+      #rpcm-modal .rpcm-person-tabs{border:1px solid var(--wish-line)!important;background:color-mix(in srgb,var(--wish-card-2) 82%,var(--wish-accent-soft) 18%)!important}
+      #rpcm-modal .rpcm-person-tabs>button{color:color-mix(in srgb,var(--wish-fg-2) 88%,var(--wish-fg) 12%)!important}
+      #rpcm-modal .rpcm-person-tabs>button:hover{background:var(--wish-hi)!important;color:var(--wish-fg)!important}
+      #rpcm-modal .rpcm-person-tabs>button[aria-selected=true]{color:var(--wish-accent-strong)!important;font-weight:750!important}
+      #rpcm-modal .rpcm-person-tabs .rpcm-tab-indicator{border-color:var(--wish-accent-line)!important;background:var(--wish-card)!important;box-shadow:0 1px 3px color-mix(in srgb,var(--wish-fg) 10%,transparent),0 0 0 1px var(--wish-hi)!important}
+
+      /* Saved memory/read cards: remove the legacy dark-only surfaces in light mode. */
+      #rpcm-modal .rpcm-read-toolbar{color:var(--wish-fg-2)!important}
+      #rpcm-modal .rpcm-read-card{border-color:var(--wish-line)!important;background:var(--wish-card)!important;color:var(--wish-fg)!important;box-shadow:var(--wish-shadow)!important}
+      #rpcm-modal .rpcm-read-card>summary{background:var(--wish-card-2)!important;color:var(--wish-fg)!important}
+      #rpcm-modal .rpcm-read-card>summary:hover{background:var(--wish-accent-soft)!important}
+      #rpcm-modal .rpcm-read-card>summary strong{color:var(--wish-fg)!important}
+      #rpcm-modal .rpcm-read-card>summary small{color:var(--wish-muted)!important}
+      #rpcm-modal .rpcm-read-index{color:var(--wish-accent-strong)!important}
+      #rpcm-modal .rpcm-read-copy{border-color:var(--wish-line)!important;background:var(--wish-card)!important;color:var(--wish-accent-strong)!important}
+      #rpcm-modal .rpcm-read-copy:hover{background:var(--wish-accent-soft)!important;color:var(--wish-accent-strong)!important}
+      #rpcm-modal .rpcm-read-chevron{color:var(--wish-muted)!important}
+      #rpcm-modal .rpcm-read-card-body{border-top-color:var(--wish-line-2)!important;background:var(--wish-card)!important;color:var(--wish-fg-2)!important}
+      #rpcm-modal .rpcm-read-text{color:var(--wish-fg-2)!important}
+      #rpcm-modal .rpcm-read-sub{border-bottom-color:var(--wish-line-2)!important}
+      #rpcm-modal .rpcm-read-sub strong{color:var(--wish-accent-strong)!important}
+      #rpcm-modal .rpcm-read-empty{border-color:var(--wish-line)!important;color:var(--wish-muted)!important;background:var(--wish-card)!important}
+
+      /* Quick Monitor: inherit the Wish theme instead of the legacy dark palette. */
+      #rpcm-quick-backdrop{color:var(--wish-fg)!important}
+      #rpcm-quick-backdrop .rpcm-quick-panel{background:var(--wish-sheet)!important;color:var(--wish-fg)!important;border-color:var(--wish-line)!important;box-shadow:var(--wish-shell-shadow)!important}
+      #rpcm-quick-backdrop .rpcm-quick-head,#rpcm-quick-backdrop .rpcm-quick-foot{background:var(--wish-card)!important;border-color:var(--wish-line-2)!important;color:var(--wish-fg)!important}
+      #rpcm-quick-backdrop .rpcm-quick-head span{color:var(--wish-muted)!important}
+      #rpcm-quick-backdrop .rpcm-quick-close{border-color:var(--wish-line)!important;background:var(--wish-card-2)!important;color:var(--wish-fg-2)!important}
+      #rpcm-quick-backdrop .rpcm-quick-close:hover{background:var(--wish-accent-soft)!important;color:var(--wish-accent-strong)!important}
+      #rpcm-quick-backdrop .rpcm-quick-note{background:var(--wish-card-2)!important;color:var(--wish-fg-2)!important;border-color:var(--wish-line-2)!important}
+      #rpcm-quick-backdrop .rpcm-quick-list{background:var(--wish-sheet)!important;color:var(--wish-fg-2)!important}
+      #rpcm-quick-backdrop .rpcm-quick-group-title{color:var(--wish-accent-strong)!important}
+      #rpcm-quick-backdrop .rpcm-quick-group-title.is-muted{color:var(--wish-muted)!important;border-top-color:var(--wish-line-2)!important}
+      #rpcm-quick-backdrop .rpcm-quick-row{border-color:var(--wish-line)!important;background:var(--wish-card)!important}
+      #rpcm-quick-backdrop .rpcm-quick-row:hover{border-color:var(--wish-accent-line)!important;background:var(--wish-accent-soft)!important}
+      #rpcm-quick-backdrop .rpcm-quick-row.is-off{background:var(--wish-card-2)!important;opacity:.62}
+      #rpcm-quick-backdrop .rpcm-quick-copy strong{color:var(--wish-fg)!important}
+      #rpcm-quick-backdrop .rpcm-quick-copy small,#rpcm-quick-backdrop .rpcm-quick-empty,#rpcm-quick-backdrop .rpcm-quick-foot>span{color:var(--wish-muted)!important}
+
+      /* AI assistant/utility surfaces: eliminate dark-only inline cards and controls. */
+      #rpcm-utility-backdrop{color:var(--wish-fg)!important}
+      #rpcm-utility-backdrop .rpcm-utility-dialog{border-color:var(--wish-line)!important;background:var(--wish-card)!important;color:var(--wish-fg)!important;box-shadow:var(--wish-shell-shadow)!important}
+      #rpcm-utility-backdrop header,#rpcm-utility-backdrop footer{background:var(--wish-card-2)!important;border-color:var(--wish-line-2)!important;color:var(--wish-fg)!important}
+      #rpcm-utility-backdrop header p{color:var(--wish-fg-2)!important}
+      #rpcm-utility-backdrop button,#rpcm-utility-backdrop select,#rpcm-utility-backdrop input[type=text]{border-color:var(--wish-line)!important;background:var(--wish-card)!important;color:var(--wish-fg)!important}
+      #rpcm-utility-backdrop button:hover{border-color:var(--wish-accent-line)!important;background:var(--wish-accent-soft)!important}
+      #rpcm-utility-backdrop button.primary{background:var(--wish-accent)!important;border-color:var(--wish-accent)!important;color:var(--wish-accent-ink)!important}
+      #rpcm-utility-backdrop .rpcm-utility-field{color:var(--wish-fg-2)!important}
+      #rpcm-utility-backdrop .rpcm-utility-note,#rpcm-utility-backdrop .rpcm-utility-status,#rpcm-utility-backdrop .rpcm-utility-result{border-color:var(--wish-line)!important;background:var(--wish-card-2)!important;color:var(--wish-fg-2)!important}
+      #rpcm-utility-backdrop .rpcm-utility-result-head em{color:var(--wish-accent-strong)!important}
+      #rpcm-utility-backdrop .rpcm-utility-result small,#rpcm-utility-backdrop .rpcm-utility-empty{color:var(--wish-muted)!important}
+      #rpcm-utility-backdrop.rpcm-memory-assistant .rpcm-assistant-controls{border-color:var(--wish-line-2)!important;background:var(--wish-card-2)!important}
+      #rpcm-utility-backdrop.rpcm-memory-assistant .rpcm-assistant-controls label{color:var(--wish-fg-2)!important}
+      #rpcm-utility-backdrop.rpcm-memory-assistant .rpcm-assistant-context{border-color:var(--wish-line-2)!important;color:var(--wish-accent-strong)!important;background:var(--wish-card)!important}
+      #rpcm-utility-backdrop.rpcm-memory-assistant .rpcm-assistant-thread{background:var(--wish-card)!important}
+      #rpcm-utility-backdrop.rpcm-memory-assistant .rpcm-assistant-bubble{border-color:var(--wish-line)!important;background:var(--wish-card-2)!important;color:var(--wish-fg)!important}
+      #rpcm-utility-backdrop.rpcm-memory-assistant .rpcm-assistant-bubble.is-user{border-color:var(--wish-accent-line)!important;background:var(--wish-accent-soft)!important}
+      #rpcm-utility-backdrop.rpcm-memory-assistant .rpcm-assistant-bubble>small{color:var(--wish-accent-strong)!important}
+      #rpcm-utility-backdrop.rpcm-memory-assistant .rpcm-assistant-bubble p{color:var(--wish-fg)!important}
+      #rpcm-utility-backdrop.rpcm-memory-assistant .rpcm-assistant-refs strong{color:var(--wish-fg-2)!important}
+      #rpcm-utility-backdrop.rpcm-memory-assistant .rpcm-assistant-proposals,#rpcm-utility-backdrop.rpcm-memory-assistant .rpcm-assistant-readonly{border-top-color:var(--wish-line)!important}
+      #rpcm-utility-backdrop.rpcm-memory-assistant .rpcm-assistant-compose{background:var(--wish-card-2)!important}
+      #rpcm-utility-backdrop.rpcm-memory-assistant .rpcm-assistant-compose textarea{border-color:var(--wish-line)!important;background:var(--wish-card)!important;color:var(--wish-fg)!important;caret-color:var(--wish-fg)!important}
+      #rpcm-utility-backdrop.rpcm-memory-assistant .rpcm-assistant-compose textarea:focus-visible{outline-color:var(--wish-accent)!important}
+      #rpcm-utility-backdrop.rpcm-memory-assistant .rpcm-assistant-sessions>summary{border-color:var(--wish-line)!important;background:var(--wish-card)!important;color:var(--wish-fg-2)!important}
+      #rpcm-utility-backdrop.rpcm-memory-assistant .rpcm-assistant-sessions[open]>summary{background:var(--wish-accent-soft)!important;border-color:var(--wish-accent-line)!important;color:var(--wish-accent-strong)!important}
+      #rpcm-utility-backdrop.rpcm-memory-assistant .rpcm-assistant-sessions-panel{border-color:var(--wish-line)!important;background:var(--wish-card)!important;color:var(--wish-fg)!important;box-shadow:var(--wish-lift)!important}
+      #rpcm-utility-backdrop.rpcm-memory-assistant .rpcm-assistant-session-row small,#rpcm-utility-backdrop.rpcm-memory-assistant .rpcm-assistant-sessions-panel>small{color:var(--wish-muted)!important}
+      #rpcm-utility-backdrop.rpcm-memory-assistant .rpcm-assistant-sessions-foot{border-top-color:var(--wish-line-2)!important}
+      #rpcm-utility-backdrop.rpcm-memory-assistant .rpcm-assistant-active-title{color:var(--wish-accent-strong)!important}
+      #rpcm-utility-backdrop.rpcm-memory-assistant .rpcm-assistant-preflight{background:var(--wish-scrim)!important}
+      #rpcm-utility-backdrop.rpcm-memory-assistant .rpcm-assistant-preflight-card{border-color:var(--wish-accent-line)!important;background:var(--wish-card)!important;color:var(--wish-fg)!important;box-shadow:var(--wish-lift)!important}
+      #rpcm-utility-backdrop.rpcm-memory-assistant .rpcm-assistant-preflight-card small{color:var(--wish-muted)!important}
+
+      /* AI summary/settings dialog also uses the current Wish theme in light mode. */
+      #rpcm-ai-backdrop .rpcm-ai-card{border-color:var(--wish-line)!important;background:var(--wish-card)!important;color:var(--wish-fg)!important}
+      #rpcm-ai-backdrop .rpcm-ai-field>span,#rpcm-ai-backdrop .rpcm-ai-help,#rpcm-ai-backdrop .rpcm-ai-status,#rpcm-ai-backdrop .rpcm-ai-validation,#rpcm-ai-backdrop .rpcm-ai-usage{color:var(--wish-muted)!important}
+      #rpcm-ai-backdrop .rpcm-ai-field input:not([type=checkbox]),#rpcm-ai-backdrop .rpcm-ai-field select,#rpcm-ai-backdrop .rpcm-ai-field textarea,#rpcm-ai-backdrop .rpcm-ai-result textarea{border-color:var(--wish-line)!important;background:var(--wish-card-2)!important;background-color:var(--wish-card-2)!important;color:var(--wish-fg)!important;-webkit-text-fill-color:var(--wish-fg)!important;caret-color:var(--wish-fg)!important;color-scheme:normal!important}
+      #rpcm-ai-backdrop .rpcm-ai-note,#rpcm-ai-backdrop .rpcm-ai-progress,#rpcm-ai-backdrop .rpcm-ai-run-usage{border-color:var(--wish-line)!important;background:var(--wish-card-2)!important;color:var(--wish-fg-2)!important}
+      #rpcm-ai-backdrop .rpcm-ai-btn{border-color:var(--wish-line)!important;background:var(--wish-card)!important;color:var(--wish-fg)!important}
+      #rpcm-ai-backdrop .rpcm-ai-btn:hover{background:var(--wish-accent-soft)!important}
+      #rpcm-ai-backdrop .rpcm-ai-btn.primary{background:var(--wish-accent)!important;border-color:var(--wish-accent)!important;color:var(--wish-accent-ink)!important}
+
+      /* v0.14.64 exact light-mode corrections for legacy dark selectors that remained visible. */
+
+      /* Main header icon buttons were still using the old #313031 palette. */
+      #rpcm-modal .rpcm-header .rpcm-iconbtn{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card)!important;
+        color:var(--wish-fg-2)!important;
+        box-shadow:none!important;
+      }
+      #rpcm-modal .rpcm-header .rpcm-iconbtn:hover,
+      #rpcm-modal .rpcm-header .rpcm-iconbtn:focus-visible{
+        border-color:var(--wish-accent-line)!important;
+        background:var(--wish-accent-soft)!important;
+        color:var(--wish-accent-strong)!important;
+      }
+
+      /* The large "주입 확인됨" strip is .rpcm-pending, not Quick Monitor. */
+      #rpcm-modal .rpcm-pending{
+        border-color:var(--wish-line)!important;
+        border-left-color:var(--wish-success)!important;
+        background:var(--wish-card)!important;
+        color:var(--wish-fg-2)!important;
+        box-shadow:var(--wish-shadow)!important;
+      }
+      #rpcm-modal .rpcm-pending.is-verified{
+        border-left-color:var(--wish-success)!important;
+        background:color-mix(in srgb,var(--wish-card) 92%,var(--wish-success) 8%)!important;
+      }
+      #rpcm-modal .rpcm-pending.needs-check,
+      #rpcm-modal .rpcm-pending.is-retrying{
+        border-color:var(--wish-line)!important;
+        border-left-color:var(--wish-warning)!important;
+        background:color-mix(in srgb,var(--wish-card) 92%,var(--wish-warning) 8%)!important;
+      }
+      #rpcm-modal .rpcm-pending-main strong{
+        color:var(--wish-success)!important;
+      }
+      #rpcm-modal .rpcm-pending.needs-check .rpcm-pending-main strong,
+      #rpcm-modal .rpcm-pending.is-retrying .rpcm-pending-main strong{
+        color:var(--wish-warning)!important;
+      }
+      #rpcm-modal .rpcm-pending-summary,
+      #rpcm-modal .rpcm-pending-details,
+      #rpcm-modal .rpcm-pending-details summary{
+        color:var(--wish-fg-2)!important;
+      }
+      #rpcm-modal .rpcm-pending-details>div{
+        border-top-color:var(--wish-line-2)!important;
+      }
+      #rpcm-modal .rpcm-pending-actions .rpcm-btn.warn{
+        border-color:var(--wish-accent-line)!important;
+        background:var(--wish-card)!important;
+        color:var(--wish-danger)!important;
+      }
+      #rpcm-modal .rpcm-pending-actions .rpcm-btn.warn:hover{
+        background:var(--wish-accent-soft)!important;
+      }
+
+      /* Overview controls that were still rendered as black pills in light mode. */
+      #rpcm-modal :is(.rpcm-auto-reroll,.rpcm-auto-remove,.rpcm-auto-inline-toggle,.rpcm-related-add){
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card)!important;
+        color:var(--wish-fg-2)!important;
+        box-shadow:none!important;
+      }
+      #rpcm-modal :is(.rpcm-auto-reroll,.rpcm-auto-inline-toggle,.rpcm-related-add):hover{
+        border-color:var(--wish-accent-line)!important;
+        background:var(--wish-accent-soft)!important;
+        color:var(--wish-accent-strong)!important;
+      }
+      #rpcm-modal .rpcm-auto-remove:hover{
+        border-color:color-mix(in srgb,var(--wish-danger) 55%,var(--wish-line))!important;
+        background:color-mix(in srgb,var(--wish-card) 90%,var(--wish-danger) 10%)!important;
+        color:var(--wish-danger)!important;
+      }
+      #rpcm-modal .rpcm-auto-active-title{color:var(--wish-fg)!important}
+      #rpcm-modal .rpcm-auto-reason{color:var(--wish-fg-2)!important}
+      #rpcm-modal .rpcm-auto-evidence{color:var(--wish-accent-strong)!important}
+      #rpcm-modal .rpcm-auto-active-meta{color:var(--wish-muted)!important}
+      #rpcm-modal .rpcm-auto-inline-content{
+        border-color:var(--wish-line)!important;
+        border-left-color:var(--wish-accent)!important;
+        background:var(--wish-card-2)!important;
+        color:var(--wish-fg-2)!important;
+      }
+
+      /* Help button: make the icon visibly smaller and the popover denser. */
+      #rpcm-modal .rpcm-core-help{
+        width:16px!important;
+        height:16px!important;
+        min-width:16px!important;
+        min-height:16px!important;
+        margin-left:4px!important;
+        font-size:9px!important;
+        font-weight:700!important;
+      }
+      .rpcm-core-tip{
+        width:min(300px,calc(100vw - 24px))!important;
+        max-height:min(320px,60vh)!important;
+        padding:10px 12px!important;
+        border-radius:9px!important;
+        font-size:12px!important;
+        line-height:1.5!important;
+      }
+      .rpcm-core-tip section{margin-top:8px!important;padding-top:7px!important}
+      .rpcm-core-tip h4{font-size:11px!important}
+
+      /* Person segmented tabs: stronger inactive text and a clearly pink active segment. */
+      #rpcm-modal .rpcm-person-tabs{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card-2)!important;
+        box-shadow:none!important;
+      }
+      #rpcm-modal .rpcm-person-tabs>button{
+        color:var(--wish-fg-2)!important;
+        font-weight:650!important;
+        opacity:1!important;
+      }
+      #rpcm-modal .rpcm-person-tabs>button:hover{
+        background:var(--wish-hi)!important;
+        color:var(--wish-fg)!important;
+      }
+      #rpcm-modal .rpcm-person-tabs>button[aria-selected=true]{
+        color:var(--wish-accent-strong)!important;
+        font-weight:700!important;
+      }
+      #rpcm-modal .rpcm-person-tabs .rpcm-tab-indicator{
+        border:1px solid var(--wish-accent-line)!important;
+        background:var(--wish-accent-soft-2)!important;
+        box-shadow:0 1px 3px rgba(83,49,67,.08),0 0 0 1px var(--wish-hi)!important;
+      }
+
+      /* Older person-view M3 tabs use a separate selector. */
+      #rpcm-person-core .m3-tabs{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card-2)!important;
+      }
+      #rpcm-person-core .m3-tabs button{
+        color:var(--wish-fg-2)!important;
+        font-weight:650!important;
+        opacity:1!important;
+      }
+      #rpcm-person-core .m3-tabs button[aria-selected=true]{
+        color:var(--wish-accent-strong)!important;
+        font-weight:700!important;
+      }
+      #rpcm-person-core .m3-tabsind{
+        border-color:var(--wish-accent-line)!important;
+        background:var(--wish-accent-soft-2)!important;
+      }
+
+      /* v0.14.65 · Important Items: remove the remaining legacy dark-only surfaces. */
+      #rpcm-modal #rpcm-section-item .rpcm-item-bulkbar{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card-2)!important;
+        color:var(--wish-fg-2)!important;
+        box-shadow:none!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-bulkbar>summary{
+        color:var(--wish-fg-2)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-bulkbar #rpcm-item-selected-count{
+        color:var(--wish-accent-strong)!important;
+      }
+
+      #rpcm-modal #rpcm-section-item>.rpcm-auto-panel{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card-2)!important;
+        color:var(--wish-fg-2)!important;
+      }
+      #rpcm-modal #rpcm-section-item>.rpcm-auto-panel label{
+        color:var(--wish-fg-2)!important;
+      }
+
+      #rpcm-modal #rpcm-section-item .rpcm-item-import-help{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card)!important;
+        color:var(--wish-fg-2)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-import-help>summary{
+        color:var(--wish-fg-2)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-import-help>summary:after{
+        color:var(--wish-accent-strong)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-import-help>.rpcm-auto-note{
+        color:var(--wish-muted)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-format-guide{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card-2)!important;
+        color:var(--wish-muted)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-format-guide strong{
+        color:var(--wish-accent-strong)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-format-guide code{
+        background:var(--wish-card)!important;
+        color:var(--wish-fg-2)!important;
+        border:1px solid var(--wish-line-2)!important;
+      }
+
+      #rpcm-modal #rpcm-section-item .rpcm-section-more>summary{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card)!important;
+        color:var(--wish-fg-2)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-section-more>summary:hover,
+      #rpcm-modal #rpcm-section-item .rpcm-section-more[open]>summary{
+        border-color:var(--wish-accent-line)!important;
+        background:var(--wish-accent-soft)!important;
+        color:var(--wish-accent-strong)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-section-more>summary:after{
+        color:var(--wish-accent-strong)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-section-more>div{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card)!important;
+        color:var(--wish-fg)!important;
+        box-shadow:var(--wish-lift)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-section-more>div .rpcm-add-btn{
+        color:var(--wish-fg-2)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-section-more>div .rpcm-add-btn:hover{
+        background:var(--wish-accent-soft)!important;
+        color:var(--wish-accent-strong)!important;
+      }
+
+      #rpcm-modal #rpcm-section-item .rpcm-item-folder{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card)!important;
+        color:var(--wish-fg)!important;
+        box-shadow:var(--wish-shadow)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-folder>summary{
+        border-bottom-color:var(--wish-line-2)!important;
+        background:var(--wish-card-2)!important;
+        color:var(--wish-fg)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-folder>summary:hover{
+        background:var(--wish-accent-soft)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-folder>summary:before{
+        color:var(--wish-accent-strong)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-folder>summary strong{
+        color:var(--wish-accent-strong)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-folder>summary span{
+        color:var(--wish-muted)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-folder-body{
+        border-color:var(--wish-line-2)!important;
+        background:var(--wish-card)!important;
+        color:var(--wish-fg)!important;
+      }
+
+      #rpcm-modal #rpcm-section-item .rpcm-item-folder-body>.rpcm-slot{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card)!important;
+        color:var(--wish-fg)!important;
+        box-shadow:none!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-folder-body>.rpcm-slot>summary{
+        background:var(--wish-card)!important;
+        color:var(--wish-fg)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-folder-body>.rpcm-slot>summary:hover{
+        background:var(--wish-accent-soft)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-slot-name{
+        color:var(--wish-fg)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-head-meta{
+        color:var(--wish-muted)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-drag-handle,
+      #rpcm-modal #rpcm-section-item .rpcm-chevron{
+        color:var(--wish-muted)!important;
+      }
+
+      #rpcm-modal #rpcm-section-item .rpcm-item-delete-label{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card-2)!important;
+        color:var(--wish-muted)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-delete-label:has(input:checked){
+        border-color:var(--wish-accent-line)!important;
+        background:var(--wish-accent-soft)!important;
+        color:var(--wish-accent-strong)!important;
+      }
+
+      #rpcm-modal #rpcm-section-item .rpcm-slot-quick-edit{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card-2)!important;
+        color:var(--wish-fg-2)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-slot-quick-edit:hover{
+        border-color:var(--wish-accent-line)!important;
+        background:var(--wish-accent-soft)!important;
+        color:var(--wish-accent-strong)!important;
+      }
+
+      #rpcm-modal #rpcm-section-item .rpcm-item-readview{
+        background:var(--wish-card)!important;
+        color:var(--wish-fg)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-settings>summary{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card-2)!important;
+        color:var(--wish-fg-2)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-settings>summary:hover{
+        border-color:var(--wish-accent-line)!important;
+        background:var(--wish-accent-soft)!important;
+        color:var(--wish-accent-strong)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-settings-body{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card)!important;
+        color:var(--wish-fg-2)!important;
+        box-shadow:var(--wish-lift)!important;
+      }
+
+      #rpcm-ai-memory-backdrop{padding:18px;background:var(--wish-scrim)!important}
+      #rpcm-ai-memory-backdrop .rpcm-update-dialog{height:auto!important;width:min(1040px,96vw);max-height:min(90vh,940px);border:1px solid var(--wish-line);border-radius:16px;box-shadow:var(--wish-shell-shadow);overflow:hidden}
+      #rpcm-ai-memory-backdrop .rpcm-update-dialog>header{align-items:center;padding:20px 24px;flex:none}
+      #rpcm-ai-memory-backdrop .rpcm-ai-review-eyebrow{display:block;margin-bottom:5px;font-size:11px;font-weight:600;letter-spacing:.025em}
+      #rpcm-ai-memory-backdrop .rpcm-update-dialog h2{font-size:19px;font-weight:600}
+      #rpcm-ai-memory-backdrop .rpcm-update-result-body{min-height:0;padding:18px 24px;overflow:auto;background:var(--wish-bg)}
+      #rpcm-ai-memory-backdrop .rpcm-update-result-status{padding:11px 13px;margin:0 0 14px;border:1px solid var(--wish-line);border-radius:9px;background:var(--wish-card);font-size:12px;line-height:1.6}
+      #rpcm-ai-memory-backdrop .rpcm-ai-memory-selection{gap:14px;margin:0 0 16px;font-size:13px}
+      #rpcm-ai-memory-backdrop .rpcm-ai-review-note{margin:0;font-size:12px}
+      #rpcm-ai-memory-backdrop .rpcm-ai-review-change{overflow:hidden;border:1px solid var(--wish-line);border-radius:11px;background:var(--wish-card)}
+      #rpcm-ai-memory-backdrop .rpcm-ai-review-change.is-excluded{opacity:.65}
+      #rpcm-ai-memory-backdrop .rpcm-ai-review-change>header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:var(--wish-card)!important}
+      #rpcm-ai-memory-backdrop .rpcm-ai-review-change>header label{display:flex;align-items:center;gap:9px;flex:1;min-width:0;padding:0;border:0;background:transparent}
+      #rpcm-ai-memory-backdrop .rpcm-ai-review-change input[type=checkbox]{width:17px;height:17px;flex:none;accent-color:var(--wish-accent)}
+      #rpcm-ai-memory-backdrop .rpcm-ai-review-kind{flex:none;padding:3px 8px;border:1px solid var(--wish-accent-line);border-radius:20px;background:var(--wish-accent-soft);font-size:11px;font-weight:600}
+      #rpcm-ai-memory-backdrop .rpcm-ai-review-compare{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0}
+      #rpcm-ai-memory-backdrop .rpcm-ai-review-compare>section{min-width:0;padding:14px;background:var(--wish-card)}
+      #rpcm-ai-memory-backdrop .rpcm-ai-review-compare>section+section{border-left:1px solid var(--wish-line);background:var(--wish-card-2)}
+      #rpcm-ai-memory-backdrop .rpcm-ai-review-compare h4{margin:0 0 8px;font-size:11px;font-weight:600}
+      #rpcm-ai-memory-backdrop .rpcm-ai-review-compare pre{margin:0;padding:0;border:0;background:transparent!important;white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.8 inherit;line-height:1.8;font-family:inherit;font-size:13px}
+      #rpcm-ai-memory-backdrop :is(.rpcm-ai-review-raw,.rpcm-ai-review-diff){margin:12px 0 0;padding:12px 14px;border:1px solid var(--wish-line);border-radius:10px;background:var(--wish-card)}
+      #rpcm-ai-memory-backdrop :is(.rpcm-ai-review-raw,.rpcm-ai-review-diff)>summary{cursor:pointer;font-size:12px;font-weight:600}
+      #rpcm-ai-memory-backdrop .rpcm-ai-review-raw p{font-size:12px}
+      #rpcm-ai-memory-backdrop .rpcm-ai-review-raw textarea{height:260px;min-height:180px;margin:10px 0;font:13px/1.7 inherit;font-family:inherit;font-size:13px;line-height:1.7;resize:vertical}
+      #rpcm-ai-memory-backdrop .rpcm-update-dialog>footer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 24px;border-top:1px solid var(--wish-line);background:var(--wish-sheet);flex:none}
+      #rpcm-ai-memory-backdrop .rpcm-update-dialog>footer>div{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+      #rpcm-ai-memory-backdrop .rpcm-btn{min-height:36px;padding:8px 12px;font-size:12px;border:1px solid var(--wish-line);border-radius:8px;cursor:pointer}
+      html body #rpcm-ai-memory-backdrop .rpcm-update-dialog>footer .rpcm-btn.primary{background:var(--wish-accent)!important;color:var(--wish-accent-ink)!important;border-color:var(--wish-accent)!important}
+      #rpcm-ai-draft-popup{position:fixed;right:20px;bottom:24px;z-index:2147483644;box-sizing:border-box;width:min(350px,calc(100vw - 28px));padding:16px;border:1px solid var(--wish-accent-line);border-radius:13px;background:var(--wish-sheet);color:var(--wish-fg);box-shadow:var(--wish-lift);font:13px/1.6 -apple-system,BlinkMacSystemFont,'Apple SD Gothic Neo',sans-serif}
+      #rpcm-ai-draft-popup header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+      #rpcm-ai-draft-popup header strong{font-size:14px}
+      #rpcm-ai-draft-popup p{margin:9px 0 4px;color:var(--wish-fg-2)}
+      #rpcm-ai-draft-popup small{color:var(--wish-muted);font-size:11px}
+      #rpcm-ai-draft-popup>div{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
+      #rpcm-ai-draft-popup .rpcm-btn{padding:7px 10px;border:1px solid var(--wish-accent-line);border-radius:8px;background:var(--wish-accent-soft);color:var(--wish-accent-strong);font:inherit;font-size:12px;cursor:pointer}
+      #rpcm-ai-draft-popup [data-popup-close]{display:grid;place-items:center;width:28px;height:28px;min-width:28px;padding:0;border:1px solid var(--wish-line);border-radius:8px;background:transparent;color:var(--wish-fg-2);cursor:pointer}
+      #rpcm-ai-draft-popup .rpcm-svg{width:16px;height:16px}
+      @media(max-width:680px){#rpcm-ai-memory-backdrop{padding:8px}#rpcm-ai-memory-backdrop .rpcm-update-dialog{width:100%;max-height:94dvh;border-radius:12px}#rpcm-ai-memory-backdrop .rpcm-update-dialog>header{padding:16px}#rpcm-ai-memory-backdrop .rpcm-update-result-body{padding:14px}#rpcm-ai-memory-backdrop .rpcm-ai-review-compare{grid-template-columns:minmax(0,1fr)}#rpcm-ai-memory-backdrop .rpcm-ai-review-compare>section+section{border-left:0;border-top:1px solid var(--wish-line)}#rpcm-ai-memory-backdrop .rpcm-update-dialog>footer{padding:12px;align-items:flex-start;flex-wrap:wrap}#rpcm-ai-memory-backdrop .rpcm-update-dialog>footer>div{flex:1}#rpcm-ai-draft-popup{right:14px;bottom:16px}}
+
+      /* Settings lives below the toolbar, so opening it cannot stretch the action row. */
+      #rpcm-modal #rpcm-section-item .rpcm-item-view-actions{position:static!important;display:flex;align-items:center!important;justify-content:flex-end;flex-wrap:wrap!important;gap:6px;margin:0 0 10px!important}
+      #rpcm-modal #rpcm-section-item .rpcm-item-settings-toggle[aria-expanded="true"]{background:var(--wish-accent-soft)!important;border-color:var(--wish-accent-line)!important;color:var(--wish-accent-strong)!important}
+      #rpcm-modal #rpcm-section-item .rpcm-item-settings-panel{margin:0 0 14px;min-width:0}
+      #rpcm-modal #rpcm-section-item .rpcm-item-settings-panel[hidden]{display:none!important}
+      #rpcm-modal #rpcm-section-item .rpcm-item-settings-body{position:static!important;inset:auto!important;z-index:auto!important;display:grid;grid-template-columns:minmax(0,.7fr) minmax(0,1fr);align-items:start;gap:12px!important;box-sizing:border-box;width:100%!important;min-width:0!important;max-width:none!important;margin:0!important;padding:14px!important;border-radius:10px;box-shadow:none!important;background:var(--wish-card-2)!important}
+      #rpcm-modal #rpcm-section-item .rpcm-item-settings-body>.rpcm-inline-retention{margin:0;min-height:38px}
+      #rpcm-modal #rpcm-section-item .rpcm-item-settings-body>.rpcm-item-folder-field{margin:0!important;min-width:0}
+      #rpcm-modal #rpcm-section-item .rpcm-item-settings-body>.rpcm-item-advanced{grid-column:1/-1;margin:0!important;min-width:0}
+      #rpcm-modal #rpcm-section-item .rpcm-item-settings-body>.rpcm-delete-btn{grid-column:1/-1;justify-self:end;margin:0}
+      @media(max-width:680px){#rpcm-modal #rpcm-section-item .rpcm-item-settings-body{grid-template-columns:minmax(0,1fr);padding:12px!important}#rpcm-modal #rpcm-section-item .rpcm-item-view-actions{justify-content:flex-start}}
+
+      #rpcm-modal #rpcm-section-item .rpcm-item-child{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card-2)!important;
+        color:var(--wish-fg)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-child-head strong{
+        color:var(--wish-fg)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-child-head span{
+        color:var(--wish-muted)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-child-edit{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card)!important;
+        color:var(--wish-fg-2)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-child-edit:hover{
+        border-color:var(--wish-accent-line)!important;
+        background:var(--wish-accent-soft)!important;
+        color:var(--wish-accent-strong)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-child-editor{
+        border-top-color:var(--wish-line)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-child-editor label{
+        color:var(--wish-fg-2)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-child-editor input,
+      #rpcm-modal #rpcm-section-item .rpcm-item-child-editor textarea,
+      #rpcm-modal #rpcm-section-item .rpcm-item-folder-field input{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card)!important;
+        color:var(--wish-fg)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-folder-field{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card-2)!important;
+        color:var(--wish-fg-2)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-advanced{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card-2)!important;
+        color:var(--wish-fg-2)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-advanced>summary{
+        color:var(--wish-accent-strong)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-item-template-guide,
+      #rpcm-modal #rpcm-section-item .rpcm-auto-terms{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card)!important;
+        color:var(--wish-muted)!important;
+      }
+      #rpcm-modal #rpcm-section-item .rpcm-alias-row input{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card)!important;
+        color:var(--wish-fg)!important;
+      }
+
+      /* v0.14.66 · light-mode deep surfaces use warm brown, never neutral black. */
+
+      /* AI page title was inheriting an old near-white dark-theme color. */
+      #rpcm-modal #rpcm-section-ai>h2{
+        color:var(--wish-fg)!important;
+        opacity:1!important;
+      }
+
+      /* The top-right ⋯ is intentionally a dark accent control.
+         In light mode its deep token is warm brown; in dark mode it remains dark. */
+      #rpcm-modal .rpcm-header-menu>summary{
+        border-color:var(--wish-deep-line)!important;
+        background:var(--wish-deep)!important;
+        color:var(--wish-deep-fg)!important;
+      }
+      #rpcm-modal .rpcm-header-menu>summary:hover,
+      #rpcm-modal .rpcm-header-menu[open]>summary{
+        border-color:var(--wish-accent-line)!important;
+        background:var(--wish-deep-2)!important;
+        color:var(--wish-deep-fg)!important;
+      }
+      #rpcm-modal .rpcm-header-menu-list{
+        border-color:var(--wish-deep-line)!important;
+        background:var(--wish-deep)!important;
+        color:var(--wish-deep-fg)!important;
+      }
+      #rpcm-modal .rpcm-header-menu-list button,
+      #rpcm-modal .rpcm-header-menu-list .rpcm-header-quick-toggle{
+        color:var(--wish-deep-fg)!important;
+      }
+      #rpcm-modal .rpcm-header-menu-list button:hover{
+        background:var(--wish-deep-2)!important;
+        color:var(--wish-deep-fg)!important;
+      }
+      #rpcm-modal .rpcm-header-menu-list .rpcm-header-quick-toggle.is-on{
+        color:#F2BED8!important;
+      }
+
+      /* AI work cards: the "최근 결과 / 최근 변경" dark blocks use the same brown. */
+      #rpcm-modal #rpcm-section-ai .rpcm-ai-card-result{
+        border-color:var(--wish-deep-line)!important;
+        background:var(--wish-deep)!important;
+        color:var(--wish-deep-fg)!important;
+      }
+      #rpcm-modal #rpcm-section-ai .rpcm-ai-card-result>span,
+      #rpcm-modal #rpcm-section-ai .rpcm-ai-card-result>small,
+      #rpcm-modal #rpcm-section-ai .rpcm-ai-card-result>label{
+        color:var(--wish-deep-muted)!important;
+      }
+      #rpcm-modal #rpcm-section-ai .rpcm-ai-card-result>strong{
+        color:var(--wish-deep-fg)!important;
+      }
+
+      /* Keep the already-liked custom-guide warning on the exact same brown family. */
+      #rpcm-modal .rpcm-guide-migration-note{
+        border-color:var(--wish-deep-line)!important;
+        background:var(--wish-deep)!important;
+        color:var(--wish-deep-muted)!important;
+      }
+
+      /* Legacy dark helper surfaces that can still appear inside the main Manager.
+         Their backgrounds are already remapped by the whole-code scan; make sure
+         text stays legible when the active theme is light. */
+      #rpcm-modal :is(
+        .rpcm-main-help-panel,
+        .rpcm-header-search-pop,
+        .rpcm-ai-context-report,
+        .rpcm-ai-context-situation,
+        .rpcm-ai-context-raw,
+        .rpcm-guide-panel,
+        .rpcm-read-card,
+        .rpcm-read-card>summary,
+        .rpcm-person-advanced,
+        .rpcm-global-status,
+        .rpcm-carrier-card
+      ){
+        border-color:var(--wish-deep-line)!important;
+      }
+      #rpcm-modal :is(
+        .rpcm-main-help-panel,
+        .rpcm-header-search-pop,
+        .rpcm-guide-panel,
+        .rpcm-read-card,
+        .rpcm-read-card>summary
+      ){
+        color:var(--wish-deep-fg)!important;
+      }
+
+      /* v0.14.67 · Brown is an accent surface, not a default content surface.
+         Restore ordinary content cards to the normal light theme. */
+
+      /* 1) Usage breakdown: stronger text, softer separators. */
+      #rpcm-modal .rpcm-summary-capacity-detail{
+        color:var(--wish-fg-2)!important;
+        opacity:1!important;
+      }
+      #rpcm-modal .rpcm-breakdown{
+        border-color:var(--wish-line)!important;
+      }
+      #rpcm-modal .rpcm-breakdown-chip{
+        border-color:var(--wish-line)!important;
+        color:var(--wish-fg-2)!important;
+        opacity:1!important;
+      }
+      #rpcm-modal .rpcm-breakdown-chip strong{
+        color:var(--wish-fg)!important;
+        opacity:1!important;
+      }
+      #rpcm-modal .rpcm-breakdown-chip>span:last-child{
+        opacity:1!important;
+      }
+      #rpcm-modal .rpcm-summary-detail{
+        border-top-color:var(--wish-line)!important;
+      }
+
+      /* 2) Saved current-state/read cards: light borders, never brown outlines. */
+      #rpcm-modal .rpcm-read-card{
+        border:0!important;
+        background:var(--wish-card)!important;
+        color:var(--wish-fg)!important;
+        box-shadow:var(--wish-shadow)!important;
+      }
+      #rpcm-modal .rpcm-read-card>summary{
+        border:0!important;
+        background:var(--wish-card-2)!important;
+        color:var(--wish-fg)!important;
+      }
+      #rpcm-modal .rpcm-read-card>summary:hover{
+        background:var(--wish-accent-soft)!important;
+      }
+      #rpcm-modal .rpcm-read-card-body{
+        border-top-color:var(--wish-line-2)!important;
+        background:var(--wish-card)!important;
+        color:var(--wish-fg-2)!important;
+      }
+      #rpcm-modal .rpcm-read-card>summary strong{
+        color:var(--wish-fg)!important;
+      }
+      #rpcm-modal .rpcm-read-card>summary small,
+      #rpcm-modal .rpcm-read-copy,
+      #rpcm-modal .rpcm-read-chevron{
+        color:var(--wish-muted)!important;
+      }
+
+      /* 3) Date-log controls are ordinary settings panels in light mode. */
+      #rpcm-modal #rpcm-section-basic .rpcm-log-auto-panel,
+      #rpcm-modal #rpcm-section-basic>.rpcm-log-help{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card-2)!important;
+        color:var(--wish-fg-2)!important;
+        box-shadow:none!important;
+      }
+      #rpcm-modal #rpcm-section-basic .rpcm-log-auto-panel label,
+      #rpcm-modal #rpcm-section-basic>.rpcm-log-help{
+        color:var(--wish-fg-2)!important;
+      }
+      #rpcm-modal #rpcm-section-basic>.rpcm-log-help b{
+        color:var(--wish-accent-strong)!important;
+      }
+
+      /* 4) Person detail is a reading surface, not a dark accent block. */
+      #rpcm-modal .rpcm-profile-toolbar{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card-2)!important;
+        color:var(--wish-fg)!important;
+        box-shadow:none!important;
+      }
+      #rpcm-modal .rpcm-profile-toolbar strong{
+        color:var(--wish-fg)!important;
+      }
+      #rpcm-modal .rpcm-profile-toolbar span,
+      #rpcm-modal .rpcm-profile-toolbar label{
+        color:var(--wish-fg-2)!important;
+      }
+      #rpcm-modal .rpcm-profile-toolbar input:not([type=checkbox]){
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card)!important;
+        color:var(--wish-fg)!important;
+      }
+
+      #rpcm-modal .rpcm-profile-body{
+        border-top-color:var(--wish-line-2)!important;
+        background:var(--wish-card)!important;
+      }
+      #rpcm-modal .rpcm-profile-body>section{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card-2)!important;
+        color:var(--wish-fg)!important;
+      }
+      #rpcm-modal .rpcm-profile-body h3{
+        color:var(--wish-fg)!important;
+      }
+      #rpcm-modal .rpcm-profile-record{
+        border-top-color:var(--wish-line-2)!important;
+      }
+      #rpcm-modal .rpcm-profile-record>p{
+        color:var(--wish-fg-2)!important;
+      }
+      #rpcm-modal .rpcm-profile-record>p b,
+      #rpcm-modal .rpcm-profile-status{
+        color:var(--wish-accent-strong)!important;
+      }
+
+      #rpcm-modal .rpcm-profile-knowledge-row{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card)!important;
+        color:var(--wish-fg)!important;
+      }
+      #rpcm-modal .rpcm-profile-knowledge-row>p{
+        color:var(--wish-fg-2)!important;
+      }
+      #rpcm-modal .rpcm-profile-record-foot{
+        color:var(--wish-muted)!important;
+      }
+      #rpcm-modal .rpcm-profile-record-foot button{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card)!important;
+        color:var(--wish-fg-2)!important;
+      }
+      #rpcm-modal .rpcm-profile-record-foot button:hover{
+        border-color:var(--wish-accent-line)!important;
+        background:var(--wish-accent-soft)!important;
+        color:var(--wish-accent-strong)!important;
+      }
+      #rpcm-modal .rpcm-profile-record-foot details summary,
+      #rpcm-modal .rpcm-profile-more>summary{
+        color:var(--wish-accent-strong)!important;
+      }
+
+      /* Keep brown only for intentionally dark accents:
+         header menu, AI result cards, guide-migration notice, and similar explicit accents. */
+
+      /* v0.14.68 · Light mode: brown only where it is truly an accent.
+         Normal reading/setting surfaces return to soft pink/white. */
+
+      /* 1) Capacity state badge: "여유" gets a soft green background. */
+      #rpcm-modal .rpcm-summary-status{
+        border:1px solid transparent!important;
+        background:var(--wish-card-2)!important;
+      }
+      #rpcm-modal .rpcm-summary-status.ok{
+        border-color:color-mix(in srgb,var(--wish-success) 34%,var(--wish-line))!important;
+        background:color-mix(in srgb,var(--wish-card) 82%,var(--wish-success) 18%)!important;
+        color:var(--wish-success)!important;
+      }
+      #rpcm-modal .rpcm-summary-status.warn{
+        border-color:color-mix(in srgb,var(--wish-warning) 38%,var(--wish-line))!important;
+        background:color-mix(in srgb,var(--wish-card) 84%,var(--wish-warning) 16%)!important;
+      }
+      #rpcm-modal .rpcm-summary-status.bad{
+        border-color:color-mix(in srgb,var(--wish-danger) 38%,var(--wish-line))!important;
+        background:color-mix(in srgb,var(--wish-card) 84%,var(--wish-danger) 16%)!important;
+      }
+
+      /* 2) Date log: settings/help panels are soft pink, not brown. */
+      #rpcm-modal #rpcm-section-basic .rpcm-auto-panel,
+      #rpcm-modal #rpcm-section-basic .rpcm-log-help,
+      #rpcm-modal #rpcm-section-basic .rpcm-fixed-note{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-accent-soft)!important;
+        color:var(--wish-fg-2)!important;
+        box-shadow:none!important;
+      }
+      #rpcm-modal #rpcm-section-basic .rpcm-log-help b,
+      #rpcm-modal #rpcm-section-basic .rpcm-auto-panel b{
+        color:var(--wish-accent-strong)!important;
+      }
+
+      /* 3) Timeline: restore a clean light reading surface.
+         v0.14.66's brown conversion must not style timeline cards or controls. */
+      #rpcm-modal .rpcm-timeline-section,
+      #rpcm-modal .rpcm-inline-story-list{
+        color:var(--wish-fg)!important;
+      }
+      #rpcm-modal .rpcm-inline-story-toolbar{
+        color:var(--wish-fg-2)!important;
+      }
+      #rpcm-modal .rpcm-inline-story-diff,
+      #rpcm-modal .rpcm-inline-story-settings,
+      #rpcm-modal .rpcm-ai-usage-inline,
+      #rpcm-modal .rpcm-inline-story-date-nav{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-accent-soft)!important;
+        color:var(--wish-fg-2)!important;
+        box-shadow:none!important;
+      }
+      #rpcm-modal .rpcm-inline-story-settings input[type=number]{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card)!important;
+        color:var(--wish-fg)!important;
+      }
+      #rpcm-modal .rpcm-inline-story-date-nav button,
+      #rpcm-modal .rpcm-inline-story-guide button,
+      #rpcm-modal .rpcm-inline-story-edit button{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card)!important;
+        color:var(--wish-fg-2)!important;
+      }
+      #rpcm-modal .rpcm-inline-story-date-nav button:hover,
+      #rpcm-modal .rpcm-inline-story-guide button:hover,
+      #rpcm-modal .rpcm-inline-story-edit button:hover{
+        border-color:var(--wish-accent-line)!important;
+        background:var(--wish-accent-soft)!important;
+        color:var(--wish-accent-strong)!important;
+      }
+      #rpcm-modal .rpcm-inline-story-month{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card)!important;
+      }
+      #rpcm-modal .rpcm-inline-story-month>summary{
+        color:var(--wish-accent-strong)!important;
+        background:var(--wish-card-2)!important;
+      }
+      #rpcm-modal .rpcm-inline-story-card{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card)!important;
+        color:var(--wish-fg)!important;
+        box-shadow:none!important;
+      }
+      #rpcm-modal .rpcm-inline-story-top strong{
+        color:var(--wish-fg)!important;
+      }
+      #rpcm-modal .rpcm-inline-story-top span,
+      #rpcm-modal .rpcm-inline-story-read small{
+        color:var(--wish-muted)!important;
+      }
+      #rpcm-modal .rpcm-inline-story-read{
+        color:var(--wish-fg-2)!important;
+      }
+
+      /* 4) Character auto-selection panel: soft pink. */
+      #rpcm-modal #rpcm-section-character>.rpcm-auto-panel{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-accent-soft)!important;
+        color:var(--wish-fg-2)!important;
+        box-shadow:none!important;
+      }
+      #rpcm-modal #rpcm-section-character>.rpcm-auto-panel label,
+      #rpcm-modal #rpcm-section-character>.rpcm-auto-panel .rpcm-auto-note{
+        color:var(--wish-fg-2)!important;
+      }
+      #rpcm-modal #rpcm-section-character>.rpcm-auto-panel .rpcm-auto-note b{
+        color:var(--wish-accent-strong)!important;
+      }
+      #rpcm-modal #rpcm-section-character>.rpcm-auto-panel select{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card)!important;
+        color:var(--wish-fg)!important;
+      }
+
+      /* 5) 기타·OOC folders: remove brown bands and use soft pink. */
+      #rpcm-modal #rpcm-section-extra .rpcm-extra-folder{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-accent-soft)!important;
+        box-shadow:none!important;
+      }
+      #rpcm-modal #rpcm-section-extra .rpcm-extra-folder>summary{
+        border-bottom-color:var(--wish-line-2)!important;
+        background:var(--wish-card-2)!important;
+        color:var(--wish-fg)!important;
+      }
+      #rpcm-modal #rpcm-section-extra .rpcm-extra-folder>summary strong{
+        color:var(--wish-fg)!important;
+      }
+      #rpcm-modal #rpcm-section-extra .rpcm-extra-folder>summary span,
+      #rpcm-modal #rpcm-section-extra .rpcm-extra-folder>summary:after{
+        color:var(--wish-muted)!important;
+      }
+      #rpcm-modal #rpcm-section-extra .rpcm-extra-folder-body{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-accent-soft)!important;
+      }
+      #rpcm-modal #rpcm-section-extra .rpcm-extra-folder-body>.rpcm-slot{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card)!important;
+      }
+      #rpcm-modal #rpcm-section-extra .rpcm-extra-folder-body>.rpcm-slot>summary{
+        background:var(--wish-card)!important;
+        color:var(--wish-fg)!important;
+      }
+      #rpcm-modal #rpcm-section-extra .rpcm-extra-category-field{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card-2)!important;
+        color:var(--wish-fg-2)!important;
+      }
+      #rpcm-modal #rpcm-section-extra .rpcm-extra-category-input{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card)!important;
+        color:var(--wish-fg)!important;
+      }
+
+      /* 6) Person detail: remove brown accents from the auto-inject switch/avatar. */
+      #rpcm-modal .rpcm-profile-switch{
+        border-color:var(--wish-accent-line)!important;
+        background:var(--wish-accent-soft)!important;
+        color:var(--wish-accent-strong)!important;
+        box-shadow:none!important;
+      }
+      #rpcm-modal .rpcm-profile-switch:hover{
+        background:var(--wish-accent-soft-2)!important;
+      }
+      #rpcm-modal .rpcm-profile-avatar{
+        border-color:var(--wish-accent-line)!important;
+        background:var(--wish-accent-soft-2)!important;
+        color:var(--wish-accent-strong)!important;
+      }
+      #rpcm-modal .rpcm-profile>summary{
+        border-bottom-color:var(--wish-line-2)!important;
+        background:var(--wish-card)!important;
+        color:var(--wish-fg)!important;
+      }
+      #rpcm-modal .rpcm-profile-identity strong{
+        color:var(--wish-fg)!important;
+      }
+      #rpcm-modal .rpcm-profile-identity small,
+      #rpcm-modal .rpcm-profile-headline,
+      #rpcm-modal .rpcm-profile-count{
+        color:var(--wish-muted)!important;
+      }
+
+      /* v0.14.69 · Header readability + remove brown from the ellipsis menu. */
+      #rpcm-modal .rpcm-header .rpcm-title{
+        color:var(--wish-fg)!important;
+        font-weight:700!important;
+        opacity:1!important;
+      }
+      #rpcm-modal .rpcm-header .rpcm-sub{
+        color:var(--wish-fg-2)!important;
+        font-weight:550!important;
+        opacity:1!important;
+      }
+
+      #rpcm-modal .rpcm-header-menu>summary{
+        border-color:var(--wish-line)!important;
+        background:var(--wish-card)!important;
+        color:var(--wish-fg-2)!important;
+        box-shadow:none!important;
+      }
+      #rpcm-modal .rpcm-header-menu>summary:hover,
+      #rpcm-modal .rpcm-header-menu[open]>summary{
+        border-color:var(--wish-accent-line)!important;
+        background:var(--wish-accent-soft)!important;
+        color:var(--wish-accent-strong)!important;
+      }

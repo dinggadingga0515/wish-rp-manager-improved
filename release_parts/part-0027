@@ -1,0 +1,1000 @@
+.rpcm-rebuild-diff-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:12px 0;flex-wrap:wrap}
+.rpcm-rebuild-diff-toolbar>div{display:flex;gap:6px;flex-wrap:wrap}
+.rpcm-rebuild-domain{margin:9px 0;border:1px solid var(--wish-line);border-radius:11px;background:var(--wish-card);overflow:hidden}
+.rpcm-rebuild-domain.is-invalid{border-color:var(--wish-warning)}
+.rpcm-rebuild-domain-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px}
+.rpcm-rebuild-domain-head>div{display:grid;gap:4px;min-width:0}
+.rpcm-rebuild-domain-head strong{color:var(--wish-fg);font-size:13px}
+.rpcm-rebuild-domain-head small{color:var(--wish-fg-2);font-size:11px;line-height:1.45}
+.rpcm-rebuild-domain-head label{display:flex;align-items:center;gap:5px;white-space:nowrap;color:var(--wish-fg);font-size:12px}
+.rpcm-rebuild-domain.is-invalid>p{margin:0;padding:0 14px 12px;color:var(--wish-warning);font-size:12px;line-height:1.5}
+.rpcm-rebuild-domain-detail{border-top:1px solid var(--wish-line-2);padding:8px 12px}
+.rpcm-rebuild-domain-detail>summary{cursor:pointer;color:var(--wish-accent);font-size:12px;font-weight:600}
+.rpcm-issue-log-dialog .rpcm-update-result-body{overflow:auto}
+.rpcm-issue-row{display:grid;gap:4px;margin:8px 0;padding:12px;border:1px solid var(--wish-line);border-radius:9px;background:var(--wish-card)}
+.rpcm-issue-row strong{font-size:12px;color:var(--wish-fg)}
+.rpcm-issue-row small{font-size:11px;color:var(--wish-muted);overflow-wrap:anywhere}
+.rpcm-issue-row p{margin:0;font-size:12px;color:var(--wish-fg-2);overflow-wrap:anywhere}
+.rpcm-issue-row>div{display:flex;gap:6px;justify-content:flex-end}
+/* Core 1.0.6 cognition surface, scoped to Wish's people workview. */
+#rpcm-person-core .m3-fact-page-nav{display:flex;justify-content:center;align-items:center;gap:10px;flex-wrap:wrap;margin:13px 0 18px;padding:9px;border-radius:10px;border:1px solid var(--wish-line);background:var(--wish-card-2)}
+#rpcm-person-core .m3-fact-page-nav button{border:1px solid var(--wish-line);border-radius:8px;padding:7px 12px;cursor:pointer;background:var(--wish-card);color:var(--wish-fg)}
+#rpcm-person-core .m3-fact-page-nav button:disabled{opacity:.45;cursor:default}
+#rpcm-person-core .m3-fact-page-nav span{font-size:12px;color:var(--wish-muted)}
+#rpcm-person-core{--m3-card:var(--wish-card);--m3-card2:var(--wish-card-2);--m3-line:var(--wish-line);--m3-line2:var(--wish-line-2);--m3-fg:var(--wish-fg);--m3-fg2:var(--wish-fg-2);--m3-muted:var(--wish-muted);--m3-accent:var(--wish-accent-strong);--m3-accent-line:var(--wish-accent-line);--m3-accent-soft:var(--wish-accent-soft);--m3-warn:var(--wish-warning);--m3-r-card:12px;--m3-r-ctl:8px;--m3-shadow:var(--wish-shadow);--m3-lift:var(--wish-lift);--m3-spring:var(--wish-spring);margin:4px 0 16px;min-width:0;color:var(--m3-fg)}
+#rpcm-person-core .m3-tabs{position:relative;display:flex;gap:3px;padding:3px;background:var(--m3-card2);border-radius:calc(var(--m3-r-ctl) + 3px);margin-bottom:14px}
+#rpcm-person-core .m3-tabsind{position:absolute;left:3px;top:3px;bottom:3px;border-radius:var(--m3-r-ctl);background:var(--m3-card);box-shadow:var(--m3-shadow);transition:transform .44s var(--m3-spring),width .44s var(--m3-spring);pointer-events:none}
+#rpcm-person-core .m3-tabs button{position:relative;z-index:1;flex:1;min-width:0;padding:8px 3px;border:0;border-radius:var(--m3-r-ctl);font-size:12px;font-weight:500;line-height:1.25;white-space:nowrap;color:var(--m3-muted);background:transparent;cursor:pointer;transition:color .3s;overflow:hidden;text-overflow:ellipsis}
+#rpcm-person-core .m3-tabs button[aria-selected=true]{color:var(--m3-fg);font-weight:600}
+#rpcm-person-core .m3-sechead{display:flex;align-items:center;justify-content:space-between;gap:8px 10px;flex-wrap:wrap;margin:20px 1px 10px}
+#rpcm-person-core .m3-sechead:first-child{margin-top:0}
+#rpcm-person-core .m3-sechead>b{font-size:13.5px}
+#rpcm-person-core .m3-sechead .m3-title-help{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+#rpcm-person-core .m3-row{display:flex;align-items:center;gap:8px 10px;flex-wrap:wrap}
+#rpcm-person-core .m3-grow{flex:1;min-width:0}
+#rpcm-person-core .m3-muted{font-size:11.5px;color:var(--m3-muted);line-height:1.7}
+#rpcm-person-core .m3-actions{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap}
+#rpcm-person-core .m3-btn{position:relative;display:inline-flex;align-items:center;gap:6px;border-radius:var(--m3-r-ctl);padding:8px 13px;font-size:12.5px;font-weight:500;color:var(--m3-fg2);border:1px solid var(--m3-line);background:var(--m3-card);cursor:pointer;transition:background .2s,color .2s,border-color .2s,transform .2s}
+#rpcm-person-core .m3-btn svg.ic{width:15px;height:15px}
+#rpcm-person-core .m3-btn:hover{background:var(--m3-card2);color:var(--m3-fg);border-color:var(--m3-accent-line);transform:translateY(-1px)}
+#rpcm-person-core .m3-btn:active{transform:scale(.96)}
+#rpcm-person-core .m3-btn:focus-visible,#rpcm-person-core .m3-tabs button:focus-visible,#rpcm-person-core .m3-person-open:focus-visible{outline:2px solid var(--m3-accent);outline-offset:2px}
+#rpcm-person-core .m3-btn.mini{padding:5px 10px;font-size:11.5px}
+#rpcm-person-core .m3-btn.is-on{color:var(--m3-accent);border-color:var(--m3-accent-line);background:var(--m3-accent-soft)}
+#rpcm-person-core .m3-people{display:flex;gap:9px;margin-bottom:6px;overflow-x:auto;overscroll-behavior-inline:contain;scroll-snap-type:x proximity;scrollbar-width:thin;scrollbar-color:var(--m3-line) transparent;padding:2px 0 8px}
+#rpcm-person-core .m3-who{flex:0 0 138px;min-width:138px;scroll-snap-align:start;border:1px solid var(--m3-line);border-radius:var(--m3-r-card);background:var(--m3-card);padding:13px 10px 9px;text-align:center;position:relative;overflow:hidden;transition:transform .34s var(--m3-spring),border-color .25s,box-shadow .3s}
+#rpcm-person-core .m3-who:hover{transform:translateY(-3px);border-color:var(--m3-accent-line);box-shadow:var(--m3-lift)}
+#rpcm-person-core .m3-who.is-selected{border-color:var(--m3-accent-line);box-shadow:0 0 0 1px var(--m3-accent-line) inset,var(--m3-shadow);background:var(--m3-accent-soft)}
+#rpcm-person-core .m3-person-open{display:block;width:100%;padding:0;border:0;background:none;color:var(--m3-fg);text-align:center;cursor:pointer}
+#rpcm-person-core .m3-person-meta{position:absolute;right:6px;bottom:5px;width:22px;height:22px;display:grid;place-items:center;border:0;border-radius:6px;background:transparent;color:var(--m3-muted);cursor:pointer}
+#rpcm-person-core .m3-person-meta:hover,#rpcm-person-core .m3-person-meta:focus-visible{background:var(--m3-card2);color:var(--m3-accent)}
+#rpcm-person-core .m3-person-meta svg{width:13px;height:13px}
+#rpcm-person-core .m3-who-all .m3-av{font-size:11px}
+#rpcm-person-core .m3-av{width:38px;height:38px;border-radius:50%;margin:0 auto 7px;display:grid;place-items:center;font-size:15px;font-weight:600;background:var(--m3-accent-soft);color:var(--m3-accent);border:1px solid var(--m3-accent-line);transition:transform .4s var(--m3-spring)}
+#rpcm-person-core .m3-who:hover .m3-av{transform:scale(1.08) rotate(-4deg)}
+#rpcm-person-core .m3-who b{display:block;font-size:12.5px;font-weight:600}
+#rpcm-person-core .m3-who small{display:block;font-size:10.5px;color:var(--m3-muted);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#rpcm-person-core .m3-me,#rpcm-person-core .m3-here{position:absolute;top:7px;font-size:9.5px;border-radius:5px;padding:1px 5px}
+#rpcm-person-core .m3-me{right:7px;color:var(--m3-accent);background:var(--m3-accent-soft)}
+#rpcm-person-core .m3-here{left:7px;color:var(--wish-success);background:color-mix(in srgb,var(--wish-success) 13%,transparent)}
+#rpcm-person-core .m3-panel{--cc:transparent;position:relative;border:1px solid var(--m3-line);border-radius:var(--m3-r-card);background:var(--m3-card);padding:14px 16px;box-shadow:var(--m3-shadow);margin-bottom:10px;overflow:hidden}
+#rpcm-person-core .m3-panel::after{display:none}
+#rpcm-person-core .m3-panel>p{color:var(--m3-fg2);font-size:13px;line-height:1.8;margin-top:8px;white-space:pre-wrap;overflow-wrap:anywhere}
+#rpcm-person-core .m3-panel .m3-muted{font-size:12px}
+#rpcm-person-core .m3-card-actions{margin-top:13px;justify-content:flex-end}
+#rpcm-person-core .m3-kind{--c:var(--m3-accent);display:inline-flex;align-items:center;flex:none;font-size:10.5px;font-weight:600;line-height:1.5;padding:2px 8px;border-radius:99px;color:color-mix(in srgb,var(--c) 72%,var(--m3-fg));background:color-mix(in srgb,var(--c) 14%,transparent);border:1px solid color-mix(in srgb,var(--c) 25%,transparent);white-space:nowrap}
+#rpcm-person-core .m3-know{display:flex;flex-wrap:wrap;gap:5px;margin-top:11px}
+#rpcm-person-core .m3-chip{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;padding:3px 10px;border-radius:999px;border:1px solid transparent;transition:background .3s,color .3s}
+#rpcm-person-core .m3-chip svg.ic{width:12px;height:12px}
+#rpcm-person-core .m3-chip.known{background:var(--m3-accent-soft);color:var(--m3-accent);border-color:var(--m3-accent-line)}
+#rpcm-person-core .m3-chip.unknown{color:var(--m3-muted);background:var(--m3-card2)}
+#rpcm-person-core .m3-chip.never{color:var(--m3-warn);border:1px dashed color-mix(in srgb,var(--m3-warn) 50%,transparent)}
+#rpcm-person-core .m3-secret{display:flex;align-items:flex-start;gap:8px;margin-top:10px;padding:8px 11px;border-radius:var(--m3-r-ctl);background:color-mix(in srgb,var(--m3-warn) 12%,transparent);border:1px solid color-mix(in srgb,var(--m3-warn) 30%,transparent);color:var(--m3-warn);font-size:12px;line-height:1.7}
+#rpcm-person-core .m3-secret svg.ic{width:14px;height:14px;margin-top:3px;flex:none}
+#rpcm-person-core .m3-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 12px}
+#rpcm-person-core .m3-speech .m3-say{margin-top:8px;font-size:13.5px;color:var(--m3-fg)}
+#rpcm-person-core .m3-speech .m3-say small{display:block;font-size:11.5px;color:var(--m3-muted)}
+#rpcm-person-core .m3-arrow{color:var(--m3-muted);font-weight:400;margin:0 2px}
+#rpcm-person-core .m3-fold2{border:1px solid var(--m3-line);border-radius:var(--m3-r-ctl);overflow:hidden;margin:10px 0}
+#rpcm-person-core .m3-fold2>summary{padding:10px 13px;cursor:pointer;font-size:12.5px;color:var(--m3-fg2);list-style:none;display:flex;align-items:center;gap:8px}
+#rpcm-person-core .m3-fold2>summary::-webkit-details-marker{display:none}
+#rpcm-person-core .m3-fold2>summary svg.ic{width:14px;height:14px;min-width:14px;flex:0 0 14px;margin-left:auto;transition:transform .35s var(--m3-spring)}
+#rpcm-person-core .m3-fold2[open]>summary svg.ic{transform:rotate(180deg)}
+#rpcm-person-core .m3-fb{padding:2px 13px 13px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}
+#rpcm-person-core .m3-empty{padding:26px 14px;text-align:center;font-size:12.5px;line-height:1.8;color:var(--m3-muted);border:1px dashed var(--m3-line);border-radius:var(--m3-r-card)}
+#rpcm-person-core .m3-quote{border-left:2px solid var(--m3-accent-line);padding:2px 0 2px 12px;margin:11px 0 0;color:var(--m3-fg2);font-size:13px;line-height:1.85;white-space:pre-wrap}
+#rpcm-person-core .m3-sub{min-width:0}
+#rpcm-person-core .rpcm-person-profiles[data-pane="speech"] .rpcm-profile-body>section:nth-of-type(2),
+#rpcm-person-core .rpcm-person-profiles[data-pane="knowledge"] .rpcm-profile-body>section:nth-of-type(3){order:-1}
+#rpcm-person-core .rpcm-person-profiles[data-pane="review"] .rpcm-profile-review{order:-1}
+#rpcm-person-core .rpcm-profile-review{padding:13px 15px;border:1px solid var(--wish-line);border-radius:11px;background:var(--wish-card)}
+#rpcm-person-core .rpcm-profile-review h3{margin:0 0 10px;font-size:15px}
+#rpcm-person-core .rpcm-profile-review .rpcm-profile-record p{white-space:pre-wrap;overflow-wrap:anywhere}
+#rpcm-person-core .rpcm-profile-conflict{margin-left:8px;color:var(--wish-warning);font-size:12px;font-weight:600}
+#rpcm-person-core .rpcm-profile-private{color:var(--wish-warning)}
+#rpcm-section-people .rpcm-person-advanced[hidden]{display:none!important}
+#rpcm-section-people .rpcm-person-advanced>summary{display:flex;align-items:center;justify-content:space-between;gap:8px}
+#rpcm-section-people .rpcm-person-core-editor-close{border:1px solid var(--wish-line);border-radius:8px;padding:5px 9px;background:var(--wish-card);color:var(--wish-fg-2);cursor:pointer;font-size:11px}
+:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog){position:fixed;inset:0;z-index:2147483647;display:grid;place-items:center;padding:16px;background:var(--wish-scrim)}
+:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .rpcm-person-dialog-card{width:min(540px,96vw);max-height:90vh;overflow:auto;--m3-card:var(--wish-card);--m3-card2:var(--wish-card-2);--m3-line:var(--wish-line);--m3-fg:var(--wish-fg);--m3-fg2:var(--wish-fg-2);--m3-muted:var(--wish-muted);--m3-accent:var(--wish-accent);--m3-accent-ink:var(--wish-accent-ink);--m3-r-ctl:8px}
+:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-sheet{border:1px solid var(--m3-line);border-radius:14px;background:var(--wish-sheet);color:var(--m3-fg);box-shadow:var(--wish-shell-shadow);overflow:hidden}
+:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-sheet>header,:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-sheet>footer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 16px;background:var(--m3-card);border-color:var(--m3-line)}
+:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-sheet>header{border-bottom:1px solid var(--m3-line)}:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-sheet>footer{border-top:1px solid var(--m3-line);justify-content:flex-end}
+:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-t{display:grid;gap:3px}:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-t b{font-size:15px}:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-t small{font-size:11px;color:var(--m3-muted)}
+:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-dialog-body{display:grid;gap:12px;padding:16px}:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-fld{display:grid;gap:5px;color:var(--m3-fg2);font-size:12px}:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-fld input{box-sizing:border-box;width:100%;padding:9px;border:1px solid var(--m3-line);border-radius:var(--m3-r-ctl);background:var(--m3-card2);color:var(--m3-fg)}
+:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-toggle{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--m3-line);border-radius:var(--m3-r-ctl);background:var(--m3-card2);font-size:12px;color:var(--m3-fg2);cursor:pointer}:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-toggle>span{flex:1;min-width:0}:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-toggle>input[type=checkbox]{width:18px;height:18px;min-width:18px;margin:0;flex:none;accent-color:var(--m3-accent);cursor:pointer}
+:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-btn{padding:7px 12px;border:1px solid var(--m3-line);border-radius:var(--m3-r-ctl);background:var(--m3-card);color:var(--m3-fg2);cursor:pointer}:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-btn.primary{background:var(--m3-accent);color:var(--m3-accent-ink);border-color:var(--m3-accent)}
+@media(max-width:680px){#rpcm-person-core .m3-tabs button{font-size:11px;padding:8px 1px}#rpcm-person-core .m3-who{flex-basis:138px}#rpcm-person-core .m3-sechead .m3-actions{width:100%;justify-content:flex-end}}
+@media(max-width:680px){.rpcm-rebuild-domain-head{align-items:flex-start}.rpcm-rebuild-domain-detail .rpcm-update-diff-columns{grid-template-columns:1fr}}
+#rpcm-lore-dialog-backdrop,#rpcm-lore-copy-backdrop{position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;padding:18px;box-sizing:border-box;background:var(--wish-scrim)}
+.rpcm-lore-dialog{display:flex;flex-direction:column;box-sizing:border-box;width:min(760px,96vw);max-height:90vh;border:1px solid var(--wish-line);border-radius:16px;background:var(--wish-sheet);color:var(--wish-fg);box-shadow:var(--wish-shell-shadow);overflow:hidden;animation:rpcm-wish-shell-in .4s var(--wish-spring) both}
+.rpcm-lore-copy-dialog{width:min(880px,96vw)}
+.rpcm-lore-dialog>header,.rpcm-lore-dialog footer{display:flex;align-items:center;gap:8px;padding:12px 15px;background:var(--wish-card);border-color:var(--wish-line-2)}
+.rpcm-lore-dialog>header{border-bottom:1px solid var(--wish-line-2)}.rpcm-lore-dialog>header strong{flex:1;font-size:16px}.rpcm-lore-dialog>header button{border:0;background:transparent;color:var(--wish-fg-2);font-size:18px;cursor:pointer}
+.rpcm-lore-dialog form{display:flex;flex-direction:column;min-height:0;overflow:hidden}.rpcm-lore-dialog footer{justify-content:flex-end;border-top:1px solid var(--wish-line-2)}
+.rpcm-lore-dialog-body{display:grid;gap:12px;overflow:auto;padding:16px;min-height:0}.rpcm-lore-dialog-body label{display:grid;gap:5px;font-size:12px;color:var(--wish-fg-2)}
+.rpcm-lore-dialog-body :is(input:not([type=checkbox]),select,textarea){box-sizing:border-box;width:100%;min-width:0;padding:9px;font:12px/1.7 inherit}.rpcm-lore-dialog-body textarea{resize:vertical}
+.rpcm-lore-dialog-body p{margin:0;color:var(--wish-muted);font-size:11px;line-height:1.7}.rpcm-lore-two{display:grid;grid-template-columns:1fr 1fr;gap:10px}.rpcm-lore-dialog-body .rpcm-lore-check{display:flex;align-items:center;gap:8px}
+.rpcm-lore-editor-source{border:1px solid var(--wish-line);border-radius:9px;background:var(--wish-card)}.rpcm-lore-editor-source>summary{cursor:pointer;padding:9px 11px;color:var(--wish-fg-2);font-size:12px}.rpcm-lore-editor-source>.rpcm-lore-dialog-body{padding:10px}
+.rpcm-lore-copy-dialog>.rpcm-lore-dialog-body{flex:1}.rpcm-lore-copy-pack{padding:10px;border:1px solid var(--wish-line);border-radius:11px;background:var(--wish-card)}.rpcm-lore-copy-pack>summary{cursor:pointer;color:var(--wish-fg);font-weight:600;font-size:12px}
+.rpcm-lore-copy-row{display:flex!important;flex-direction:row!important;align-items:center;gap:9px!important;padding:7px;border-bottom:1px solid var(--wish-line-2)}.rpcm-lore-copy-row span{display:grid;gap:3px}.rpcm-lore-copy-row small{color:var(--wish-muted)}
+.rpcm-lore-copy-detail{margin-left:26px}.rpcm-lore-copy-detail>summary{font-size:11px;cursor:pointer;color:var(--wish-accent-strong)}.rpcm-lore-copy-detail pre{max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--wish-fg-2);font-size:11px}
+.rpcm-lore-copy-summary{padding:12px;border:1px solid var(--wish-accent-line);border-radius:11px;background:var(--wish-accent-soft)}.rpcm-lore-copy-summary ul{margin:0;padding-left:20px;font-size:11px;color:var(--wish-warning)}
+:is(.rpcm-lib-dialog,.rpcm-log-dialog,.rpcm-story-dialog,.rpcm-story-view-dialog,.rpcm-person-preview-dialog,.rpcm-preview-dialog,.rpcm-import-dialog,.rpcm-items-raw-dialog,.rpcm-ai-dialog,.rpcm-ai-review-dialog,.rpcm-related-picker,.rpcm-common-guide-dialog,.rpcm-detached-editor,.rpcm-update-dialog){border:1px solid var(--wish-line)!important;border-radius:16px!important;background:var(--wish-sheet)!important;color:var(--wish-fg)!important;box-shadow:var(--wish-shell-shadow)!important}
+:is(.rpcm-lib-dialog,.rpcm-log-dialog,.rpcm-story-dialog,.rpcm-story-view-dialog,.rpcm-person-preview-dialog,.rpcm-preview-dialog,.rpcm-import-dialog,.rpcm-items-raw-dialog,.rpcm-ai-dialog,.rpcm-ai-review-dialog,.rpcm-related-picker,.rpcm-common-guide-dialog,.rpcm-detached-editor,.rpcm-update-dialog)>:is(header,footer){background:var(--wish-card)!important;border-color:var(--wish-line-2)!important}
+#rpcm-ai-backdrop :is(.rpcm-ai-card,.rpcm-ai-connection,.rpcm-ai-preset,.rpcm-ai-progress,.rpcm-ai-note,.rpcm-ai-draft-banner){background:var(--wish-card)!important;border-color:var(--wish-line)!important;color:var(--wish-fg-2)!important}
+#rpcm-ai-backdrop :is(.rpcm-ai-field input:not([type=checkbox]),.rpcm-ai-field select,.rpcm-ai-field textarea,.rpcm-ai-result textarea){background:var(--wish-card)!important;background-color:var(--wish-card)!important;color:var(--wish-fg)!important;-webkit-text-fill-color:var(--wish-fg)!important;caret-color:var(--wish-fg)!important;color-scheme:normal!important;border-color:var(--wish-line)!important}
+#rpcm-ai-backdrop :is(.rpcm-ai-btn,.rpcm-ai-preset){background:var(--wish-card)!important;border-color:var(--wish-line)!important;color:var(--wish-fg-2)!important}#rpcm-ai-backdrop .rpcm-ai-btn.primary{background:var(--wish-accent)!important;color:var(--wish-accent-ink)!important;border-color:var(--wish-accent)!important}
+#rpcm-ai-backdrop :is(.rpcm-ai-status,.rpcm-ai-validation,.rpcm-ai-help,.rpcm-ai-field>span){color:var(--wish-fg-2)!important}#rpcm-ai-backdrop .rpcm-ai-status.error{color:var(--wish-danger)!important}#rpcm-ai-backdrop .rpcm-ai-status.success{color:var(--wish-success)!important}
+#rpcm-ai-backdrop .rpcm-ai-meter{background:var(--wish-line)!important}#rpcm-ai-backdrop .rpcm-ai-meter>span{background:var(--wish-success)!important}
+
+:is(.rpcm-lib-dialog,.rpcm-log-dialog,.rpcm-story-dialog,.rpcm-story-view-dialog,.rpcm-person-preview-dialog,.rpcm-preview-dialog,.rpcm-import-dialog,.rpcm-items-raw-dialog,.rpcm-ai-dialog,.rpcm-ai-review-dialog,.rpcm-related-picker,.rpcm-common-guide-dialog,.rpcm-detached-editor,.rpcm-update-dialog) :is(input:not([type=checkbox]):not([type=radio]),select,textarea){background:var(--wish-card)!important;color:var(--wish-fg)!important;border:1px solid var(--wish-line)!important;border-radius:8px!important}
+.rpcm-toast{background:var(--wish-fg)!important;color:var(--wish-sheet)!important;border:0!important;border-radius:18px!important;box-shadow:var(--wish-lift)!important}.rpcm-toast.success{border-left:3px solid var(--wish-success)!important}.rpcm-toast.warn{border-left:3px solid var(--wish-warning)!important}.rpcm-toast.error{border-left:3px solid var(--wish-danger)!important}
+.rpcm-toast.context-move{background:var(--wish-context-toast-bg)!important;color:var(--wish-context-toast-fg)!important;border-left:3px solid var(--wish-context-toast-mark)!important}
+#rpcm-quick-trigger{position:fixed;right:0;top:46%;z-index:2147483644;display:inline-flex!important;align-items:center;justify-content:center;box-sizing:border-box;width:36px;height:36px;min-height:36px;padding:2px;border:1px solid var(--wish-accent-line);border-radius:11px 0 0 11px;background:var(--wish-sheet);color:var(--wish-fg);box-shadow:var(--wish-shadow);cursor:pointer;touch-action:manipulation}
+#rpcm-quick-trigger.is-composer-mounted{position:relative;right:auto;top:auto;flex:none;width:36px;height:36px;min-height:36px;margin:0 5px 0 auto;border-radius:50%}
+#rpcm-quick-trigger[hidden]{display:none!important}
+.rpcm-monitor-ring{position:relative;display:grid;place-items:center;flex:none;box-sizing:border-box;width:38px;height:38px;border-radius:50%;background:conic-gradient(var(--wish-accent) var(--rpcm-ring),var(--wish-line) 0%);color:var(--wish-fg);font-size:10px;font-weight:600;font-variant-numeric:tabular-nums}
+.rpcm-monitor-ring:before{content:'';position:absolute;inset:5px;border-radius:50%;background:var(--wish-sheet)}.rpcm-monitor-ring b{position:relative;z-index:1}.rpcm-monitor-ring.is-warning{background:conic-gradient(var(--wish-warning) var(--rpcm-ring),var(--wish-line) 0)}.rpcm-monitor-ring.is-off{background:var(--wish-line)}.rpcm-monitor-ring.is-busy{animation:rpcm-wish-pulse 1.2s var(--wish-ease) infinite}
+#rpcm-quick-trigger>.rpcm-monitor-ring{width:32px;height:32px;font-size:8px}#rpcm-quick-trigger>.rpcm-monitor-ring:before{inset:4px}
+.rpcm-monitor-badge{display:grid;place-items:center;min-width:18px;height:18px;padding:0 3px;border-radius:99px;background:var(--wish-warning);color:#fff;font-size:10px;font-weight:600}
+#rpcm-quick-trigger>.rpcm-monitor-badge{position:absolute;right:-5px;top:-5px;min-width:16px;height:16px;font-size:9px}
+#rpcm-quick-trigger.is-holding{box-shadow:0 0 0 4px var(--wish-accent-soft),var(--wish-shadow)}
+.rpcm-quick-panel{background:var(--wish-sheet)!important;color:var(--wish-fg)!important;border-color:var(--wish-line)!important;box-shadow:var(--wish-shell-shadow)!important}
+.rpcm-quick-head,.rpcm-monitor-summary,.rpcm-quick-foot{background:var(--wish-card)!important;border-color:var(--wish-line-2)!important;color:var(--wish-fg-2)!important}
+.rpcm-monitor-summary{padding:10px 13px;font-size:11px}.rpcm-monitor-state{color:var(--wish-accent-strong);font-weight:600}.rpcm-monitor-state.is-warning{color:var(--wish-warning)}.rpcm-monitor-issues{float:right;color:var(--wish-fg-2)}
+.rpcm-monitor-categories{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}.rpcm-monitor-category{padding:4px 7px;border:1px solid var(--wish-line);border-radius:99px;background:var(--wish-card-2);color:var(--wish-fg-2)}.rpcm-monitor-category b{color:var(--wish-fg)}
+.rpcm-quick-note,.rpcm-quick-list{background:var(--wish-sheet)!important;color:var(--wish-fg-2)!important}.rpcm-quick-row{border-color:var(--wish-line-2)!important;background:var(--wish-card)!important}.rpcm-quick-row:hover{background:var(--wish-card-2)!important}.rpcm-quick-copy strong{color:var(--wish-fg)!important}.rpcm-quick-copy small{color:var(--wish-muted)!important}
+.rpcm-quick-panel .rpcm-btn{border-radius:8px!important}.rpcm-quick-panel .rpcm-btn.primary{background:var(--wish-accent)!important;color:var(--wish-accent-ink)!important}.rpcm-quick-panel .rpcm-btn.secondary{background:var(--wish-card)!important;color:var(--wish-fg-2)!important;border-color:var(--wish-line)!important}.rpcm-quick-panel .rpcm-btn.warn{background:transparent!important;color:var(--wish-danger)!important;border-color:var(--wish-line)!important}
+.rpcm-quick-theme-stack{flex:0 1 auto;min-height:0;max-height:min(52dvh,500px);overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;border-top:1px solid var(--wish-line-2);background:var(--wish-card)}
+.rpcm-quick-theme{margin:0;background:var(--wish-card);color:var(--wish-fg)}.rpcm-quick-theme+.rpcm-quick-theme{border-top:1px solid var(--wish-line-2)}
+.rpcm-quick-theme>summary{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:42px;padding:8px 13px;list-style:none;cursor:pointer;user-select:none}.rpcm-quick-theme>summary::-webkit-details-marker{display:none}.rpcm-quick-theme>summary:hover{background:var(--wish-accent-soft)}
+.rpcm-quick-theme-label{display:flex;align-items:center;gap:9px;min-width:0}.rpcm-quick-theme-label>span{display:grid;gap:1px}.rpcm-quick-theme-label b{font-size:11px;color:var(--wish-fg)}.rpcm-quick-theme-label small{font-size:9px;color:var(--wish-muted)}.rpcm-quick-theme>summary>em{font-style:normal;font-size:9px;color:var(--wish-accent-strong)}
+.rpcm-quick-theme-swatch,.rpcm-quick-theme-preview{display:block;flex:none;width:18px;height:18px;border-radius:50%;background:var(--rpcm-theme-swatch);border:2px solid var(--wish-sheet);box-shadow:0 0 0 1px var(--wish-line),0 1px 3px color-mix(in srgb,var(--wish-fg) 18%,transparent)}
+.rpcm-quick-theme-body{display:grid;gap:9px;padding:0 13px 12px;border-top:1px solid var(--wish-line-2)}
+.rpcm-color-sv{position:relative;height:112px;margin-top:10px;overflow:hidden;border:1px solid var(--wish-line);border-radius:10px;background:linear-gradient(to top,#000,transparent),linear-gradient(to right,#fff,hsl(var(--rpcm-picker-hue) 100% 50%));cursor:crosshair;touch-action:none}
+.rpcm-color-hue{position:relative;height:15px;border:1px solid var(--wish-line);border-radius:999px;background:linear-gradient(90deg,#f00 0%,#ff0 16.666%,#0f0 33.333%,#0ff 50%,#00f 66.666%,#f0f 83.333%,#f00 100%);cursor:pointer;touch-action:none}
+.rpcm-color-pointer,.rpcm-color-hue-pointer{position:absolute;pointer-events:none;transform:translate(-50%,-50%);border:2px solid #fff;box-shadow:0 0 0 1px #0009,0 1px 4px #0008}.rpcm-color-pointer{top:50%;left:50%;width:13px;height:13px;border-radius:50%}.rpcm-color-hue-pointer{top:50%;left:0;width:5px;height:19px;border-radius:4px;background:transparent}
+ .rpcm-quick-palette-controls{display:grid;gap:7px;padding:10px 12px;border:1px solid var(--wish-line);border-radius:9px;background:var(--wish-card-2)}.rpcm-quick-palette-controls[hidden]{display:none!important}.rpcm-quick-palette-toggle{flex:none;padding:5px 6px!important;border:1px solid var(--wish-accent-line)!important;border-radius:7px!important;background:var(--wish-card-2)!important;color:var(--wish-accent-strong)!important;font-size:10px!important}.rpcm-quick-intensity-control{display:grid;gap:7px;padding:4px 0}.rpcm-quick-intensity-control label{font-size:11px;color:var(--wish-fg-2);display:flex;gap:6px;align-items:center;flex-wrap:wrap}.rpcm-quick-intensity-control small{opacity:.8}.rpcm-quick-intensity-control input[type=range]{width:100%;accent-color:var(--wish-accent)}
+.rpcm-quick-palette-controls label{font-size:11px;color:var(--wish-fg-2);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.rpcm-quick-palette-controls small{opacity:.8}
+.rpcm-quick-palette-controls input[type=range]{width:100%;accent-color:var(--wish-accent)}
+.rpcm-quick-palette-buttons{display:flex;gap:5px;flex-wrap:wrap;align-items:center}
+.rpcm-quick-palette-buttons button,.rpcm-quick-palette-buttons select{border:1px solid var(--wish-line)!important;border-radius:6px!important;background:var(--wish-card)!important;color:var(--wish-fg)!important;padding:6px!important;font-size:11px!important;max-width:100%}
+.rpcm-quick-palette-buttons select{flex:1;min-width:100px}
+
+.rpcm-quick-palette-inline{display:grid;gap:7px;padding:9px 0 1px;border-top:1px solid var(--wish-line-2)}
+.rpcm-quick-palette-heading{display:flex;justify-content:space-between;align-items:center;gap:8px;color:var(--wish-fg-2);font-weight:600;font-size:11px}
+.rpcm-quick-palette-heading small{font-weight:400;color:var(--wish-muted);font-size:9px;margin-left:5px}
+.rpcm-quick-palette-heading button{font-size:9px!important;flex:none;background:var(--wish-card-2)!important;color:var(--wish-fg-2)!important;border:1px solid var(--wish-line)!important;border-radius:7px!important;padding:4px 7px!important}
+.rpcm-quick-palette-grid{display:grid;grid-template-columns:repeat(7,30px);grid-auto-rows:30px;gap:8px 7px;align-items:center;justify-content:start;max-width:100%}
+.rpcm-quick-palette-dot{position:relative!important;display:grid!important;place-items:center!important;box-sizing:border-box!important;width:30px!important;height:30px!important;min-height:30px!important;padding:0!important;border-radius:50%!important;border:2px solid var(--wish-sheet)!important;background:var(--rpcm-preset-color)!important;box-shadow:0 0 0 1px var(--wish-line),0 2px 5px #0003!important;color:#fff!important;cursor:pointer;transition:transform .12s ease,box-shadow .12s ease}
+.rpcm-quick-palette-dot:hover{transform:scale(1.09);box-shadow:0 0 0 2px var(--wish-accent-line),0 2px 5px #0004!important}
+.rpcm-quick-palette-dot:focus-visible{outline:2px solid var(--wish-accent-strong)!important;outline-offset:3px!important}
+.rpcm-quick-palette-dot.is-selected{box-shadow:0 0 0 2px var(--wish-accent-strong),0 0 0 4px var(--wish-sheet)!important}
+.rpcm-quick-palette-dot-check{display:none;font-size:12px;line-height:1;font-weight:900;text-shadow:0 1px 3px #000,0 0 2px #000}
+.rpcm-quick-palette-dot.is-selected .rpcm-quick-palette-dot-check{display:block}
+.rpcm-quick-palette-dot.is-add{border:1px dashed var(--wish-accent-line)!important;background:var(--wish-card-2)!important;color:var(--wish-accent-strong)!important;font-size:21px!important;line-height:1!important}
+.rpcm-quick-palette-hint{font-size:9px;color:var(--wish-muted);line-height:1.3}
+.rpcm-quick-theme-meta{display:flex;align-items:center;gap:8px;min-width:0}.rpcm-quick-theme-preview{width:20px;height:20px}.rpcm-quick-theme-meta code{flex:1;min-width:0;color:var(--wish-fg-2);font:600 10px/1.2 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.rpcm-quick-theme-reset{min-height:28px!important;padding:5px 8px!important;border:1px solid var(--wish-line)!important;border-radius:7px!important;background:var(--wish-card-2)!important;color:var(--wish-fg-2)!important;font-size:9px!important}.rpcm-quick-theme-reset:not(:disabled):hover{border-color:var(--wish-accent-line)!important;background:var(--wish-accent-soft)!important;color:var(--wish-accent-strong)!important}
+#rpcm-modal .rpcm-svg>*{transform-box:view-box;transform-origin:12px 12px;transition:transform .5s var(--wish-spring)}
+#rpcm-modal :is(button,.rpcm-jump):hover .ic-search>*{transform:translate(-.8px,-.8px) rotate(-14deg)}
+#rpcm-modal :is(button,.rpcm-jump):hover .ic-settings>*{transform:rotate(70deg)}
+#rpcm-modal :is(button,.rpcm-jump):hover .ic-refresh>*{transform:rotate(300deg)}
+#rpcm-modal :is(button,.rpcm-jump):hover .ic-edit>*{transform:rotate(-9deg)}
+#rpcm-modal :is(button,.rpcm-jump):hover .ic-trash>*{transform:rotate(-9deg)}
+#rpcm-modal :is(button,.rpcm-jump):hover .ic-book>*{transform:skewY(6deg)}
+#rpcm-modal :is(button,.rpcm-jump):hover .ic-people>*{transform:translateY(-1.5px)}
+#rpcm-modal :is(button,.rpcm-jump):hover .ic-database>*{transform:translateY(-1.6px)}
+#rpcm-modal :is(button,.rpcm-jump):hover .ic-copy>*{transform:translate(1px,1px)}
+#rpcm-modal :is(button,.rpcm-jump):hover .ic-save>*{transform:scale(.9)}
+@keyframes rpcm-wish-shell-in{from{opacity:0;transform:translateY(14px) scale(.985)}}
+@keyframes rpcm-wish-pulse{50%{filter:brightness(1.15)}}
+html.rpcm-mobile-layout #rpcm-overlay{padding:0!important}
+html.rpcm-mobile-layout #rpcm-modal-wrap,html.rpcm-mobile-layout #rpcm-modal{width:100vw!important;height:100dvh!important;max-height:100dvh!important;border-radius:0!important;animation:none!important;transform:none!important}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-side-surface{display:none!important}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-workspace{display:block!important}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-work-content{height:auto!important;overflow:visible!important;padding:12px 12px calc(76px + env(safe-area-inset-bottom))!important}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-mobile-nav-strip{position:fixed;left:0;right:0;bottom:0;z-index:50;display:grid!important;grid-template-columns:repeat(6,minmax(0,1fr));gap:0;padding:4px 2px calc(5px + env(safe-area-inset-bottom));border-top:1px solid var(--wish-line);background:var(--wish-sheet);box-shadow:0 -7px 22px -16px var(--wish-fg);overflow:visible}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-mobile-nav-strip button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;min-width:0;min-height:50px;padding:4px 0;border:0;border-radius:8px;background:transparent;color:var(--wish-muted);font-size:10px;line-height:1.15;white-space:nowrap}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-mobile-nav-strip button.is-active{background:var(--wish-accent-soft);color:var(--wish-accent-strong)}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-mobile-nav-strip .rpcm-svg{width:18px;height:18px}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-mobile-nav-hint{display:none!important}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-work-subnav{position:sticky;top:0;z-index:12;overflow-x:auto;flex-wrap:nowrap;max-width:100%;padding:4px}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-work-subnav button{white-space:nowrap;min-height:42px}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-workspace:not([data-view="update"]) #rpcm-section-update{display:none!important}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-workspace[data-view="update"] #rpcm-section-update.rpcm-mobile-section-active{display:block!important}
+html.rpcm-mobile-layout #rpcm-quick-trigger.is-composer-mounted{display:inline-flex!important}
+html.rpcm-mobile-layout #rpcm-quick-trigger:not(.is-composer-mounted){display:inline-flex!important;top:auto!important;right:12px!important;bottom:68px!important;border-radius:50%!important}
+html.rpcm-mobile-layout .rpcm-quick-panel{top:auto!important;left:0!important;right:0!important;bottom:0!important;width:100%!important;height:min(82dvh,700px)!important;border-radius:16px 16px 0 0!important}
+@media(max-width:760px){#rpcm-modal .rpcm-lore-cards{grid-template-columns:1fr}#rpcm-modal .rpcm-lore-filters{grid-template-columns:repeat(2,minmax(0,1fr))}#rpcm-modal .rpcm-lore-filters input{grid-column:1/-1}#rpcm-modal #rpcm-section-update .rpcm-update-card{display:block}#rpcm-modal #rpcm-section-update .rpcm-update-actions{margin-top:10px}}
+@media(max-width:580px){.rpcm-lore-two{grid-template-columns:1fr}#rpcm-modal .rpcm-lore-filters{grid-template-columns:1fr}#rpcm-modal .rpcm-lore-filters input{grid-column:auto}#rpcm-lore-dialog-backdrop,#rpcm-lore-copy-backdrop{padding:0}.rpcm-lore-dialog{width:100vw;max-height:100dvh;height:100dvh;border-radius:0}.rpcm-lore-dialog footer{flex-wrap:wrap}}
+/* Core's 80/58/2 navigation geometry, with RP Manager's own Pink surface. */
+html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-workspace{grid-template-columns:80px minmax(0,1fr)!important}
+html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-work-nav{box-sizing:border-box;width:80px;gap:2px!important;padding:12px 10px!important;overflow:hidden}
+html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-work-nav button{box-sizing:border-box;flex:0 0 58px!important;height:58px!important;min-height:58px!important;max-height:58px!important;margin:0!important;padding:0!important;gap:5px!important;border:0!important;border-radius:11px!important;overflow:hidden}
+html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-work-nav .rpcm-nav-indicator{left:10px!important;right:10px!important;border:0!important;border-radius:11px!important}
+html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-work-nav .rpcm-nav-indicator:after{top:14px;bottom:14px;width:2.5px}
+html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-work-content{padding:20px 20px 28px!important}
+html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-work-content>*{margin-left:0;margin-right:auto}
+#rpcm-modal .rpcm-footer{display:flex!important;align-items:center;justify-content:space-between;gap:12px;min-height:58px!important;padding:8px 18px!important}
+#rpcm-modal .rpcm-footer-actions{display:flex;align-items:center;gap:7px;flex:none}
+#rpcm-modal .rpcm-footer-status{display:flex;align-items:center;justify-content:flex-end;gap:9px;min-width:0;margin-left:auto;font-size:10.5px}
+#rpcm-modal .rpcm-footer #rpcm-arm{display:inline-flex;align-items:center;justify-content:center;gap:8px;box-sizing:border-box;height:36px!important;min-height:36px!important;min-width:0;padding:0 14px;border:1px solid var(--wish-line)!important;border-radius:99px!important;background:var(--wish-card-2)!important;color:var(--wish-fg-2)!important;font-size:12px;font-weight:650;box-shadow:none!important}
+#rpcm-modal .rpcm-footer #rpcm-arm:hover:not(:disabled),#rpcm-modal .rpcm-footer #rpcm-arm:focus-visible{border-color:var(--wish-accent-line)!important;background:var(--wish-accent-soft)!important;color:var(--wish-accent-strong)!important}
+#rpcm-modal .rpcm-footer #rpcm-arm.is-armed{border-color:var(--wish-accent-line)!important;color:var(--wish-accent-strong)!important}
+#rpcm-modal .rpcm-footer-dot{width:8px;height:8px;flex:none;border-radius:50%;background:var(--wish-muted)}
+#rpcm-modal .rpcm-footer #rpcm-arm:not(:disabled):not(.is-armed) .rpcm-footer-dot{background:var(--wish-accent)}
+#rpcm-modal .rpcm-footer #rpcm-arm.is-armed .rpcm-footer-dot{background:var(--wish-success)}
+#rpcm-modal .rpcm-footer #rpcm-arm:disabled .rpcm-footer-dot{background:var(--wish-muted)}
+#rpcm-modal .rpcm-footer .rpcm-footer-preview{display:inline-flex;align-items:center;justify-content:center;gap:7px;box-sizing:border-box;height:36px!important;min-height:36px!important;min-width:0;padding:0 12px;border-radius:9px!important;font-size:12px}
+#rpcm-modal .rpcm-footer-preview .rpcm-svg{width:16px;height:16px}
+#rpcm-preview-backdrop .rpcm-preview-dialog{width:min(880px,calc(100vw - 48px));max-height:min(800px,calc(100vh - 48px))}
+#rpcm-preview-backdrop .rpcm-preview-gauge{height:6px;margin:0 16px 5px;border-radius:99px;background:var(--wish-card-2);overflow:hidden}
+#rpcm-preview-backdrop .rpcm-preview-gauge i{display:block;height:100%;border-radius:inherit;background:var(--wish-accent);transition:width .2s ease}
+#rpcm-preview-backdrop .rpcm-preview-list{flex:1;min-height:0;overflow:auto;padding:10px 16px}
+#rpcm-preview-backdrop .rpcm-preview-card{margin-bottom:6px;border-left-width:2px;background:var(--wish-card)}
+#rpcm-preview-backdrop .rpcm-preview-card summary{min-height:38px;padding:7px 10px;gap:9px}
+#rpcm-preview-backdrop .rpcm-preview-card strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#rpcm-preview-backdrop .rpcm-preview-meta{max-width:38%;overflow:hidden;text-overflow:ellipsis}
+#rpcm-preview-backdrop .rpcm-preview-reason{padding:8px 11px 0}
+#rpcm-preview-backdrop .rpcm-preview-empty{display:grid;place-items:center;min-height:120px;color:var(--wish-muted);font-size:13px}
+#rpcm-preview-backdrop .rpcm-preview-raw{flex:1;min-height:0;padding:12px 16px}
+#rpcm-preview-backdrop .rpcm-preview-raw textarea{box-sizing:border-box;width:100%;height:100%;resize:none;border:1px solid var(--wish-line);border-radius:9px;padding:12px;background:var(--wish-card);color:var(--wish-fg-2);font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}
+#rpcm-preview-backdrop .rpcm-preview-actions{display:flex;justify-content:space-between;align-items:center}
+#rpcm-preview-backdrop .rpcm-preview-actions .rpcm-svg{width:15px;height:15px;vertical-align:middle;margin-right:4px}
+#rpcm-modal .rpcm-auto-start{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:16px;padding:15px 16px;border:1px solid var(--wish-line);border-radius:12px;background:var(--wish-card)}
+#rpcm-modal .rpcm-auto-start h3{margin:0 0 5px;color:var(--wish-fg);font-size:14px}
+#rpcm-modal .rpcm-auto-start p{margin:0 0 5px;color:var(--wish-fg-2);font-size:11.5px;line-height:1.5}
+#rpcm-modal .rpcm-auto-start span{color:var(--wish-muted);font-size:10.5px}
+#rpcm-modal .rpcm-auto-start button{display:inline-flex;align-items:center;gap:7px;flex:none;white-space:nowrap}
+#rpcm-auto-start-backdrop{position:fixed;inset:0;z-index:1000010;display:flex;align-items:center;justify-content:center;padding:18px;background:rgba(0,0,0,.68)}
+#rpcm-auto-start-backdrop .rpcm-auto-start-dialog{width:min(480px,calc(100vw - 36px));max-height:calc(100vh - 36px);overflow-y:auto;padding:22px;border:1px solid var(--wish-line);border-radius:16px;background:var(--wish-sheet);color:var(--wish-fg);box-shadow:var(--wish-shell-shadow)}
+#rpcm-auto-start-backdrop h2{margin:0 0 12px;font-size:17px}#rpcm-auto-start-backdrop p{margin:0 0 11px;color:var(--wish-fg-2);font-size:12px;line-height:1.55}#rpcm-auto-start-backdrop footer{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+#rpcm-auto-start-backdrop .rpcm-auto-start-dialog{display:grid;gap:10px}#rpcm-auto-start-backdrop [hidden]{display:none!important}
+#rpcm-modal .rpcm-update-intro-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+#rpcm-modal .rpcm-maintenance-actions{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:9px;padding-top:8px;border-top:1px solid var(--wish-line-2)}
+#rpcm-modal .rpcm-maintenance-actions em{color:var(--wish-muted);font-size:11px;font-style:normal}#rpcm-modal .rpcm-maintenance-actions button{min-height:30px;padding:4px 9px;font-size:11px}
+#rpcm-maintenance-backdrop{position:fixed;inset:0;z-index:2147483647;display:grid;place-items:center;padding:18px;box-sizing:border-box;background:rgba(0,0,0,.7);font-family:-apple-system,BlinkMacSystemFont,"Pretendard",sans-serif}
+#rpcm-maintenance-backdrop .rpcm-maintenance-dialog{display:flex;flex-direction:column;box-sizing:border-box;width:min(820px,calc(100vw - 30px));max-height:calc(100vh - 36px);overflow:hidden;border:1px solid var(--wish-line);border-radius:14px;background:var(--wish-sheet);color:var(--wish-fg);box-shadow:var(--wish-shell-shadow)}
+#rpcm-maintenance-backdrop header,#rpcm-maintenance-backdrop footer{display:flex;align-items:center;gap:12px;padding:14px 17px;border-bottom:1px solid var(--wish-line);background:var(--wish-card)}
+#rpcm-maintenance-backdrop header>div,#rpcm-maintenance-backdrop footer span{flex:1}#rpcm-maintenance-backdrop h2{margin:0;font-size:17px}#rpcm-maintenance-backdrop header p{margin:4px 0 0;color:var(--wish-fg-2);font-size:12px}#rpcm-maintenance-backdrop header button{border:0;background:transparent;color:var(--wish-fg-2);cursor:pointer}
+#rpcm-maintenance-backdrop .rpcm-maintenance-body{min-height:0;overflow:auto;padding:10px 17px 14px}#rpcm-maintenance-backdrop .rpcm-maintenance-body>section{margin:0}#rpcm-maintenance-backdrop h3{margin:0 0 8px;font-size:13px;color:var(--wish-fg)}#rpcm-maintenance-backdrop h3 small{margin-left:5px;color:var(--wish-muted)}
+#rpcm-maintenance-backdrop article{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:4px 12px;margin:5px 0;padding:8px 10px;border:1px solid var(--wish-line);border-radius:9px;background:var(--wish-card)}#rpcm-maintenance-backdrop article.is-selected{border-color:var(--wish-accent-line);background:var(--wish-accent-soft)}#rpcm-maintenance-backdrop article>div{min-width:0}#rpcm-maintenance-backdrop article strong{font-size:12px}#rpcm-maintenance-backdrop article p{margin:3px 0;color:var(--wish-fg-2);font-size:11px;line-height:1.35}#rpcm-maintenance-backdrop article small,#rpcm-maintenance-backdrop .rpcm-maintenance-empty{color:var(--wish-muted);font-size:11px}#rpcm-maintenance-backdrop article button{flex:none}
+#rpcm-maintenance-backdrop footer{border-top:1px solid var(--wish-line);border-bottom:0}#rpcm-maintenance-backdrop footer span{color:var(--wish-muted);font-size:11px}
+#rpcm-maintenance-backdrop .rpcm-maintenance-capacity{flex:none;display:flex;align-items:center;flex-wrap:wrap;gap:3px 13px;padding:9px 17px;border-bottom:1px solid var(--wish-line);background:var(--wish-card);font-size:11px}#rpcm-maintenance-backdrop .rpcm-maintenance-capacity strong{font-size:12px}#rpcm-maintenance-backdrop .rpcm-maintenance-capacity span{color:var(--wish-fg-2)}#rpcm-maintenance-backdrop .rpcm-maintenance-capacity small{color:var(--wish-muted)}#rpcm-maintenance-backdrop .rpcm-maintenance-capacity p{flex-basis:100%;margin:2px 0 0;color:var(--wish-accent)}
+#rpcm-maintenance-backdrop .rpcm-maintenance-tabs{flex:none;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding:8px 17px;border-bottom:1px solid var(--wish-line);background:var(--wish-sheet)}#rpcm-maintenance-backdrop .rpcm-maintenance-tabs button{min-width:0;min-height:34px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--wish-fg-2);font:inherit;font-size:12px;cursor:pointer}#rpcm-maintenance-backdrop .rpcm-maintenance-tabs button[aria-selected="true"]{border-color:var(--wish-accent-line);background:var(--wish-accent-soft);color:var(--wish-accent);font-weight:600}#rpcm-maintenance-backdrop .rpcm-maintenance-tabs button:hover:not([aria-selected="true"]){background:var(--wish-card)}
+#rpcm-maintenance-backdrop .rpcm-maintenance-filters{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px}#rpcm-maintenance-backdrop .rpcm-maintenance-filters button{min-height:27px;padding:3px 8px;border:1px solid var(--wish-line);border-radius:7px;background:var(--wish-card);color:var(--wish-fg-2);font-size:11px;cursor:pointer}#rpcm-maintenance-backdrop .rpcm-maintenance-filters button[aria-pressed="true"]{border-color:var(--wish-accent-line);background:var(--wish-accent-soft);color:var(--wish-accent)}
+#rpcm-maintenance-backdrop .rpcm-maintenance-entry{display:flex;align-items:center;gap:8px;min-width:0}#rpcm-maintenance-backdrop .rpcm-maintenance-entry>div{min-width:0}#rpcm-maintenance-backdrop .rpcm-maintenance-select{display:flex;align-items:center;flex:none}#rpcm-maintenance-backdrop .rpcm-maintenance-select input{width:16px;height:16px;margin:0;accent-color:var(--wish-accent)}#rpcm-maintenance-backdrop .rpcm-maintenance-title{display:flex;align-items:baseline;flex-wrap:wrap;gap:3px 9px}#rpcm-maintenance-backdrop .rpcm-maintenance-title small{white-space:nowrap}#rpcm-maintenance-backdrop .rpcm-maintenance-reason{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1;overflow:hidden}
+#rpcm-maintenance-backdrop .rpcm-maintenance-row-actions{display:flex;align-items:center;justify-content:flex-end;gap:5px}#rpcm-maintenance-backdrop .rpcm-maintenance-row-actions button,#rpcm-maintenance-backdrop .rpcm-maintenance-detail-actions button{min-height:27px;padding:3px 8px;font-size:11px}#rpcm-maintenance-backdrop .rpcm-maintenance-row-actions .rpcm-maintenance-expand{min-width:28px;padding:3px 5px}
+#rpcm-maintenance-backdrop .rpcm-maintenance-detail{grid-column:1/-1;margin-top:5px;padding:8px 0 1px;border-top:1px solid var(--wish-line-2)}#rpcm-maintenance-backdrop .rpcm-maintenance-detail p{margin:2px 0 5px;line-height:1.45}#rpcm-maintenance-backdrop .rpcm-maintenance-detail-actions{display:flex;flex-wrap:wrap;gap:5px}#rpcm-maintenance-backdrop .rpcm-maintenance-more{display:block;margin:9px auto 3px;min-height:30px}
+#rpcm-maintenance-backdrop :is(.rpcm-maintenance-tabs button,.rpcm-maintenance-filters button,.rpcm-maintenance-expand):focus-visible{outline:2px solid var(--wish-accent);outline-offset:2px}
+#rpcm-maintenance-backdrop .rpcm-maintenance-summary{flex:1;color:var(--wish-fg-2);font-size:11px}
+@media(max-width:760px){#rpcm-maintenance-backdrop{padding:8px}#rpcm-maintenance-backdrop .rpcm-maintenance-dialog{width:100%;max-height:calc(100vh - 16px)}#rpcm-maintenance-backdrop .rpcm-maintenance-tabs{padding:7px 10px}#rpcm-maintenance-backdrop .rpcm-maintenance-tabs button{font-size:11px;white-space:normal}#rpcm-maintenance-backdrop .rpcm-maintenance-capacity{padding:8px 10px}#rpcm-maintenance-backdrop .rpcm-maintenance-body{padding:8px 10px 12px}#rpcm-maintenance-backdrop article{grid-template-columns:minmax(0,1fr);gap:6px}#rpcm-maintenance-backdrop .rpcm-maintenance-row-actions{justify-content:flex-start;padding-left:24px}#rpcm-maintenance-backdrop footer{flex-wrap:wrap}#rpcm-maintenance-backdrop .rpcm-maintenance-summary{flex-basis:100%}}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-footer{gap:8px;min-height:0!important;padding:9px 12px calc(9px + env(safe-area-inset-bottom,0px))!important}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-footer-actions{flex:1;min-width:0}html.rpcm-mobile-layout #rpcm-modal .rpcm-footer-actions button{flex:1}html.rpcm-mobile-layout #rpcm-modal .rpcm-footer-status{display:none}
+@media(max-width:760px){#rpcm-modal .rpcm-auto-start{align-items:stretch;flex-direction:column}#rpcm-modal .rpcm-auto-start button{align-self:flex-start}}
+/* v0.14.27: stable monitor, Pink ON/OFF state, and settings view. */
+#rpcm-monitor-slot{display:inline-flex;align-items:center;justify-content:center;flex:none;box-sizing:border-box;width:36px;height:36px;margin:0 5px 0 0;position:relative;z-index:2147483644}
+#rpcm-monitor-slot.is-floating{position:fixed;right:0;top:46%;left:auto;margin:0;z-index:2147483644}
+#rpcm-monitor-slot.is-floating[style*="left"]{right:auto}
+#rpcm-monitor-slot.is-panel-open{z-index:2147483647}
+#rpcm-monitor-slot #rpcm-quick-trigger.is-composer-mounted{margin:0}
+#rpcm-quick-trigger.is-on{border-color:var(--wish-accent-line);background:var(--wish-accent-soft);box-shadow:0 0 0 2px var(--wish-hi),0 0 16px -6px var(--wish-glow)}
+#rpcm-quick-trigger.is-off{border-color:var(--wish-line);background:var(--wish-card-2);box-shadow:var(--wish-shadow)}
+#rpcm-quick-trigger.is-active{border-color:var(--wish-accent);box-shadow:0 0 0 3px var(--wish-hi),0 0 18px -5px var(--wish-glow)}
+#rpcm-quick-trigger.is-manager-open{opacity:.55;pointer-events:none}
+#rpcm-quick-trigger:hover{border-color:var(--wish-accent-line);background:var(--wish-accent-soft);color:var(--wish-fg);transform:none!important}
+#rpcm-quick-trigger>.rpcm-monitor-hold{position:absolute;inset:-4px;width:44px;height:44px;overflow:visible;transform:rotate(-90deg);pointer-events:none}
+#rpcm-quick-trigger>.rpcm-monitor-hold circle{fill:none;stroke:var(--wish-accent);stroke-width:2;stroke-linecap:round;stroke-dasharray:125.7;stroke-dashoffset:125.7;opacity:0}
+#rpcm-quick-trigger.is-holding>.rpcm-monitor-hold circle{opacity:1;animation:rpcm-monitor-hold-progress var(--rpcm-hold-ms,560ms) linear forwards}
+#rpcm-quick-trigger.is-hold-complete>.rpcm-monitor-hold circle{opacity:1;stroke-dashoffset:0}
+#rpcm-quick-trigger.is-holding,#rpcm-quick-trigger.is-hold-complete{box-shadow:0 0 0 3px var(--wish-accent-soft),var(--wish-shadow)}
+@keyframes rpcm-monitor-hold-progress{from{stroke-dashoffset:125.7}to{stroke-dashoffset:0}}
+.rpcm-monitor-ring{background:conic-gradient(var(--wish-accent) var(--rpcm-ring),var(--wish-line) 0%);color:var(--wish-accent-hover)}
+.rpcm-monitor-ring.is-off{background:var(--wish-line);color:var(--wish-muted)}
+.rpcm-monitor-ring.is-warning:not(.is-off){background:conic-gradient(var(--wish-accent) var(--rpcm-ring),var(--wish-warning) 0%)}
+#rpcm-quick-trigger>.rpcm-monitor-ring{display:grid;width:32px;height:32px;background:conic-gradient(var(--wish-accent) var(--rpcm-ring),var(--wish-line) 0%);color:var(--wish-accent-hover);font-size:8px}
+#rpcm-quick-trigger>.rpcm-monitor-ring.is-off{background:var(--wish-line);color:var(--wish-muted)}
+#rpcm-quick-trigger>.rpcm-monitor-ring.is-warning:not(.is-off){background:conic-gradient(var(--wish-accent) var(--rpcm-ring),var(--wish-warning) 0%)}
+.rpcm-monitor-state{color:var(--wish-accent-strong)}
+#rpcm-modal .rpcm-footer :is(#rpcm-arm,.rpcm-footer-preview){flex:none;transform:none!important;transition:background-color .18s ease,border-color .18s ease,color .18s ease,box-shadow .18s ease!important}
+#rpcm-modal .rpcm-footer :is(#rpcm-arm,.rpcm-footer-preview):is(:hover,:active,:focus-visible){transform:none!important}
+#rpcm-modal .rpcm-footer :is(#rpcm-arm,.rpcm-footer-preview) .rpcm-svg{transform:none!important}
+#rpcm-modal .rpcm-workspace:not([data-view="preferences"]) #rpcm-section-preferences{display:none!important}
+#rpcm-modal .rpcm-settings-card{padding:17px;border:1px solid var(--wish-line);border-radius:11px;background:var(--wish-card);box-shadow:var(--wish-shadow)}
+#rpcm-modal .rpcm-settings-card h2{margin:0 0 4px;color:var(--wish-fg);font-size:16px}
+#rpcm-modal .rpcm-settings-card p{margin:0 0 16px;color:var(--wish-fg-2);font-size:12px;line-height:1.55}
+#rpcm-modal .rpcm-settings-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:11px 0;border-top:1px solid var(--wish-line-2);color:var(--wish-fg);cursor:pointer}
+#rpcm-modal .rpcm-settings-row span{display:grid;gap:3px}#rpcm-modal .rpcm-settings-row strong{font-size:12px}#rpcm-modal .rpcm-settings-row small{color:var(--wish-muted);font-size:11px}
+#rpcm-modal .rpcm-settings-row input{width:18px;height:18px;accent-color:var(--wish-accent)}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-workspace #rpcm-section-preferences{display:none}html.rpcm-mobile-layout #rpcm-modal .rpcm-workspace #rpcm-section-preferences.rpcm-mobile-section-active{display:block}
+@media(prefers-reduced-motion:reduce){#rpcm-overlay *,#rpcm-quick-backdrop *,#rpcm-quick-trigger *,#rpcm-lore-dialog-backdrop *,#rpcm-lore-copy-backdrop *,#rpcm-preview-backdrop,#rpcm-preview-backdrop *,#rpcm-auto-start-backdrop,#rpcm-auto-start-backdrop *{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+@media(prefers-reduced-motion:reduce){#rpcm-quick-trigger.is-holding>.rpcm-monitor-hold circle{opacity:1;stroke-dashoffset:75;stroke-width:2.5}#rpcm-quick-trigger.is-hold-complete>.rpcm-monitor-hold circle{opacity:1;stroke-dashoffset:0}}
+      /* WISH button: injection state is a dot; only a user press fills the button. */
+      #rpcm-fab.rpcm-header-monitor,#rpcm-fab.rpcm-header-monitor.rpcm-mobile-fab{position:relative!important;isolation:isolate;display:inline-flex!important;align-items:center;justify-content:center;width:94px!important;min-width:94px!important;height:36px!important;min-height:36px!important;padding:0 10px!important;border:1px solid var(--wish-line)!important;border-radius:8px!important;background:var(--wish-card)!important;color:var(--wish-fg-2)!important;box-shadow:none!important;overflow:hidden!important;touch-action:none!important;transform:none!important;text-shadow:none!important;cursor:pointer;transition:border-color .16s ease,color .16s ease!important}
+      #rpcm-fab.rpcm-header-monitor[hidden]{display:none!important}
+      #rpcm-fab.rpcm-header-monitor::before{content:'';position:absolute;left:50%;top:50%;width:112px;height:112px;border-radius:50%;z-index:0;background:radial-gradient(circle,var(--wish-accent-soft-2),var(--wish-accent-soft));transform:translate(-50%,-50%) scale(0);transform-origin:center center;pointer-events:none}
+      #rpcm-fab.rpcm-header-monitor.is-holding::before{animation:rpcm-wish-fill var(--rpcm-hold-ms,360ms) linear forwards}
+      #rpcm-fab.rpcm-header-monitor.is-hold-complete::before{transform:translate(-50%,-50%) scale(1)}
+      #rpcm-fab.rpcm-header-monitor:is(.is-holding,.is-hold-complete,.is-active){border-color:var(--wish-accent-line)!important;color:var(--wish-accent-strong)!important;box-shadow:none!important}
+      #rpcm-fab.rpcm-header-monitor:is(:hover,:focus-visible){border-color:var(--wish-accent-line)!important;color:var(--wish-accent-strong)!important;background:var(--wish-card)!important;box-shadow:none!important}
+      #rpcm-fab.rpcm-header-monitor:focus-visible{outline:2px solid var(--wish-accent-line)!important;outline-offset:3px!important}
+      #rpcm-fab.rpcm-header-monitor:disabled{opacity:.56!important;cursor:default!important}
+      #rpcm-fab.rpcm-header-monitor .rpcm-header-monitor-label{position:relative;z-index:1;display:block!important;white-space:nowrap;font-size:12px;font-weight:600;letter-spacing:.035em;line-height:1;text-shadow:none!important}
+      #rpcm-fab.rpcm-header-monitor .rpcm-header-status-dot{position:relative;z-index:1;display:none;flex:none;width:6px;height:6px;margin-left:7px;border-radius:50%;background:var(--wish-success);box-shadow:0 0 0 2px color-mix(in srgb,var(--wish-success) 12%,transparent);pointer-events:none}
+      #rpcm-fab.rpcm-header-monitor.is-on .rpcm-header-status-dot{display:block}
+      @keyframes rpcm-wish-fill{from{transform:translate(-50%,-50%) scale(var(--rpcm-fill-start,0))}to{transform:translate(-50%,-50%) scale(1)}}
+      @media(max-width:600px){#rpcm-fab.rpcm-header-monitor,#rpcm-fab.rpcm-header-monitor.rpcm-mobile-fab{width:88px!important;min-width:88px!important;height:34px!important;min-height:34px!important;margin-right:4px!important}}
+      @media(prefers-reduced-motion:reduce){#rpcm-fab.rpcm-header-monitor.is-holding::before{animation:none;transform:translate(-50%,-50%) scale(1)}}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-helper-card{display:grid;grid-template-columns:minmax(240px,.9fr) minmax(300px,1.2fr) 124px;grid-template-rows:auto auto;align-items:center;gap:6px 14px;min-height:104px;margin:13px 0 18px;padding:14px 16px;border:1px solid #945f7e;border-radius:11px;background:linear-gradient(110deg,#342631,#28232a);box-shadow:0 8px 24px #0003}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-helper-card .rpcm-ai-card-head{grid-column:1;grid-row:1}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-helper-card>.rpcm-ai-chip-row{grid-column:1;grid-row:2}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-helper-card .rpcm-ai-card-result{grid-column:2;grid-row:1/3;align-self:stretch;min-height:68px;padding:10px 12px}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-helper-card .rpcm-ai-card-actions{grid-column:3;grid-row:1/3}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-work-title{margin:4px 0 10px;color:#edd5e3;font-size:15px}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-control-grid article{grid-template-columns:minmax(240px,.9fr) minmax(300px,1.2fr) 124px!important;grid-template-rows:auto auto!important;min-height:104px!important;padding:14px 16px!important;gap:6px 14px!important}
+#rpcm-modal #rpcm-section-ai :is(.rpcm-ai-helper-card,.rpcm-ai-control-grid article) .rpcm-ai-card-head h3{margin:0;font-size:15px}
+#rpcm-modal #rpcm-section-ai :is(.rpcm-ai-helper-card,.rpcm-ai-control-grid article) .rpcm-ai-card-head p{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;margin:3px 0 0;font-size:12px;line-height:1.45}
+#rpcm-modal #rpcm-section-ai :is(.rpcm-ai-helper-card,.rpcm-ai-control-grid article) .rpcm-ai-card-result{min-width:0;min-height:68px!important;padding:10px 12px!important;border-radius:8px!important}
+#rpcm-modal #rpcm-section-ai :is(.rpcm-ai-helper-card,.rpcm-ai-control-grid article) .rpcm-ai-card-actions{display:flex;flex-direction:column;align-items:stretch;justify-content:center;gap:6px;width:124px;margin:0}
+#rpcm-modal #rpcm-section-ai :is(.rpcm-ai-helper-card,.rpcm-ai-control-grid article) .rpcm-ai-card-actions button{box-sizing:border-box;width:124px;min-height:40px;margin:0;padding:7px 9px;border-radius:8px;font-size:12px;white-space:nowrap}
+@media(max-width:1060px){#rpcm-modal #rpcm-section-ai :is(.rpcm-ai-helper-card,.rpcm-ai-control-grid article){grid-template-columns:minmax(0,1fr) 124px!important}#rpcm-modal #rpcm-section-ai :is(.rpcm-ai-helper-card,.rpcm-ai-control-grid article) .rpcm-ai-card-result{grid-column:1;grid-row:3}#rpcm-modal #rpcm-section-ai :is(.rpcm-ai-helper-card,.rpcm-ai-control-grid article) .rpcm-ai-card-actions{grid-column:2;grid-row:1/4}}
+@media(max-width:680px){#rpcm-modal #rpcm-section-ai :is(.rpcm-ai-helper-card,.rpcm-ai-control-grid article){grid-template-columns:minmax(0,1fr)!important;grid-template-rows:auto!important}#rpcm-modal #rpcm-section-ai :is(.rpcm-ai-helper-card,.rpcm-ai-control-grid article) :is(.rpcm-ai-card-head,.rpcm-ai-chip-row,.rpcm-ai-card-result,.rpcm-ai-card-actions){grid-column:1;grid-row:auto}#rpcm-modal #rpcm-section-ai :is(.rpcm-ai-helper-card,.rpcm-ai-control-grid article) .rpcm-ai-card-actions{width:100%}#rpcm-modal #rpcm-section-ai :is(.rpcm-ai-helper-card,.rpcm-ai-control-grid article) .rpcm-ai-card-actions button{width:100%}}
+/* AI is a single workview with four local panes; switching panes leaves the shell intact. */
+#rpcm-modal #rpcm-section-ai .rpcm-ai-top-summary{display:grid;gap:8px;margin:12px 0 14px}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-top-summary .rpcm-ai-statusbar{margin:0!important}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-usage-compact{display:flex;align-items:center;gap:6px 15px;flex-wrap:wrap;padding:9px 12px;border:1px solid var(--wish-line);border-radius:10px;background:var(--wish-card);color:var(--wish-fg-2);font-size:11px}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-usage-compact b{color:var(--wish-fg);font-variant-numeric:tabular-nums}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-usage-compact>details{position:relative;margin-left:auto}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-usage-compact>details>summary{cursor:pointer;color:var(--wish-accent-strong);font-weight:600;white-space:nowrap}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-usage-compact .rpcm-api-room-usage{margin-top:9px}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-usage-compact>details[open]{flex-basis:100%;margin-left:0}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-work-tabs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;margin:0 0 14px;padding:4px;border:1px solid var(--wish-line);border-radius:11px;background:var(--wish-sheet)}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-work-tabs button{min-width:0;min-height:38px;padding:6px 8px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--wish-fg-2);font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-work-tabs button:hover{background:var(--wish-card-2);color:var(--wish-fg)}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-work-tabs button.is-active{border-color:var(--wish-accent-line);background:var(--wish-accent-soft);color:var(--wish-accent-strong)}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-work-tabs button:focus-visible{outline:2px solid var(--wish-accent);outline-offset:2px}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-work-pane[hidden]{display:none!important}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-assistant-intro{display:flex;align-items:center;gap:5px 12px;flex-wrap:wrap;margin:0 0 9px;color:var(--wish-fg-2);font-size:12px}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-assistant-intro strong{color:var(--wish-fg);font-size:15px}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-assistant-intro span{flex:1 1 260px}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-mobile-assistant-open{display:none}
+#rpcm-modal #rpcm-section-ai #rpcm-ai-assistant-host:empty + .rpcm-ai-mobile-assistant-open{display:inline-flex}
+#rpcm-overlay.rpcm-initializing :is(.rpcm-work-nav,.rpcm-work-subnav,.rpcm-memory-tabs,.rpcm-person-tabs) :is(.rpcm-nav-indicator,.rpcm-tab-indicator){transition:none!important}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-work-pane .rpcm-ai-control-grid{grid-template-columns:minmax(0,1fr);gap:10px}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-work-pane .rpcm-ai-control-grid article:first-child{grid-column:auto}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-context-results{margin-top:10px;padding:10px 12px;border:1px solid var(--wish-line);border-radius:10px;background:var(--wish-card);color:var(--wish-fg-2);font-size:12px}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-context-results>summary{cursor:pointer;color:var(--wish-fg);font-weight:600}
+#rpcm-modal #rpcm-section-ai .rpcm-ai-context-inline{margin-top:10px}
+#rpcm-modal #rpcm-section-ai #rpcm-ai-extras>.rpcm-ai-launchbar:not(.rpcm-ai-review-launchbar){display:none!important}
+#rpcm-modal #rpcm-utility-backdrop.rpcm-assistant-inline{position:static!important;inset:auto!important;z-index:auto!important;display:block!important;padding:0!important;background:transparent!important}
+#rpcm-modal #rpcm-utility-backdrop.rpcm-assistant-inline .rpcm-utility-dialog{width:100%!important;height:min(560px,61vh)!important;max-height:none!important;border-color:var(--wish-line)!important;border-radius:11px!important;background:var(--wish-card)!important;box-shadow:var(--wish-shadow)!important}
+#rpcm-modal #rpcm-utility-backdrop.rpcm-assistant-inline [data-assistant-act="close"]{display:none!important}
+@media(max-width:680px){#rpcm-modal #rpcm-section-ai .rpcm-ai-work-tabs{grid-template-columns:repeat(2,minmax(0,1fr))}#rpcm-modal #rpcm-section-ai .rpcm-ai-mobile-assistant-open{display:inline-flex}#rpcm-modal #rpcm-section-ai .rpcm-ai-usage-compact>details{margin-left:0}#rpcm-modal #rpcm-section-ai .rpcm-ai-control-grid article{grid-template-columns:minmax(0,1fr)!important}}
+
+/* v0.15.3 · mobile navigation/accessibility regression patch */
+#rpcm-modal .rpcm-mobile-header-nav{display:none}
+#rpcm-modal .rpcm-header-menu-utilities{display:grid;gap:3px}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-header-menu-list{
+  width:min(286px,calc(100vw - 20px))!important;
+  max-height:min(72dvh,620px);
+  overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;
+  scrollbar-width:thin;
+}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-mobile-header-nav{display:grid;gap:2px}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-mobile-header-nav .rpcm-header-menu-group{
+  display:block;padding:8px 10px 4px;color:var(--wish-muted);font-size:10px;font-weight:700;letter-spacing:.04em;
+}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-mobile-header-nav button{
+  display:grid!important;grid-template-columns:24px minmax(0,1fr);align-items:center;gap:8px;
+  height:42px!important;min-height:42px!important;padding:6px 10px!important;
+}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-mobile-header-nav button.is-active{
+  background:var(--wish-accent-soft)!important;color:var(--wish-accent-strong)!important;
+}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-header-menu-utilities{
+  margin-top:6px;padding-top:6px;border-top:1px solid var(--wish-line-2);
+}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-quickbar{display:none!important}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-mobile-nav-strip{display:none!important}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-work-content{overflow-x:hidden!important;padding:12px 12px 18px!important}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-work-content>*{max-width:100%;min-width:0;box-sizing:border-box}
+html.rpcm-mobile-layout #rpcm-modal :is(.rpcm-section,.rpcm-overview,.rpcm-tools,.rpcm-settings-card,.rpcm-pref-card,.rpcm-tool-card,.rpcm-update-center,.rpcm-update-overview,.rpcm-ai-top-summary){max-width:100%;min-width:0;box-sizing:border-box}
+html.rpcm-mobile-layout #rpcm-modal :is(input:not([type=checkbox]):not([type=radio]),select,textarea){max-width:100%;min-width:0;box-sizing:border-box}
+html.rpcm-mobile-layout #rpcm-modal :is(.rpcm-section-head,.rpcm-charlib-actions,.rpcm-item-folder-field,.rpcm-extra-category-field,.rpcm-tool-actions,.rpcm-maintenance-actions){min-width:0;max-width:100%;flex-wrap:wrap}
+html.rpcm-mobile-layout #rpcm-modal :is(.rpcm-section-title,.rpcm-section-desc,.rpcm-slot-name,.rpcm-item-readable,.rpcm-read-text,.rpcm-tool-card p,.rpcm-settings-card p){overflow-wrap:anywhere;word-break:break-word}
+    `);
+  }
+
+  function isElementVisible(el) {
+    if (!el?.getBoundingClientRect || !el.isConnected) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return false;
+    const cs = getComputedStyle(el);
+    return cs.display !== 'none' && cs.visibility !== 'hidden';
+  }
+
+  function visibleButtonLikes(root = document) {
+    const scope = root?.querySelectorAll ? root : document;
+    return [...scope.querySelectorAll('button,a,[role="button"]')]
+      .filter(el => el.id !== 'rpcm-fab' && !el.closest('#rpcm-overlay') && isElementVisible(el));
+  }
+
+  function modelSelectorText(el) {
+    return String(el?.textContent || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function isCrackHeaderVisible(el) {
+    if (!isElementVisible(el) || el.closest('[hidden],[inert],[aria-hidden="true"]')) return false;
+    if (el.checkVisibility && !el.checkVisibility({ checkOpacity:true, checkVisibilityCSS:true })) return false;
+    const rect = el.getBoundingClientRect();
+    return rect.bottom > 0 && rect.top < window.innerHeight && rect.right > 0 && rect.left < window.innerWidth;
+  }
+
+  function findStableCrackHeaderActionRow() {
+    // Tailwind 클래스 순서·간격 변경과 새 header/banner 마크업을 모두 지원합니다.
+    // 본문 모델 배지나 다른 확장프로그램의 팝업은 위치 기준으로 쓰지 않습니다.
+    const roots = document.querySelectorAll('[class~="group/header"],header,[role="banner"]');
+    for (const root of roots) {
+      if (root.closest('[id^="rpcm-"],[id^="wish-rpcore-"],[role="dialog"],[role="menu"],[data-radix-popper-content-wrapper]')) continue;
+      if (!isCrackHeaderVisible(root) || root.getBoundingClientRect().top > 180) continue;
+      const model = findModelSelectorButtonInHeader(root);
+      if (!model || !isCrackHeaderVisible(model)) continue;
+      for (let row = model.parentElement; row && root.contains(row); row = row.parentElement) {
+        const rect = row.getBoundingClientRect();
+        const style = getComputedStyle(row);
+        if (isCrackHeaderVisible(row) && rect.height <= 96 &&
+            (style.display === 'flex' || style.display === 'inline-flex') && style.flexDirection !== 'column') return row;
+        if (row === root) break;
+      }
+    }
+    return null;
+  }
+
+  function findModelSelectorButtonInHeader(header) {
+    if (!header) return null;
+    const badText = /^(manager|lore|기억\s*삽입|설정|요약|파티챗|에피소드)$/i;
+    const strongModelWord = /(하이퍼\s*챗|프로\s*챗|프리\s*챗|chat|gpt|claude|gemini|sonnet|opus|flash)/i;
+    const candidates = [...header.querySelectorAll('button,[role="button"]')].map(el => {
+      if (!el || el === state.fab || el.id === 'summary-editor-btn' || el.id === 'wish-rpcore-refiner-button' || !isCrackHeaderVisible(el)) return null;
+      if (el.closest?.('[role="dialog"],[aria-modal="true"],[role="menu"],[role="listbox"],[data-radix-popper-content-wrapper]')) return null;
+      const t = [modelSelectorText(el), el.getAttribute('aria-label'), el.getAttribute('title')].filter(Boolean).join(' ');
+      if (!t || badText.test(t)) return null;
+      const strong = strongModelWord.test(t);
+      const popup = !!el.getAttribute('aria-haspopup') || el.getAttribute('aria-expanded') != null;
+      const hasVersionLikeNumber = /\d+(?:\.\d+)?/.test(t);
+      if (!strong && !(popup && hasVersionLikeNumber)) return null;
+      let score = 0;
+      if (strong) score += 200;
+      if (hasVersionLikeNumber) score += 70;
+      if (popup) score += 35;
+      if (t.length >= 3 && t.length <= 32) score += 10;
+      return { el, score };
+    }).filter(Boolean).sort((a,b) => b.score - a.score);
+    return candidates[0]?.el || null;
+  }
+
+  function directChildInsideHost(el, host) {
+    if (!el || !host || !host.contains(el)) return null;
+    let node = el;
+    while (node?.parentElement && node.parentElement !== host) node = node.parentElement;
+    return node?.parentElement === host ? node : null;
+  }
+
+  function canMountCrackHeaderButton(header, button, extraWidth) {
+    if (!header) return false;
+    const parent = header.parentElement;
+    if (parent && isElementVisible(parent)) {
+      const style = getComputedStyle(parent), rowStyle = getComputedStyle(header);
+      const siblings = [...parent.children].filter(node => node !== header && isElementVisible(node));
+      const rowChildren = [...header.children].filter(node => node !== button && isElementVisible(node));
+      const available = parent.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0)
+        - siblings.reduce((sum,node) => sum + node.getBoundingClientRect().width, 0)
+        - (parseFloat(style.columnGap) || 0) * siblings.length;
+      const required = rowChildren.reduce((sum,node) => sum + node.getBoundingClientRect().width, 0)
+        + (parseFloat(rowStyle.columnGap) || 0) * rowChildren.length + extraWidth;
+      if (required > Math.max(0, available)) return false;
+    }
+
+    return true;
+  }
+
+  function mountManagerNextToModelSelector(fab) {
+    const header = findStableCrackHeaderActionRow();
+    if (!header || !isCrackHeaderVisible(header)) return false;
+    const modelButton = findModelSelectorButtonInHeader(header);
+    if (!modelButton) return false;
+    const before = directChildInsideHost(modelButton, header);
+    if (!before) return false;
+    // WISH를 추가하면 기존 확장 버튼이 밀려나는 좁은 행은 사용하지 않습니다.
+    if (!canMountCrackHeaderButton(header, fab, 106)) return false;
+
+    hideManagerMobileHost();
+    fab.classList.remove('rpcm-fallback', 'rpcm-compact-fallback', 'rpcm-mobile-fab');
+    for (const prop of ['left','right','top','bottom','position','margin','z-index']) fab.style.removeProperty(prop);
+    fab.style.setProperty('flex-shrink', '0');
+    fab.style.setProperty('margin-right', '8px', 'important');
+
+    // 요약 메모리 편집기(📜)와 같은 고정 상단 행에만 삽입합니다.
+    // 모델 선택 컴포넌트의 최상위 자식 바로 앞에 넣으므로 모델명/내부 래퍼가 바뀌어도 위치가 유지됩니다.
+    if (fab.parentElement !== header || fab.nextSibling !== before) header.insertBefore(fab, before);
+    fab.dataset.rpcmPlacement = 'stable-header-before-model';
+    managerInlineMounted = true;
+    managerFallbackLocked = false;
+    return true;
+  }
+
+  function createManagerButton() {
+    const fab = document.createElement('button');
+    fab.type = 'button';
+    fab.id = 'rpcm-fab';
+    fab.className = 'rpcm-header-monitor';
+    fab.innerHTML = '<span class="rpcm-header-monitor-label">WISH</span><span class="rpcm-header-status-dot" aria-hidden="true"></span>';
+    fab.onmousedown = event => event.stopPropagation();
+    rpcmBindMonitorPress(fab);
+    return fab;
+  }
+
+  // 기본은 기존 위치를 그대로 사용합니다. 다만 다른 확프/React 재렌더가
+  // 이미 꽂힌 Manager 버튼을 실제로 지워버린 것이 감지되면 그 페이지 세션에서는
+  // 안전한 body 직속 fixed 위치로 전환합니다. 새로고침/다른 채팅방 이동 시 다시 기존 위치부터 시도합니다.
+  let managerPlacementRoute = '';
+  let managerInlineMounted = false;
+  let managerFallbackLocked = false;
+  const MANAGER_MOBILE_HOST_ID = 'rpcm-mobile-button-host';
+  const MANAGER_MOBILE_MENU_ATTR = 'data-rpcm-settings-entry';
+  let managerMobileHost = null;
+  let managerMobileMount = null;
+  let managerMobileHostGuard = null;
+  let managerMobileRestoreQueued = false;
+
+  function currentManagerPlacementRoute() {
+    return `${location.pathname}${location.search}`;
+  }
+
+  function resetManagerPlacementGuardIfNeeded() {
+    const route = currentManagerPlacementRoute();
+    if (route === managerPlacementRoute) return;
+    managerPlacementRoute = route;
+    managerInlineMounted = false;
+    managerFallbackLocked = false;
+  }
+
+  function positionManagerSafeFallback(fab) {
+    // v0.9.0 안정화: 외부 버튼 DOM의 위치를 따라다니지 않습니다.
+    // 다른 확프나 React 재렌더링으로 검색창 위치가 바뀌어도 Manager는
+    // 같은 화면 좌표에 고정하여 “버튼이 돌아다니는” 현상을 원천 차단합니다.
+    fab.classList.remove('rpcm-compact-fallback');
+    fab.style.removeProperty('left');
+    fab.style.removeProperty('top');
+    fab.style.setProperty('right', '18px', 'important');
+    fab.style.setProperty('top', '112px', 'important');
+    fab.style.removeProperty('bottom');
+  }
+
+  function mountManagerFallback(fab, locked = false) {
+    if (!document.body) return false;
+    hideManagerMobileHost();
+    fab.classList.remove('rpcm-mobile-fab');
+    fab.classList.add('rpcm-fallback');
+    fab.style.setProperty('position', 'fixed', 'important');
+    fab.style.setProperty('z-index', '2147483645', 'important');
+    if (fab.parentElement !== document.body) document.body.appendChild(fab);
+    positionManagerSafeFallback(fab);
+    fab.dataset.rpcmPlacement = locked ? 'fixed-safe-recovery' : 'fixed-safe-awaiting-target';
+    return true;
+  }
+
+  function mobileManagerButtonStyles() {
+    return `
+      :host{all:initial}
+      #mount{width:48px;height:48px;pointer-events:none}
+      button{all:unset;box-sizing:border-box!important;position:relative!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;width:48px!important;height:48px!important;min-width:48px!important;min-height:48px!important;border:1px solid var(--wish-user-accent,var(--wish-accent-line,#f472b6))!important;border-radius:50%!important;background:var(--wish-user-card-dark,rgba(36,24,31,.94))!important;color:var(--wish-user-accent,var(--wish-accent-strong,#f9a8d4))!important;box-shadow:0 6px 20px rgba(0,0,0,.42)!important;font-family:-apple-system,BlinkMacSystemFont,"Pretendard",sans-serif!important;cursor:pointer!important;user-select:none!important;touch-action:manipulation!important;-webkit-tap-highlight-color:transparent!important;pointer-events:auto!important}
+      button:focus-visible{outline:2px solid var(--wish-user-accent,var(--wish-accent-strong,#f9a8d4))!important;outline-offset:3px!important}
+      button[hidden]{display:none!important}
+      .rpcm-fab-label{display:none!important}
+      .rpcm-fab-wing{display:inline!important;font-size:22px!important;line-height:1!important}
+      .rpcm-header-monitor-label{font-size:11px!important;font-weight:700!important;line-height:1!important}
+      .rpcm-header-status-dot{display:none!important}
+      .rpcm-header-monitor.is-on .rpcm-header-status-dot{display:block!important;position:absolute!important;right:4px!important;top:4px!important;width:6px!important;height:6px!important;border-radius:50%!important;background:#22c55e!important}
+      .rpcm-dot{position:absolute!important;right:5px!important;top:5px!important;width:8px!important;height:8px!important;border:1px solid rgba(24,24,24,.9)!important;border-radius:50%!important;background:var(--wish-user-accent,var(--wish-accent-strong,#f9a8d4))!important}
+      button.rpcm-armed{background:color-mix(in srgb,var(--wish-user-accent,var(--wish-accent,#df78aa)) 28%,var(--wish-user-card-dark,rgba(36,24,31,.94)))!important;border-color:var(--wish-user-accent,var(--wish-accent,#fb7185))!important;color:var(--wish-user-accent-ink,var(--wish-accent-ink,#fff))!important}
+      button.rpcm-armed .rpcm-dot{background:#22c55e!important;box-shadow:0 0 0 2px rgba(34,197,94,.16)!important}
+      @media(prefers-color-scheme:light){button{background:var(--wish-user-card-light,color-mix(in srgb,var(--wish-user-accent,var(--wish-accent,#df78aa)) 13%,#fff 87%))!important;color:color-mix(in srgb,var(--wish-user-accent,var(--wish-accent,#b84f7e)) 72%,#2C2229 28%)!important;border-color:color-mix(in srgb,var(--wish-user-accent,var(--wish-accent,#df6298)) 44%,#E9D8E2 56%)!important}}
+    `;
+  }
+
+  function setImportantStyle(el, name, value) {
+    try { el?.style?.setProperty(name, value, 'important'); } catch (_) {}
+  }
+
+  function mobileManagerTopOffset() {
+    const viewportWidth = Math.max(1, window.innerWidth || document.documentElement.clientWidth || 1);
+    const viewportHeight = Math.max(1, window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 1);
+    const size = 48;
+    const right = 14;
+    const gap = 10;
+    let top = 76;
+    let obstacles = [];
+    try {
+      obstacles = visibleButtonLikes(document).filter(el => {
+        if (el === state.fab || el.closest?.(`#${MANAGER_MOBILE_HOST_ID}`)) return false;
+        const rect = el.getBoundingClientRect();
+        return rect.width >= 24 && rect.height >= 24 && rect.width <= 180 && rect.height <= 180 &&
+          rect.right >= viewportWidth - 150 && rect.top <= 260 && rect.bottom >= 0;
+      }).map(el => el.getBoundingClientRect());
+    } catch (_) {}
+
+    for (let pass = 0; pass < 8; pass++) {
+      const target = {
+        left: viewportWidth - right - size,
+        right: viewportWidth - right,
+        top,
+        bottom: top + size,
+      };
+      const overlap = obstacles.find(rect =>
+        target.left < rect.right + gap && target.right > rect.left - gap &&
+        target.top < rect.bottom + gap && target.bottom > rect.top - gap
+      );
+      if (!overlap) break;
+      top = Math.min(Math.max(top + size + gap, overlap.bottom + gap), Math.max(76, viewportHeight - size - 18));
+    }
+    return Math.round(top);
+  }
+
+  function ensureManagerMobileHostGuard() {
+    if (managerMobileHostGuard || !document.documentElement) return;
+    managerMobileHostGuard = new MutationObserver(() => {
+      if (!isMobileManagerLayout() || !state.currentChatId || managerMobileHost?.isConnected) return;
+      if (managerMobileRestoreQueued) return;
+      managerMobileRestoreQueued = true;
+      queueMicrotask(() => {
+        managerMobileRestoreQueued = false;
+        if (!isMobileManagerLayout() || !state.currentChatId) return;
+        managerMobileHost = null;
+        managerMobileMount = null;
+        ensureManagerButton();
+      });
+    });
+    managerMobileHostGuard.observe(document.documentElement, { childList: true });
+  }
+
+  function ensureManagerMobileHost() {
+    if (!document.documentElement) return null;
+    if (!managerMobileHost?.isConnected || !managerMobileHost.shadowRoot) {
+      const existing = document.getElementById(MANAGER_MOBILE_HOST_ID);
+      if (existing?.shadowRoot) {
+        managerMobileHost = existing;
+        managerMobileMount = existing.shadowRoot.getElementById('mount');
+      } else {
+        const host = document.createElement('div');
+        host.id = MANAGER_MOBILE_HOST_ID;
+        host.setAttribute('aria-hidden', 'false');
+        const root = host.attachShadow({ mode: 'open' });
+        const style = document.createElement('style');
+        style.textContent = mobileManagerButtonStyles();
+        const mount = document.createElement('div');
+        mount.id = 'mount';
+        root.append(style, mount);
+        document.documentElement.appendChild(host);
+        managerMobileHost = host;
+        managerMobileMount = mount;
+      }
+    }
+
+    const top = mobileManagerTopOffset();
+    setImportantStyle(managerMobileHost, 'position', 'fixed');
+    setImportantStyle(managerMobileHost, 'width', '48px');
+    setImportantStyle(managerMobileHost, 'height', '48px');
+    setImportantStyle(managerMobileHost, 'right', '14px');
+    managerMobileHost.style.removeProperty('bottom');
+    setImportantStyle(managerMobileHost, 'top', `max(calc(env(safe-area-inset-top, 0px) + 12px), ${top}px)`);
+    setImportantStyle(managerMobileHost, 'z-index', '2147483646');
+    setImportantStyle(managerMobileHost, 'pointer-events', 'none');
+    setImportantStyle(managerMobileHost, 'contain', 'layout style paint');
+    setImportantStyle(managerMobileHost, 'visibility', 'visible');
+    setImportantStyle(managerMobileHost, 'opacity', '1');
+    setImportantStyle(managerMobileHost, 'display', 'block');
+    ensureManagerMobileHostGuard();
+    return managerMobileMount;
+  }
+
+  function hideManagerMobileHost() {
+    if (!managerMobileHost) return;
+    setImportantStyle(managerMobileHost, 'display', 'none');
+  }
+
+  function normalizedMenuText(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function mobileSettingsAnchorRow(label) {
+    if (!label) return null;
+    const paddedRow = label.closest?.('div[class*="py-"][class*="px-"],li,[role="menuitem"]');
+    if (paddedRow) return paddedRow;
+    const button = label.closest?.('button,a,[role="button"]');
+    if (button) {
+      const parent = button.parentElement;
+      if (parent && parent !== document.body) {
+        const rect = parent.getBoundingClientRect?.();
+        if (!rect || (rect.height >= 32 && rect.height <= 92)) return parent;
+      }
+      return button;
+    }
+    return label.closest?.('div') || label;
+  }
+
+  function createMobileSettingsMenuEntry() {
+    const row = document.createElement('div');
+    row.className = 'px-2.5 h-4 box-content py-[18px]';
+    row.setAttribute(MANAGER_MOBILE_MENU_ATTR, '1');
+    row.innerHTML = `
+      <div role="button" tabindex="0" data-rpcm-open-manager="1" class="w-full flex h-4 items-center justify-between typo-text-base_leading-none_medium space-x-2 [&_svg]:fill-icon_tertiary ring-offset-4 ring-offset-sidebar cursor-pointer">
+        <span class="flex space-x-2 items-center min-w-0">
+          <span class="rpcm-settings-wing" aria-hidden="true">🪽</span>
+          <span class="whitespace-nowrap overflow-hidden text-ellipsis typo-text-sm_leading-none_medium">RP Manager</span>
+        </span>
+        <span class="rpcm-settings-state-dot" aria-hidden="true"></span>
+      </div>`;
+    const open = event => {
+      event.preventDefault();
+      event.stopPropagation();
+      const action = state.currentRoom?.pending ? openQuickInjectionPanel : openModal;
+      action().catch(error => notify(error.message, 'error'));
+    };
+    const button = row.querySelector('[data-rpcm-open-manager]');
+    button?.addEventListener('click', open);
+    button?.addEventListener('keydown', event => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      open(event);
+    });
+    return row;
+  }
+
+  function updateMobileSettingsMenuEntry() {
+    const row = document.querySelector(`[${MANAGER_MOBILE_MENU_ATTR}="1"]`);
+    if (!row) return;
+    const armed = !!state.currentRoom?.pending;
+    row.classList.toggle('rpcm-menu-armed', armed);
+    const button = row.querySelector('[data-rpcm-open-manager]');
+    if (button) button.setAttribute('aria-label', armed ? 'RP Manager · 현재 주입 빠른 관리' : 'RP Manager');
+  }
+
+  function removeMobileSettingsMenuEntry() {
+    document.querySelectorAll(`[${MANAGER_MOBILE_MENU_ATTR}="1"]`).forEach(node => node.remove());
+  }
+
+  function ensureMobileSettingsMenuEntry() {
+    if (!state.currentChatId) {
+      removeMobileSettingsMenuEntry();
+      return false;
+    }
+    const existing = document.querySelector(`[${MANAGER_MOBILE_MENU_ATTR}="1"]`);
+    if (existing) {
+      updateMobileSettingsMenuEntry();
+      return true;
+    }
+    const labels = [...document.querySelectorAll('p,span,button,[role="button"],[role="menuitem"]')].filter(node => !node.closest?.('[id^="rpcm-"],[id^="wish-rpcore-"],[data-rpcm-settings-entry="1"]') && isElementVisible(node));
+    const summaryLabel = labels.find(node => normalizedMenuText(node.textContent) === '요약 메모리');
+    const fallbackLabel = labels.find(node => normalizedMenuText(node.textContent) === '전체 설정');
+    const anchorLabel = summaryLabel || fallbackLabel;
+    const anchorRow = mobileSettingsAnchorRow(anchorLabel);
+    if (!anchorRow?.parentElement) return false;
+    const row = createMobileSettingsMenuEntry();
+    anchorRow.parentElement.insertBefore(row, anchorRow.nextSibling);
+    updateMobileSettingsMenuEntry();
+    return true;
+  }
+
+  function scheduleMobileSettingsMenuEntry(delay = 90) {
+    clearTimeout(state.mobileMenuTimer);
+    state.mobileMenuTimer = setTimeout(() => {
+      state.mobileMenuTimer = null;
+      ensureMobileSettingsMenuEntry();
+    }, Math.max(0, Number(delay) || 0));
+  }
+
+  function bindMobileSettingsMenuEntry() {
+    if (state.mobileMenuBound) return;
+    state.mobileMenuBound = true;
+    document.addEventListener('click', () => {
+      if (!state.currentChatId) return;
+      scheduleMobileSettingsMenuEntry(80);
+      setTimeout(() => scheduleMobileSettingsMenuEntry(0), 280);
+      setTimeout(() => scheduleMobileSettingsMenuEntry(0), 650);
+    }, true);
+  }
+
+  function mountManagerMobile(fab) {
+    const mount = ensureManagerMobileHost();
+    if (!mount) return false;
+    // 모바일 버튼은 페이지/다른 확프 CSS가 닿지 않는 Shadow DOM 안에 둡니다.
+    // 호스트는 body 밖 documentElement 직속이라 React가 body를 다시 그려도 유지됩니다.
+    fab.classList.add('rpcm-fallback', 'rpcm-mobile-fab');
+    fab.classList.remove('rpcm-compact-fallback');
+    for (const prop of ['position','top','right','left','bottom','z-index','margin']) fab.style.removeProperty(prop);
+    fab.style.removeProperty('bottom');
+    if (fab.parentNode !== mount) mount.appendChild(fab);
+    fab.dataset.rpcmPlacement = 'shadow-mobile';
+    managerInlineMounted = false;
+    return true;
+  }
+
+  function updateFab() {
+    if (!state.fab) {
+      updateQuickInjectionTrigger();
+      return;
+    }
+    const visible = !!state.currentChatId && !state.modal;
+    state.fab.hidden = !visible;
+    const armed = !!state.currentRoom?.pending;
+    state.fab.classList.toggle('rpcm-armed', armed);
+    state.fab.title = armed ? `🪽위시 RP Manager · 자동 유지 중 (${pendingProgressText(state.currentRoom.pending)})` : '🪽위시 RP Manager';
+    state.fab.setAttribute('aria-label', state.fab.title);
+    if (managerMobileHost?.isConnected && isMobileManagerLayout()) {
+      setImportantStyle(managerMobileHost, 'visibility', visible ? 'visible' : 'hidden');
+    }
+    updateMobileSettingsMenuEntry();
+    updateQuickInjectionTrigger();
+  }
+
+  function ensureManagerButton() {
+    resetManagerPlacementGuardIfNeeded();
+    if (!state.currentChatId) {
+      if (state.fab) { state.fab.rpcmCancelHold?.(); state.fab.hidden = true; }
+      hideManagerMobileHost();
+      removeMobileSettingsMenuEntry();
+      return false;
+    }
+    const fab = state.fab || createManagerButton();
+    // React나 다른 확장이 헤더를 다시 그렸다면 같은 위치에 계속 재삽입하지 않습니다.
+    if (managerInlineMounted && !fab.isConnected) {
+      fab.rpcmCancelHold?.();
+      managerFallbackLocked = true;
+    }
+    const mobileLayout = isMobileManagerLayout();
+    fab.classList.toggle('rpcm-mobile-fab', mobileLayout);
+    scheduleMobileSettingsMenuEntry(0);
+    if (!managerFallbackLocked && mountManagerNextToModelSelector(fab)) {
+      state.fab = fab;
+      updateFab();
+      return true;
+    }
+    managerInlineMounted = false;
+    // 헤더가 없는 새 UI에서도 진입 가능합니다. 기존 버튼이나 입력창은 옮기거나 삭제하지 않습니다.
+    const mounted = mobileLayout ? mountManagerMobile(fab) : mountManagerFallback(fab, managerFallbackLocked);
+    state.fab = fab;
+    updateFab();
+    return mounted;
+  }
+
+  function createFab() {
+    // 기본 위치를 먼저 시도하고, 충돌로 실제 삭제되는 경우에만 독립 폴백으로 전환합니다.
+    ensureManagerButton();
+  }
+
+  async function refreshCarrierCapacityPreview(room, force = false) {
+    if (!room) return;
+    const roomId = String(room.chatId || '');
+    if (room.pending) {
+      state.carrierCapacityPreview = { roomId, originalChars:Number(room.pending.originalChars || 0), originalText:String(room.pending.originalText || ''), loading:false, error:'', checkedAt:Date.now() };
+      state.capacityUiRefresh?.();
+      return;
+    }
+    const previous = state.carrierCapacityPreview;
+    if (!force && previous && previous.roomId === roomId && (previous.loading || (!previous.error && Date.now() - Number(previous.checkedAt || 0) < 10000))) return;
+    state.carrierCapacityPreview = { roomId, originalChars:0, loading:true, error:'', checkedAt:Date.now() };
+    state.capacityUiRefresh?.();
+    try {
+      const recent = await fetchRecentMessages(apiChatIdOf(room), 20);
+      const latestAssistant = recent.find(message => messageRoleOf(message) === 'assistant');
+      if (!latestAssistant) throw new Error('최신 AI 답변 없음');
+      const raw = String(messageTextOf(latestAssistant) || '');
+      if (!raw) throw new Error('최신 AI 답변 원문 없음');
+      const original = stripOurContextBlock(raw).text || raw;
+      if (String(state.currentRoom?.chatId || '') !== roomId) return;
+      state.carrierCapacityPreview = {
+        roomId,
+        messageId:String(messageIdOf(latestAssistant) || ''),
+        originalChars:String(original).length,
+        originalText:String(original),
+        loading:false,
+        error:'',
+        checkedAt:Date.now(),
+      };
+    } catch (error) {
+      if (String(state.currentRoom?.chatId || '') !== roomId) return;
+      state.carrierCapacityPreview = { roomId, originalChars:0, loading:false, error:String(error?.message || '확인 실패'), checkedAt:Date.now() };
+    }
+    state.capacityUiRefresh?.();
+  }
+
+  function ensureUserCanonMemoStyles() {
+    if (document.getElementById('rpcm-user-memo-style')) return;
+    const style=document.createElement('style');style.id='rpcm-user-memo-style';
+    style.textContent=`
+#rpcm-modal .rpcm-user-memo-open{position:relative;flex:none}
+#rpcm-modal .rpcm-user-memo-badge{position:absolute;top:-5px;right:-5px;min-width:16px;height:16px;padding:0 3px;box-sizing:border-box;border-radius:9px;background:#e989b5;color:#251a24;font-size:10px;font-weight:700;line-height:16px;text-align:center}
+#rpcm-modal .rpcm-user-memo-badge[hidden]{display:none}
+#rpcm-user-memo-backdrop{position:fixed;inset:0;z-index:2147483646;display:grid;place-items:center;padding:16px;box-sizing:border-box;background:var(--wish-deep)cc;color:#f1e8ef;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+#rpcm-user-memo-backdrop *{box-sizing:border-box}
+#rpcm-user-memo-backdrop .rpcm-user-memo-dialog{display:grid;grid-template-rows:auto minmax(0,1fr) auto;width:min(620px,100%);max-height:min(760px,92dvh);border:1px solid #70576a;border-radius:14px;background:var(--wish-deep);box-shadow:0 20px 70px #000a;overflow:hidden}
+#rpcm-user-memo-backdrop .rpcm-user-memo-head,#rpcm-user-memo-backdrop .rpcm-user-memo-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 17px;background:var(--wish-deep)}
+#rpcm-user-memo-backdrop .rpcm-user-memo-head{border-bottom:1px solid #4b3a48}
+#rpcm-user-memo-backdrop .rpcm-user-memo-head h2{margin:0;font-size:17px}
+#rpcm-user-memo-backdrop .rpcm-user-memo-head small{display:block;margin-top:4px;color:#bfaeb9}
+#rpcm-user-memo-backdrop .rpcm-user-memo-foot{border-top:1px solid #4b3a48}
+#rpcm-user-memo-backdrop .rpcm-user-memo-body{min-height:0;overflow:auto;padding:15px 17px}
+#rpcm-user-memo-backdrop button{min-height:34px;padding:6px 10px;border:1px solid #6e5768;border-radius:8px;background:#352a34;color:#f4e6ef;cursor:pointer;font:inherit}
+#rpcm-user-memo-backdrop button:hover,#rpcm-user-memo-backdrop button:focus-visible{border-color:#e79abd;background:#4a3042;outline:none}
+#rpcm-user-memo-backdrop button.primary{background:#a94f82;border-color:#d57aa9;color:#fff}
+#rpcm-user-memo-backdrop .rpcm-user-memo-close{width:36px;padding:0;font-size:23px;line-height:1}
+#rpcm-user-memo-backdrop .rpcm-user-memo-list{display:grid;gap:9px;margin-top:13px}
+#rpcm-user-memo-backdrop .rpcm-user-memo-card{padding:11px 12px;border:1px solid #51404e;border-radius:10px;background:var(--wish-deep)}
+#rpcm-user-memo-backdrop .rpcm-user-memo-card.is-off{opacity:.72}
+#rpcm-user-memo-backdrop .rpcm-user-memo-row{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+#rpcm-user-memo-backdrop .rpcm-user-memo-row strong{font-size:12px}
+#rpcm-user-memo-backdrop .rpcm-user-memo-row small{color:#b9aab6}
+#rpcm-user-memo-backdrop .rpcm-user-memo-row .spacer{flex:1}
+#rpcm-user-memo-backdrop .rpcm-user-memo-preview{margin:9px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.55;font-size:13px;color:#eadde6;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
+#rpcm-user-memo-backdrop .rpcm-user-memo-card.is-expanded .rpcm-user-memo-preview{display:block;overflow:visible}
+#rpcm-user-memo-backdrop .rpcm-user-memo-editor{display:grid;gap:8px;margin-top:14px}
+#rpcm-user-memo-backdrop textarea{width:100%;min-height:145px;max-height:42dvh;resize:vertical;padding:10px;border:1px solid #7a5d70;border-radius:9px;background:var(--wish-deep);color:#f3eaf0;font-size:13px;line-height:1.55;font-family:inherit;overflow:auto}
+#rpcm-user-memo-backdrop .rpcm-user-memo-editor-actions{display:flex;justify-content:flex-end;gap:8px}
+#rpcm-user-memo-backdrop .rpcm-user-memo-warning{color:#f5c991;font-size:12px;line-height:1.5}
+#rpcm-user-memo-backdrop .rpcm-user-memo-empty{padding:25px 12px;text-align:center;color:#bca9b6;border:1px dashed #61505e;border-radius:9px}
+@media(max-width:600px){#rpcm-user-memo-backdrop{padding:8px}#rpcm-user-memo-backdrop .rpcm-user-memo-dialog{width:100%;max-height:94dvh}#rpcm-user-memo-backdrop .rpcm-user-memo-head,#rpcm-user-memo-backdrop .rpcm-user-memo-foot{padding:10px 12px}#rpcm-user-memo-backdrop .rpcm-user-memo-body{padding:11px 12px}#rpcm-user-memo-backdrop button{min-height:42px}}
+`;
+    document.head.appendChild(style);
+  }
+
+  function refreshUserCanonMemoBadge(room) {
+    const badge=state.modal?.querySelector('#rpcm-user-memo-badge');
+    if (!badge || state.currentRoom !== room) return;
+    const count=activeUserCanonMemos(room).length;
+    badge.hidden=!count;badge.textContent=count>99?'99+':String(count);
+    state.modal.querySelector('#rpcm-user-memo-open')?.setAttribute('aria-label',`사용자 메모 열기 · 활성 ${count}개`);
+  }
+
+  function invalidateUserCanonMemoPackets(room) {
+    for (const task of Object.keys(MANUAL_UPDATE_TASKS)) manualUpdateRuntime.packets.delete(manualPacketKey(room,task));
+    if (room.fullRebuildJob?.jobId) fullRebuildRuntime.files.delete(room.fullRebuildJob.jobId);
+  }
+
+  async function commitUserCanonMemos(room,change) {
+    if (state.currentRoom !== room) throw new Error('현재 방이 바뀌었습니다.');
+    syncOpenModalIntoRoom(room);
+    const candidate=structuredClone(room);
+    change(normalizeUserCanonMemos(candidate));
+    await saveRoom(candidate);
+    if (state.currentRoom !== room) throw new Error('저장 중 방이 바뀌었습니다. 현재 방을 다시 확인해 주세요.');
+    rpcmReplaceRoomObject(room,candidate);
+    invalidateUserCanonMemoPackets(room);
+    refreshUserCanonMemoBadge(room);
+  }
+
+  function openUserCanonMemoDialog(room) {
+    if (state.currentRoom !== room) return;
+    document.querySelector('#rpcm-user-memo-backdrop')?.remove();
+    ensureUserCanonMemoStyles();
+    const backdrop=document.createElement('div');backdrop.id='rpcm-user-memo-backdrop';
+    backdrop.innerHTML='<section class="rpcm-user-memo-dialog" role="dialog" aria-modal="true" aria-label="사용자 메모"><header class="rpcm-user-memo-head"><div><h2>사용자 메모</h2><small>이 방의 AI 기억 작업에만 전달됩니다. RP 주입문에는 넣지 않습니다.</small></div><button type="button" class="rpcm-user-memo-close" data-memo-act="close" aria-label="닫기" data-rpcm-close="icon">×</button></header><main class="rpcm-user-memo-body"><button type="button" data-memo-act="add">＋ 메모 추가</button><div class="rpcm-user-memo-warning" data-memo-warning hidden></div><div class="rpcm-user-memo-list" data-memo-list></div><div data-memo-editor></div></main><footer class="rpcm-user-memo-foot"><small>사용자 원문 그대로 저장 · 메모당 최대 2,000자</small><button type="button" data-memo-act="close" aria-label="닫기" data-rpcm-close="text">닫기</button></footer></section>';
+    document.body.appendChild(backdrop);
+    const list=backdrop.querySelector('[data-memo-list]'),editor=backdrop.querySelector('[data-memo-editor]');
+    const expanded=new Set();let editing=null,editingDraft='',busy=false;
+    const close=()=>{if(!busy)backdrop.remove();};
+    const render=()=>{
+      rpcmNewBadgeSchedule();
+      const memos=normalizeUserCanonMemos(room);
+      const active=activeUserCanonMemos(room),totalChars=active.reduce((n,memo)=>n+memo.text.length,0);
+      const warning=backdrop.querySelector('[data-memo-warning]');
+      warning.hidden=totalChars<=USER_CANON_MEMO_WARN_CHARS;
+      warning.textContent=warning.hidden?'':`활성 메모 총 ${formatCount(totalChars)}자입니다. 긴 메모는 패킷·AI 입력 한도를 초과할 수 있습니다. 내용은 잘라내지 않습니다.`;
+      list.innerHTML=memos.length?memos.map((memo,index)=>{const id=String(memo?.id||''),on=memo?.enabled!==false;return `<article class="rpcm-user-memo-card${on?'':' is-off'}${expanded.has(id)?' is-expanded':''}" data-memo-id="${esc(id)}"><div class="rpcm-user-memo-row"><label><input type="checkbox" data-memo-act="toggle" ${on?'checked':''}> 활성</label><strong>메모 ${index+1}</strong><small>${esc(memo?.updatedAt||'')}</small><span class="spacer"></span><button type="button" data-memo-act="expand">${expanded.has(id)?'접기':'펼치기'}</button><button type="button" data-memo-act="edit">편집</button><button type="button" data-memo-act="delete">삭제</button></div><p class="rpcm-user-memo-preview">${esc(String(memo?.text||''))}</p></article>`;}).join(''):'<div class="rpcm-user-memo-empty">이 방의 사용자 메모가 없습니다.</div>';
+      if(editing!==null){editor.innerHTML=`<div class="rpcm-user-memo-editor"><strong>${editing==='new'?'새 메모':'메모 편집'}</strong><textarea data-memo-text aria-label="사용자 메모 원문">${esc(editingDraft)}</textarea><small data-memo-count></small><div class="rpcm-user-memo-editor-actions"><button type="button" data-memo-act="cancel">취소</button><button type="button" class="primary" data-memo-act="save">저장</button></div></div>`;editor.querySelector('[data-memo-count]').textContent=`${editor.querySelector('textarea').value.length} / ${USER_CANON_MEMO_MAX_CHARS}자`;}
+      else editor.replaceChildren();
+    };
+    render();
+    backdrop.addEventListener('input',event=>{if(event.target.matches('[data-memo-text]')){editingDraft=event.target.value;const count=editor.querySelector('[data-memo-count]');count.textContent=`${editingDraft.length} / ${USER_CANON_MEMO_MAX_CHARS}자`;count.classList.toggle('rpcm-user-memo-warning',editingDraft.length>USER_CANON_MEMO_MAX_CHARS);}});
+    backdrop.addEventListener('click',async event=>{

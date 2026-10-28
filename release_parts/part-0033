@@ -1,0 +1,1000 @@
+    const same = (a,b) => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
+    if (!exact(data,['format','version','source','parts','guides','outputs',...(Object.prototype.hasOwnProperty.call(data,'provenance')?['provenance']:[])]) || data.format !== FULL_REBUILD_FORMAT || data.version !== 1) throw new Error('전체 재구축 format/version 또는 최상위 필드가 올바르지 않습니다.');
+    if (!exact(data.source,['roomId','chatId','firstTurnKey','lastTurnKey','turnCount','sha256']) || !same(data.source,job.source) || data.source.roomId !== String(room.chatId)) throw new Error('재구축 source/방/원문 hash가 파일 생성 기록과 다릅니다.');
+    if (!Array.isArray(data.parts) || data.parts.length !== job.parts.length || data.parts.some((part,index) => !exact(part,['index','total','firstTurnKey','lastTurnKey','turnCount','sha256']) || !same(part,job.parts[index]))) throw new Error('part가 누락·중복되었거나 순서/범위/hash가 다릅니다.');
+    if (data.parts.some((part,index) => part.index !== index+1 || part.total !== job.parts.length)) throw new Error('PART_INDEX는 1..N을 정확히 한 번씩 포함해야 합니다.');
+    if (!exact(data.guides,['currentItems','dateLogs','personInfo','timeline','lore']) || !same(data.guides,job.guides)) throw new Error('전문 지침 manifest가 파일 생성 시점과 다릅니다.');
+    if (!exact(data.outputs,['currentStateText','importantItemsText','dateLogsText','personInfoText','timelineText','lore'])) throw new Error('여섯 영역의 outputs가 모두 필요합니다.');
+    // Output body/schema problems belong to their own domain validator, so a bad
+    // lore result cannot prevent review of valid date/person/timeline results.
+    rpcmValidateRebuildProvenance(data,job);
+    return data;
+  }
+
+  function fullRebuildProtected(value) { return !!value && ((Object.prototype.hasOwnProperty.call(value,'fact')&&typeof value.status==='string'&&!KNOWLEDGE_STATUSES.includes(value.status)) || value.userLocked === true || value.managedBy === 'user' || value.editable === false); }
+
+  function fullRebuildDraft(room,task,job,sourceTurns) {
+    const timelineRun = task === 'timeline' ? structuredClone(job.timelineRun) : null;
+    const guide = manualGuideForTask(room,task);
+    return { checkpoint:manualCheckpointForTask(room,task), activeTimeline:activeLogTimelineLabel(room), guideText:guide.text,
+      guideSource:guide.source.startsWith('기본') ? '수동 업데이트 기본 지침' : guide.source,
+      existing:manualExistingResult(structuredClone(room),task,timelineRun), timelineRun,
+      rangeMode:'full', startIndex:0, endIndex:0, checkpointIndex:0,
+      startMessageId:job.source.firstTurnKey, endMessageId:job.source.lastTurnKey, turnCount:job.source.turnCount, sourceTurns };
+  }
+
+  function fullRebuildDiff(label,before,after) {
+    const diff = buildAiSideBySideDiff(before,after);
+    return { label,before,after,stats:diff.stats,rows:diff.rows };
+  }
+
+
+  function reconcileFullRebuildLoreRefs(lore, refs) {
+    const parsed = structuredClone(lore);
+    if (!parsed || parsed.version !== 'WISH_LORE_V2' || !Array.isArray(parsed.operations)) return parsed;
+
+    const packs = Array.isArray(refs?.packs) ? refs.packs : [];
+    const cards = Array.isArray(refs?.cards) ? refs.cards : [];
+    const norm = value => String(value || '').trim().toLocaleLowerCase('ko-KR');
+    const packRefMap = new Map();
+
+    // 전체 재구축은 같은 snapshot을 다시 적용해도 idempotent해야 합니다.
+    // 모델이 기존 팩을 Pxxx 대신 NEW_Px로 다시 선언했더라도,
+    // 제목+종류가 유일하게 일치하면 export 당시 기존 REF로 안전하게 연결합니다.
+    for (const op of parsed.operations) {
+      if (op?.op !== 'pack_upsert' || !String(op.ref || '').startsWith('NEW_')) continue;
+      const matches = packs.filter(pack =>
+        pack.kind === op.kind &&
+        norm(pack.title) === norm(op.title)
+      );
+      if (matches.length === 1) packRefMap.set(String(op.ref), String(matches[0].ref));
+      else if (matches.length > 1) throw new Error(`${op.ref}: 같은 제목·종류의 기존 자료팩이 여러 개라 자동 연결할 수 없습니다.`);
+    }
+
+    for (const op of parsed.operations) {
+      if (!op || typeof op !== 'object') continue;
+      if (op.op === 'pack_upsert' && packRefMap.has(String(op.ref))) {
+        op.ref = packRefMap.get(String(op.ref));
+        continue;
+      }
+      if (op.op !== 'card_upsert') continue;
+
+      const originalPackRef = String(op.packRef || '');
+      if (packRefMap.has(originalPackRef)) op.packRef = packRefMap.get(originalPackRef);
+
+      // NEW 카드도 export 당시 같은 팩 안에 동일 제목+유형 카드가 하나만 있으면
+      // 기존 Cxxx REF로 연결하여 재구축 재적용/갱신 시 중복 생성 오류를 막습니다.
+      if (!String(op.ref || '').startsWith('NEW_')) continue;
+      const matches = cards.filter(card =>
+        String(card.packRef || '') === String(op.packRef || '') &&
+        manualLoreDuplicateKey(card) === manualLoreDuplicateKey(op)
+      );
+      if (matches.length === 1) op.ref = String(matches[0].ref);
+      else if (matches.length > 1) throw new Error(`${op.ref}: 대상 자료팩에 같은 제목·유형의 기존 카드가 여러 개라 자동 연결할 수 없습니다.`);
+    }
+    return parsed;
+  }
+
+  const RPCM_ISSUE_LOG_KEY = 'RPCM_issue_log_v1';
+  const RPCM_ISSUE_LOG_LIMIT = 80;
+  function readRpcmIssues() {
+    try { const value=JSON.parse(localStorage.getItem(RPCM_ISSUE_LOG_KEY) || '[]'); return Array.isArray(value) ? value.slice(-RPCM_ISSUE_LOG_LIMIT) : []; }
+    catch (_) { return []; }
+  }
+  function recordRpcmIssue(room,feature,step,code,message,detail = '') {
+    const clean=value=>String(value || '').replace(/[\r\n\t]+/g,' ').replace(/\s{2,}/g,' ').slice(0,320);
+    const entry={ at:nowIso(),version:APP.version,roomId:clean(room?.chatId || ''),feature:clean(feature),step:clean(step),code:clean(code),message:clean(message),detail:clean(detail) };
+    try { const items=readRpcmIssues();items.push(entry);localStorage.setItem(RPCM_ISSUE_LOG_KEY,JSON.stringify(items.slice(-RPCM_ISSUE_LOG_LIMIT))); }
+    catch (_) {}
+  }
+  function openRpcmIssueLogDialog(room) {
+    document.querySelector('#rpcm-issue-log-backdrop')?.remove();
+    const backdrop=document.createElement('div');backdrop.id='rpcm-issue-log-backdrop';
+    const entries=readRpcmIssues().filter(item=>!item.roomId || item.roomId===String(room.chatId)).reverse();
+    backdrop.innerHTML=`<section class="rpcm-update-dialog rpcm-issue-log-dialog" role="dialog" aria-modal="true" aria-label="처리·오류 기록"><header><div><h2>처리·오류 기록</h2><p>이 방의 최근 기록 · 최대 ${RPCM_ISSUE_LOG_LIMIT}건 · RP 원문은 저장하지 않습니다.</p></div><button type="button" class="rpcm-update-dialog-close" aria-label="닫기" data-rpcm-close="icon">${rpcmUiIcon('close')}</button></header><div class="rpcm-update-result-body">${room.carrierTiming?`<details open data-carrier-timing><summary><strong>주입·해제 시간 진단 · 최근 1회</strong></summary><p>${room.carrierTiming.outcome==='error'?'최근 처리 실패 · ':''}준비 ${(room.carrierTiming.prepareMs/1000).toFixed(1)}초 · 저장·확인 ${(room.carrierTiming.writeMs/1000).toFixed(1)}초 · 이전 정리 ${(room.carrierTiming.cleanupMs/1000).toFixed(1)}초 · ${room.carrierTiming.cleanupState==='pending'?'정리 대기':'정리 완료'}</p><small>요청 수는 저장·정리 내부의 조회와 전송입니다. 준비 구간의 목록 조회는 포함하지 않습니다.</small><pre style="white-space:pre-wrap">${esc(JSON.stringify(room.carrierTiming,null,2))}</pre></details>`:''}${entries.length?entries.map((item,index)=>`<div class="rpcm-issue-row" data-issue-index="${index}"><strong>${esc(item.code)} · ${esc(item.feature)}</strong><small>${esc(new Date(item.at).toLocaleString('ko-KR'))} · v${esc(item.version)} · ${esc(item.step)}</small><p>${esc(item.message)}</p>${item.detail?`<details><summary>상세 정보</summary><small>${esc(item.detail)}</small></details>`:''}<div><button type="button" class="rpcm-btn secondary" data-issue-copy="${index}">복사</button><button type="button" class="rpcm-btn secondary" data-issue-delete="${index}">삭제</button></div></div>`).join(''):'<p>기록 없음</p>'}</div><footer><button type="button" class="rpcm-btn secondary" data-issue-clear>이 방 기록 비우기</button><button type="button" class="rpcm-btn secondary rpcm-update-dialog-close" aria-label="닫기" data-rpcm-close="text">닫기</button></footer></section>`;
+    backdrop.querySelectorAll('.rpcm-update-dialog-close').forEach(button=>button.onclick=()=>backdrop.remove());
+    backdrop.onclick=event=>{if(event.target===backdrop)backdrop.remove();};
+    backdrop.querySelectorAll('[data-issue-copy]').forEach(button=>button.onclick=async()=>{const item=entries[Number(button.dataset.issueCopy)];if(item)await copyPlainText(JSON.stringify(item,null,2));});
+    backdrop.querySelectorAll('[data-issue-delete]').forEach(button=>button.onclick=()=>{const item=entries[Number(button.dataset.issueDelete)];const all=readRpcmIssues();const index=all.findIndex(value=>value.at===item.at&&value.code===item.code&&value.message===item.message);if(index>=0){all.splice(index,1);localStorage.setItem(RPCM_ISSUE_LOG_KEY,JSON.stringify(all));}openRpcmIssueLogDialog(room);});
+    backdrop.querySelector('[data-issue-clear]').onclick=()=>{const all=readRpcmIssues().filter(item=>item.roomId!==String(room.chatId));localStorage.setItem(RPCM_ISSUE_LOG_KEY,JSON.stringify(all));openRpcmIssueLogDialog(room);};
+    document.body.appendChild(backdrop);
+  }
+
+  const FULL_REBUILD_DOMAINS = Object.freeze([
+    { key:'currentItems', label:'현재상태·중요 물품' },
+    { key:'logSummary', label:'날짜로그' },
+    { key:'personInfo', label:'인물정보' },
+    { key:'timeline', label:'타임라인' },
+    { key:'lore', label:'자료집' },
+  ]);
+
+  function prepareFullRebuildDomain(room, job, data, sourceTurns, key) {
+    let candidate = structuredClone(room);
+    const output = data.outputs, diffs = [], summary = [], protectedNotes = [];
+    const fields = key === 'currentItems' ? ['currentStateText','importantItemsText'] : key === 'logSummary' ? ['dateLogsText'] : key === 'personInfo' ? ['personInfoText'] : key === 'timeline' ? ['timelineText'] : [];
+    for (const field of fields) if (typeof output[field] !== 'string' || output[field].length > FULL_REBUILD_OUTPUT_TEXT_MAX) throw new Error(`${field} 본문이 문자열이 아니거나 안전 크기를 넘습니다.`);
+    if (key === 'lore' && (!output.lore || typeof output.lore !== 'object' || Array.isArray(output.lore) || output.lore.version !== 'WISH_LORE_V2')) throw new Error('자료집 결과는 WISH_LORE_V2 내부 JSON 객체여야 합니다.');
+    let loreDiff = [];
+    if (key === 'currentItems') {
+      const oldState = String(aiFixedSlot(room,'currentState')?.content || '');
+      const oldItems = allImportantItemRawText(room);
+      const draft = fullRebuildDraft(candidate,'currentItems',job,sourceTurns);
+      let normalizedState=stripAiOutputWrapper(output.currentStateText),normalizedItems=stripAiOutputWrapper(output.importantItemsText);
+      const stateStart=normalizedState.indexOf(CURRENT_STATE_SECTION_RULE);if(stateStart>0)normalizedState=normalizedState.slice(stateStart).trim();
+      const itemStart=normalizedItems.search(/^[-*]\s+\*\*/m);if(itemStart>0)normalizedItems=normalizedItems.slice(itemStart).trim();
+      candidate = prepareManualUpdateResult(candidate,'currentItems',draft,{ currentState:normalizedState,importantItems:normalizedItems }).candidate;
+      for (const old of (room.slots || []).filter(slot => slot.group === 'item')) {
+        const index = candidate.slots.findIndex(slot => String(slot.id) === String(old.id));
+        if (fullRebuildProtected(old)) {
+          if (index >= 0) candidate.slots[index] = structuredClone(old);
+          else candidate.slots.push(structuredClone(old));
+          protectedNotes.push(`중요 물품 “${old.title}” 사용자 보호`);
+        } else if (index < 0 && String(old.itemFolder || '').trim()) {
+          candidate.slots.push(structuredClone(old));
+          protectedNotes.push(`중요 물품 “${old.title}” 폴더 보존 · 이름 변경 여부 확인`);
+        }
+      }
+      if (fullRebuildProtected(aiFixedSlot(room,'currentState'))) {
+        aiFixedSlot(candidate,'currentState').content = oldState;
+        protectedNotes.push('현재상태 사용자 보호');
+      }
+      diffs.push(fullRebuildDiff('현재상태',oldState,String(aiFixedSlot(candidate,'currentState')?.content || '')));
+      diffs.push(fullRebuildDiff('중요 물품',oldItems,allImportantItemRawText(candidate)));
+      summary.push(`현재상태 ${parseCurrentStateSections(aiFixedSlot(candidate,'currentState')?.content || '').length}개 섹션`, `중요 물품 ${(candidate.slots || []).filter(slot => slot.group === 'item').length}개`);
+    } else if (key === 'logSummary') {
+      const oldLog = String(aiFixedSlot(room,'logSummary')?.content || '');
+      let newLog = normalizeLineBreaks(output.dateLogsText).trim();
+      const firstPass=newLog?validateGeneratedDateSummary(newLog):{blocks:[],errors:[]};
+      if(firstPass.blocks?.length&&newLog.slice(0,firstPass.blocks[0].sourceStart).trim())newLog=newLog.slice(firstPass.blocks[0].sourceStart).trim();
+      newLog=sortDatedLogTextByTimeline(newLog,candidate);
+      const checked = newLog ? validateGeneratedDateSummary(newLog) : { blocks:[],errors:[] };
+      if (checked.errors.length) throw new Error(`날짜로그: ${checked.errors.join(' / ')}`);
+      if (fullRebuildProtected(aiFixedSlot(room,'logSummary'))) protectedNotes.push('날짜로그 사용자 보호');
+      else {
+        const slot = aiFixedSlot(candidate,'logSummary');
+        if (!slot) throw new Error('날짜로그 저장칸을 찾지 못했습니다.');
+        const oldBlocks = parseDatedLogBlocks(oldLog), nextBlocks = parseDatedLogBlocks(newLog);
+        const byOldKey = new Map();
+        for (const old of oldBlocks) {
+          const match = nextBlocks.find(next => next.dateKey === old.dateKey && logTimelineLabelOfBlock(next) === logTimelineLabelOfBlock(old));
+          if (match) byOldKey.set(String(old.key),String(match.key));
+        }
+        slot.content = newLog;
+        remapLogSelectionKeys(candidate,byOldKey,nextBlocks);
+      }
+      diffs.push(fullRebuildDiff('날짜로그 전체본',oldLog,String(aiFixedSlot(candidate,'logSummary')?.content || '')));
+      summary.push(`날짜로그 ${parseDatedLogBlocks(aiFixedSlot(candidate,'logSummary')?.content || '').length}개 블록`);
+    } else if (key === 'personInfo') {
+      let personText=String(output.personInfoText || '');
+      const personStart=personText.indexOf('[[WISH_PERSON_V1]]'),personEnd=personText.lastIndexOf('[[/WISH_PERSON_V1]]');
+      if(personStart>=0&&personEnd>=personStart)personText=personText.slice(personStart,personEnd+'[[/WISH_PERSON_V1]]'.length);
+      const parsed = parsePersonStateOutput(personText,candidate);
+      if (parsed.errors.length) throw new Error(`인물정보: ${parsed.errors.join(' / ')}`);
+      const originalManualCategories = new Map((candidate.knowledgeCards || []).filter(card=>card && card.category && card.category !== 'auto').map(card=>[`${manualPersonName(card.person)}\u0000${String(card.fact||'').trim().toLocaleLowerCase('ko-KR')}`,card.category]));
+      const protectedKnowledge = (candidate.knowledgeCards || []).filter(fullRebuildProtected);
+      const protectedPerson = (candidate.personStateRecords || []).filter(fullRebuildProtected);
+      const protectedIds = new Set([...protectedKnowledge,...protectedPerson].map(value => String(value.id)));
+      const rows = parsed.records.filter(entry => {
+        const old = personRecordMatch(candidate,entry);
+        if (!old || !protectedIds.has(String(old.id))) return true;
+        protectedNotes.push(`인물정보 “${entry.person}” 사용자 보호`);
+        return false;
+      });
+      candidate.knowledgeCards = (candidate.knowledgeCards || []).filter(card => !fullRebuildProtected(card));
+      candidate.personStateRecords = (candidate.personStateRecords || []).filter(card => !fullRebuildProtected(card));
+      const text = `[[WISH_PERSON_V1]]\n${rows.map(row => JSON.stringify(row)).join('\n')}\n[[/WISH_PERSON_V1]]`;
+      const draft = fullRebuildDraft(candidate,'personInfo',job,sourceTurns);
+      candidate = prepareManualUpdateResult(candidate,'personInfo',draft,{ result:text }).candidate;
+      for(const card of candidate.knowledgeCards||[]){const previous=originalManualCategories.get(`${manualPersonName(card.person)}\u0000${String(card.fact||'').trim().toLocaleLowerCase('ko-KR')}`);if(previous)card.category=previous;}
+      candidate.knowledgeCards = [...(candidate.knowledgeCards || []),...protectedKnowledge.map(value => structuredClone(value))];
+      candidate.personStateRecords = [...(candidate.personStateRecords || []),...protectedPerson.map(value => structuredClone(value))];
+      diffs.push(fullRebuildDiff('인물정보',personStateExportText(structuredClone(room)),personStateExportText(structuredClone(candidate))));
+      summary.push(`인물정보 ${normalizeKnowledgeCards(structuredClone(candidate)).filter(card => !card.archived).length + normalizePersonStateRecords(structuredClone(candidate)).filter(card => card.active).length}개 카드`);
+    } else if (key === 'timeline') {
+      let timelineText=String(output.timelineText || '');
+      const timelineStart=timelineText.indexOf('[TIMELINE]'),timelineEnd=timelineText.lastIndexOf('[/TIMELINE]');
+      if(timelineStart>=0&&timelineEnd>=timelineStart)timelineText=timelineText.slice(timelineStart,timelineEnd+'[/TIMELINE]'.length).trim();
+      const oldTimeline = room.storyTimelineCards || [];
+      const timelineEmpty = /^\[TIMELINE\]\s*(?:VERSION\s*=\s*1\s*)?\[\/TIMELINE\]$/i.test(normalizeLineBreaks(timelineText).trim());
+      if (timelineEmpty) {
+        const label = String(job.timelineRun?.timelineLabel || '');
+        const current = snapshotStoryTimelineCardsForLabel(candidate,label);
+        backupStoryTimeline(candidate,'전체 기억 재구축 적용 전');
+        const removable = new Set(current.filter(card => !fullRebuildProtected(card)).map(card => String(card.cardId)));
+        candidate.storyTimelineCards = (candidate.storyTimelineCards || []).filter(card => !removable.has(String(card.cardId)));
+        candidate.storyTimelineLastDiff = current.filter(card => removable.has(String(card.cardId))).map(card => ({ type:'removed',cardId:card.cardId,title:card.title }));
+      } else {
+        const draft = fullRebuildDraft(candidate,'timeline',job,sourceTurns);
+        candidate = prepareManualUpdateResult(candidate,'timeline',draft,{ result:timelineText }).candidate;
+      }
+      for (const old of oldTimeline.filter(fullRebuildProtected)) {
+        const index = (candidate.storyTimelineCards || []).findIndex(card => String(card.cardId) === String(old.cardId));
+        if (index >= 0) candidate.storyTimelineCards[index] = structuredClone(old);
+        else candidate.storyTimelineCards.push(structuredClone(old));
+        protectedNotes.push(`타임라인 “${old.title}” 사용자 보호`);
+      }
+      diffs.push(fullRebuildDiff('타임라인',JSON.stringify(oldTimeline,null,2),JSON.stringify(candidate.storyTimelineCards || [],null,2)));
+      summary.push(`타임라인 ${(candidate.storyTimelineCards || []).length}개 카드`);
+    } else if (key === 'lore') {
+      const draft = { checkpoint:manualCheckpointForTask(candidate,'lore'), guideText:manualLoreGuideSlot(candidate).text,
+        loreSnapshot:JSON.stringify(lorePacksFor(candidate)), loreRefs:job.loreRefs, sourceTurns,
+        rangeMode:'full', startIndex:0, endIndex:0, checkpointIndex:0,
+        startMessageId:job.source.firstTurnKey, endMessageId:job.source.lastTurnKey, turnCount:job.source.turnCount };
+      const reconciled = reconcileFullRebuildLoreRefs(output.lore,job.loreRefs);
+      const lore = prepareManualLoreResult(candidate,draft,{ result:JSON.stringify(reconciled) });
+      candidate = lore.candidate;
+      loreDiff = lore.loreDiff;
+      for (const item of loreDiff.filter(item => item.status === 'protected')) protectedNotes.push(`자료집 ${item.label} 보호`);
+      diffs.push(fullRebuildDiff('자료집',JSON.stringify(room.lorePacks || [],null,2),JSON.stringify(candidate.lorePacks || [],null,2)));
+      summary.push(`자료집 ${lorePacksFor(candidate).length}팩 · ${lorePacksFor(candidate).reduce((n,pack)=>n+(pack.cards || []).length,0)}카드`);
+    } else throw new Error('알 수 없는 재구축 영역입니다.');
+    return { key, valid:true, candidate,diffs,summary,protectedNotes:[...new Set(protectedNotes)],loreDiff };
+  }
+
+  function prepareFullRebuildResult(room,job,data,sourceTurns) {
+    const provenance=rpcmValidateRebuildProvenance(data,job);
+    const domains = {};
+    for (const {key,label} of FULL_REBUILD_DOMAINS) {
+      try { domains[key] = { label,...prepareFullRebuildDomain(room,job,data,sourceTurns,key) }; }
+      catch (error) { domains[key] = { key,label,valid:false,error:String(error.message || error),diffs:[],summary:[],protectedNotes:[],loreDiff:[] }; }
+    }
+    for(const domain of Object.values(domains))if(domain.valid)domain.summary.push(provenance.provided?'근거 연결 '+provenance.rows+'행 · PART 영수증 '+provenance.receipts+'개 · 미연결 '+provenance.unlinkedRows+'행 · 의미 누락 별도 검토':'행별 근거표 미제공 · 기존 manifest 검증 적용');
+    return {
+      domains,provenance,
+      baseSnapshot:JSON.stringify(room),
+      baseDomainSignatures:Object.fromEntries(FULL_REBUILD_DOMAINS.map(({key}) => [key,fullRebuildSelectedSignature(room,key)])),
+    };
+  }
+
+  function mergeFullRebuildSelections(room,prepared,selected) {
+    const candidate = structuredClone(room);
+    const choose = key => selected.has(key) && prepared.domains[key]?.valid;
+    if (choose('currentItems')) {
+      const result = prepared.domains.currentItems.candidate;
+      const liveById=new Map((room.slots||[]).map(slot=>[String(slot.id),slot]));
+      const rawStateSlot = (result.slots || []).find(slot => slot.id === 'currentState');
+      if (!rawStateSlot) throw new Error('현재상태 저장칸을 찾지 못했습니다.');
+      const stateSlot=fullRebuildRestoreSlotRuntime(rawStateSlot,liveById.get('currentState'));
+      const nextItems = (result.slots || []).filter(slot => slot.group === 'item').map(slot=>fullRebuildRestoreSlotRuntime(slot,liveById.get(String(slot.id))));
+      let insertedItems = false;
+      candidate.slots = (room.slots || []).flatMap(slot => {
+        if (slot.id === 'currentState') return [structuredClone(stateSlot)];
+        if (slot.group !== 'item') return [structuredClone(slot)];
+        if (insertedItems) return [];
+        insertedItems = true;
+        return structuredClone(nextItems);
+      });
+      if (!insertedItems) candidate.slots.push(...structuredClone(nextItems));
+      // Rebase carrier references from the live room instead of copying the preview-time
+      // pending snapshot. This preserves Quick Monitor add/remove state while refreshing
+      // only titles/content for current-state and important-item slot IDs that still exist.
+      if (candidate.pending) {
+        const slotsById=new Map((candidate.slots||[]).map(slot=>[String(slot.id),slot]));
+        const liveItemIds=new Set((room.slots||[]).filter(slot=>slot.group==='item').map(slot=>String(slot.id)));
+        const refresh=items=>(items||[]).map(item=>{
+          const id=String(item.slotId||'');
+          if(id!=='currentState'&&!liveItemIds.has(id))return item;
+          const slot=slotsById.get(id);
+          if(!slot)return null;
+          return {...item,title:slot.title,content:String(slot.content||'').trim()};
+        }).filter(Boolean);
+        candidate.pending.items=refresh(candidate.pending.items);
+        candidate.pending.quickRemovedItems=refresh(candidate.pending.quickRemovedItems);
+      }
+    }
+    if (choose('logSummary')) {
+      const result = prepared.domains.logSummary.candidate;
+      const target = aiFixedSlot(candidate,'logSummary'), saved = aiFixedSlot(result,'logSummary');
+      if (!target || !saved) throw new Error('날짜로그 저장칸이 없습니다.');
+      Object.assign(target,structuredClone(saved));
+      for (const field of ['autoLogPinnedKeys','autoLogExcludedKeys','manualLogSelectedKeys','favoriteLogKeys','acceptedUnknownLogKeys']) {
+        if (Object.prototype.hasOwnProperty.call(result,field)) candidate[field]=structuredClone(result[field]);
+      }
+    }
+    if (choose('personInfo')) {
+      const result = prepared.domains.personInfo.candidate;
+      for (const field of ['knowledgeCards','personStateRecords','personLastImportSummary']) if (Object.prototype.hasOwnProperty.call(result,field)) candidate[field]=structuredClone(result[field]);
+    }
+    if (choose('timeline')) {
+      const result = prepared.domains.timeline.candidate;
+      for (const field of ['storyTimelineCards','storyTimelineLastDiff','storyTimelineBackup']) if (Object.prototype.hasOwnProperty.call(result,field)) candidate[field]=structuredClone(result[field]);
+    }
+    if (choose('lore')) candidate.lorePacks = structuredClone(prepared.domains.lore.candidate.lorePacks);
+    return candidate;
+  }
+
+  function fullRebuildSelectedSignature(room,key) {
+    const checkpoint = room.manualUpdateCheckpoints?.[key] || null;
+    let value = null;
+    if (key === 'currentItems') value = { slots:(room.slots || []).filter(slot => slot.id === 'currentState' || slot.group === 'item').map(fullRebuildStableSlot),checkpoint };
+    if (key === 'logSummary') value = { slot:aiFixedSlot(room,'logSummary'),selections:['autoLogPinnedKeys','autoLogExcludedKeys','manualLogSelectedKeys','favoriteLogKeys','acceptedUnknownLogKeys'].map(field=>room[field]),checkpoint };
+    if (key === 'personInfo') value = { knowledgeCards:room.knowledgeCards || [],personStateRecords:room.personStateRecords || [],checkpoint };
+    if (key === 'timeline') value = { cards:room.storyTimelineCards || [],lastReviewed:room.storyTimelineLastReviewedMessageId || '',checkpoint };
+    if (key === 'lore') value = { packs:room.lorePacks || [],checkpoint };
+    return value ? JSON.stringify(fullRebuildStableValue(value)) : '';
+  }
+
+  function assertFullRebuildSelectedDomainsUnchanged(room,prepared,selected,message) {
+    const changed = [...selected].filter(key => fullRebuildSelectedSignature(room,key) !== prepared.baseDomainSignatures?.[key]);
+    if (changed.length) {
+      const labels=FULL_REBUILD_DOMAINS.filter(({key})=>changed.includes(key)).map(({label})=>label);
+      throw new Error(`${message} 변경된 선택 영역: ${labels.join(' · ')}`);
+    }
+  }
+
+  function alignFullRebuildCheckpoints(candidate,room,job,currentTurns,selected = new Set(FULL_REBUILD_DOMAINS.map(domain => domain.key))) {
+    const end = String(job.source.lastTurnKey), endIndex = rpcmFindTurnIndex(currentTurns,end);
+    if (endIndex < 0) throw new Error('재구축 종료 RP 턴을 현재 방에서 찾지 못했습니다.');
+    const now = nowIso();
+    candidate.manualUpdateCheckpoints = { ...(candidate.manualUpdateCheckpoints || {}) };
+    for (const task of ['currentItems','logSummary','personInfo','timeline','lore']) {
+      if (!selected.has(task)) continue;
+      const old = manualCheckpointForTask(room,task);
+      const oldIndex = old.endMessageId ? rpcmFindTurnIndex(currentTurns,old.endMessageId) : -1;
+      // 선택 영역의 결과는 job.source 시점 전체본으로 교체됩니다. 기존 체크포인트가
+      // 사라졌거나 source보다 앞/뒤 어느 쪽에 있더라도 source 끝점으로 맞춰야 합니다.
+      // 특히 source 뒤까지 진행된 체크포인트를 유지하면, 재구축 결과에는 없는 후속 턴이
+      // 다음 개별 갱신에서 이미 처리된 것으로 오인되어 건너뛰어질 수 있습니다.
+      const evidence=rpcmManualAnchorEvidence(room,currentTurns[endIndex]),stable=String(evidence?.userId||end);
+      candidate.manualUpdateCheckpoints[task] = { ...(candidate.manualUpdateCheckpoints[task] || {}),
+        startMessageId:job.source.firstTurnKey,endMessageId:stable,sourceMessageId:end,anchorEvidence:evidence,
+        turnCount:job.source.turnCount,appliedAt:now,baselineAt:now };
+      if (task === 'timeline') { candidate.storyTimelineLastReviewedMessageId=stable; candidate.storyTimelineLastReviewedAt=now; candidate.storyTimelineUnreviewedTurnCount=currentTurns.length-endIndex-1; candidate.storyTimelineCarryoverTurnKeys=currentTurns.slice(Math.max(0,endIndex-39),endIndex+1).map(turn => String(turn.key)); }
+    }
+  }
+
+  async function commitFullRebuildResult(room,job,prepared,raw,storedSnapshot,selection) {
+    const selected = new Set(selection || []);
+    if (!selected.size || [...selected].some(key => !FULL_REBUILD_DOMAINS.some(domain => domain.key === key) || !prepared.domains[key]?.valid)) throw new Error('검증된 영역을 하나 이상 선택해 주세요.');
+    if (fullRebuildRuntime.busy || state.saveStatus === 'saving' || state.saveStatus === 'error' || state.autoSaveTimers.has(String(room.chatId || ''))) throw new Error('다른 저장 작업이 끝난 뒤 적용해 주세요.');
+    fullRebuildRuntime.busy = true;
+    const commitEpoch = state.routeEpoch;
+    const roomKey = String(room.chatId || '');
+    let releaseLock;
+    const lock = new Promise(resolve => { releaseLock = resolve; });
+    try {
+      if (state.currentRoom !== room || room.fullRebuildJob?.jobId !== job.jobId || job.stale) throw new Error(job.staleReason || '다른 방이 열렸거나 RP 원문이 실제로 변경되었습니다.');
+      assertFullRebuildSelectedDomainsUnchanged(room,prepared,selected,'Diff 확인 뒤 선택한 기억 영역이 변경되었습니다. 다시 검증해 주세요.');
+      const sourceState = await assertFullRebuildSource(room,job);
+      // 생성 이후의 정상 기억/메모/지침 변화는 외부 결과 자체를 폐기하지 않습니다.
+      // JSON은 여전히 생성 당시 source/part/guide manifest와 정확히 일치해야 하고,
+      // 선택 영역은 Diff 확인 뒤 바뀌지 않았는지 별도로 fail-closed 검사합니다.
+      const verifiedEnvelope=parseFullRebuildJson(raw,job,room);
+      await assertFullRebuildPartsAgainstSource(verifiedEnvelope,sourceState.sourceTurns);
+      assertFullRebuildSelectedDomainsUnchanged(room,prepared,selected,'원문 재검증 중 선택한 기억 영역이 변경되었습니다. 다시 검증해 주세요.');
+      const stored = await synchronizeFullRebuildStoredRoomStrict(room,job,'full-rebuild-commit-sync');
+      storedSnapshot = JSON.stringify(stored);
+      assertFullRebuildSelectedDomainsUnchanged(room,prepared,selected,'적용 직전 선택한 기억 영역이 변경되었습니다. 다시 검증해 주세요.');
+      const characterLibraries = await getAllCharacterLibraries();
+      if (state.currentRoom !== room || state.routeEpoch !== commitEpoch || room.fullRebuildJob?.jobId !== job.jobId || job.stale) throw new Error(job.staleReason || '적용 준비 중 방 또는 전체 재구축 작업이 변경되었습니다.');
+      assertFullRebuildSelectedDomainsUnchanged(room,prepared,selected,'적용 준비 중 선택한 기억 영역이 변경되었습니다. 다시 검증해 주세요.');
+      const writeBase = JSON.stringify(room);
+      const candidate = mergeFullRebuildSelections(room,prepared,selected);
+      alignFullRebuildCheckpoints(candidate,room,job,sourceState.currentTurns,selected);
+      for(const task of selected)await stampVerifiedResult(candidate,task,'full-rebuild',{jobId:job.jobId,...job.source});
+      delete candidate.fullRebuildJob;
+      const appliedDrift=await fullRebuildSoftDrift(room,job,sourceState);
+      candidate.fullRebuildLastApplied = { jobId:job.jobId, source:job.source, appliedAt:nowIso(), newerTurns:sourceState.newerTurns, softDrift:{dataChanged:appliedDrift.dataChanged,memoChanged:appliedDrift.memoChanged,guidesChanged:appliedDrift.guidesChanged}, applied:[...selected], kept:FULL_REBUILD_DOMAINS.map(domain => domain.key).filter(key => !selected.has(key)) };
+      if(verifiedEnvelope.provenance)candidate.fullRebuildLastApplied.provenance=structuredClone(verifiedEnvelope.provenance);
+      for(const scope of selected)await rpcmAttachBranchReceipt(candidate,room,scope,sourceState.sourceTurns,'full-rebuild');
+      candidate.updatedAt = nowIso();
+      const backup = { _rpContextManagerBackup:true, backupMode:'room-transfer', version:APP.version, exportedAt:nowIso(), sourceRoomId:String(room.chatId), rooms:[structuredClone(room)], characterLibraries };
+      downloadText(JSON.stringify(backup,null,2),`RP_매니저_전체재구축_적용전_${new Date().toISOString().slice(0,10)}.json`);
+      manualUpdateRuntime.commitLocks.set(roomKey,lock);
+      const writeStartedAt=nowIso();
+      await new Promise((resolve,reject) => {
+        const tx = state.db.transaction(APP.storeName,'readwrite');
+        const store = tx.objectStore(APP.storeName);
+        const get = store.get(room.chatId);
+        get.onsuccess = () => {
+          const selectedChanged=[...selected].some(key => fullRebuildSelectedSignature(room,key) !== prepared.baseDomainSignatures?.[key]);
+          if (JSON.stringify(get.result || null) !== storedSnapshot || selectedChanged || JSON.stringify(room) !== writeBase || state.currentRoom !== room || state.routeEpoch !== commitEpoch || room.fullRebuildJob?.jobId !== job.jobId || job.stale) { traceRoomWrite(candidate,'full-rebuild','stale-rejected',room._rpcmRevision,get.result?._rpcmRevision,'',{startedAt:writeStartedAt,before:get.result||{}});tx.abort(); return; }
+          candidate._rpcmRevision=Number(get.result?._rpcmRevision||0)+1;
+          store.put(candidate);
+        };
+        get.onerror = () => tx.abort();
+        tx.oncomplete = () => {traceRoomWrite(candidate,'full-rebuild','committed',room._rpcmRevision,candidate._rpcmRevision,'',{startedAt:writeStartedAt,before:JSON.parse(storedSnapshot)||{}});resolve();};
+        tx.onabort = () => reject(new Error('IndexedDB 저장 실패 또는 다른 변경과 충돌했습니다. 선택 영역과 체크포인트는 모두 변경되지 않았습니다.'));
+        tx.onerror = () => reject(tx.error || new Error('IndexedDB 저장 실패'));
+      });
+      // A successful transaction event alone is insufficient: compare the actual
+      // persisted room and every selected and unselected domain before reporting success.
+      const persisted = await readManualStoredRoom(room);
+      if (!persisted || JSON.stringify(persisted) !== JSON.stringify(candidate) || FULL_REBUILD_DOMAINS.some(({key}) => fullRebuildSelectedSignature(persisted,key) !== fullRebuildSelectedSignature(candidate,key))) {
+        throw new Error('저장 후 실제 IndexedDB 값이 예상 결과와 다릅니다. 적용 완료로 표시하지 않았습니다. 적용 전 자동 백업으로 복구할 수 있습니다.');
+      }
+      const verified=await finalizeStoredResultReceipts(room,persisted,[...selected],'full-rebuild');
+      const lateEdits = JSON.stringify(room) !== writeBase;
+      rpcmReplaceRoomObject(room,rpcmKeepLateEdits(JSON.parse(writeBase),room,verified));
+      rpcmRememberRoomBaseline(verified);
+      delete room.fullRebuildJob;
+      state.lastSavedAt=Date.now();
+      updateSaveStatusUi('saved');
+      // Pending rebuild helpers may call saveRoom(); release the atomic commit lock
+      // only after the persisted result has passed the readback check.
+      manualUpdateRuntime.commitLocks.delete(roomKey);
+      releaseLock?.();
+      if (lateEdits) await saveRoom(room,'full-rebuild-late-edits');
+      fullRebuildRuntime.files.delete(job.jobId);
+      manualUpdateRuntime.counts.delete(roomKey);
+      for (const task of Object.keys(MANUAL_UPDATE_TASKS)) if (selected.has(task)) manualUpdateRuntime.packets.delete(manualPacketKey(room,task));
+      let carrier = '현재 주입 없음 · 다음 주입에 반영';
+      if (room.pending) {
+        try {
+          ensureVerifiedPendingSnapshot(room.pending);
+          if (selected.has('currentItems')) {
+            const stateSlot = aiFixedSlot(room,'currentState');
+            if (stateSlot) {
+              const items = Array.isArray(room.pending.items) ? room.pending.items : (room.pending.items = []);
+              const index = items.findIndex(item => item.slotId === 'currentState' && (Number(item.totalTurns || 0) === 0 || Number(item.usedTurns || 0) < Number(item.totalTurns || 0)));
+              if (index >= 0) {
+                if (String(stateSlot.content || '').trim()) items[index] = { ...items[index],title:String(stateSlot.title || '현재상태'),group:stateSlot.group || items[index].group || 'fixed',content:String(stateSlot.content || '').trim() };
+                else items.splice(index,1);
+              }
+            }
+          }
+          if (selected.has('logSummary')) replacePendingLogItems(room);
+          if (selected.has('personInfo')) await rebuildPendingKnowledgeItem(room);
+          if (selected.has('timeline')) await rebuildPendingStoryTimelineItem(room,'full-rebuild');
+          if (selected.has('lore')) refreshPendingLoreItems(room);
+          const result = await syncPendingCarrier(room,'full-rebuild');
+          carrier = result?.suspended || room.pending?.reanchorRetry ? '현재 주입 반영 대기' : '현재 주입 반영 완료 또는 변경 대상 없음';
+        } catch (error) { carrier = `현재 주입 반영 실패 · ${error.message}`; }
+      }
+      return { carrier,newerTurns:sourceState.newerTurns,selected:[...selected] };
+    } finally {
+      manualUpdateRuntime.commitLocks.delete(roomKey);
+      releaseLock?.();
+      fullRebuildRuntime.busy = false;
+    }
+  }
+
+  function fullRebuildToolStatus(room) {
+    const job = room.fullRebuildJob;
+    const guides=fullRebuildGuides(structuredClone(room));
+    const names={currentItems:'현재상태·물품',dateLogs:'날짜로그',personInfo:'인물정보',timeline:'타임라인',lore:'자료집'};
+    const sources={currentItems:'currentItems',dateLogs:'logSummary',personInfo:'personInfo',timeline:'timeline',lore:'lore'};
+    const guideList=Object.entries(names).map(([key,label])=>{
+      const custom=/사용자/.test(manualGuideForTask(structuredClone(room),sources[key]).source);
+      return `${label} ${guides.manifest[key].version}${custom?' · 사용자 수정본':''}`;
+    }).join(' · ');
+    const latest=room.fullRebuildLastApplied;
+    const applied=latest?.applied ? `마지막 전체 재구축 ${new Date(latest.appliedAt).toLocaleString('ko-KR')} · ${FULL_REBUILD_DOMAINS.map(domain=>`${latest.applied.includes(domain.key)?'✓':'—'} ${domain.label}`).join(' · ')}` : '';
+    return `${guideList} · Master ${fullRebuildMasterMeta().version}\n${job?`준비된 작업 PART 1/${job.parts.length} ~ ${job.parts.length}/${job.parts.length} · ${job.source.turnCount}턴 · ${new Date(job.createdAt).toLocaleString('ko-KR')} · 과거 source 변경은 차단 · 후속 RP/로컬 변경은 경고 후 적용 가능`:'전체 RP를 다시 읽어 후보본을 만듭니다. Diff를 본 뒤 원하는 영역만 반영할 수 있습니다.'}${applied?`\n${applied}`:''}`;
+  }
+
+  function showFullRebuildFilesDialog(room,job,files) {
+    document.querySelector('#rpcm-full-rebuild-dialog')?.remove();
+    const backdrop = document.createElement('div');
+    backdrop.id = 'rpcm-full-rebuild-dialog';
+    backdrop.innerHTML = `<section class="rpcm-update-dialog rpcm-full-rebuild-dialog" role="dialog" aria-modal="true" aria-label="전체 기억 재구축 파일"><header><div><h2>전체 기억 재구축 파일 생성 완료</h2><p>전체 ${job.source.turnCount}턴 · ${files.length}개 파일 · RP 원문은 완전한 턴 단위로 구분하며, 보조자료가 있으면 별도 TXT로 제공합니다.</p></div><button type="button" class="rpcm-update-dialog-close" aria-label="닫기" data-rpcm-close="icon">${rpcmUiIcon('close')}</button></header><div class="rpcm-update-result-body"><p>모든 TXT를 같은 ChatGPT Work에 번호순으로 올리세요. 마지막 파일까지 읽은 뒤 <strong>Wish-RP-Manager-전체재구축.json</strong> 하나를 받아 Manager에 가져오세요.</p><div class="rpcm-full-rebuild-files">${files.map((file,index) => `<div><span>${esc(file.name)} <small>${formatCount(file.text.length)}자 · ${Number(file.turnCount||0) ? `${file.turnCount}턴` : `보조자료`}</small></span><button type="button" class="rpcm-btn secondary" data-rebuild-download="${index}">다시 받기</button></div>`).join('')}</div><p class="rpcm-update-result-status" role="status">다운로드가 빠졌다면 각 파일의 ‘다시 받기’를 누르세요. 파일을 생성해도 기억과 체크포인트는 변경되지 않습니다.</p></div><footer><button type="button" class="rpcm-btn secondary rpcm-update-dialog-close" aria-label="닫기" data-rpcm-close="text">닫기</button><button type="button" class="rpcm-btn primary" data-rebuild-download-all>모두 다시 받기</button></footer></section>`;
+    const close = () => backdrop.remove();
+    backdrop.querySelectorAll('.rpcm-update-dialog-close').forEach(button => button.onclick=close);
+    backdrop.onclick = event => { if (event.target === backdrop) close(); };
+    backdrop.onkeydown = event => { if (event.key === 'Escape') close(); };
+    backdrop.querySelectorAll('[data-rebuild-download]').forEach(button => button.onclick = () => {
+      const file=files[Number(button.dataset.rebuildDownload)]; downloadText(`\uFEFF${file.text}`,file.name,'text/plain');
+    });
+    backdrop.querySelector('[data-rebuild-download-all]').onclick = () => files.forEach(file => downloadText(`\uFEFF${file.text}`,file.name,'text/plain'));
+    document.body.appendChild(backdrop);
+    files.forEach(file => downloadText(`\uFEFF${file.text}`,file.name,'text/plain'));
+  }
+
+  function fullRebuildPersonDirectionDiffHtml(room,candidate) {
+    const before=(room.personStateRecords || []).filter(record=>record.active!==false);
+    const after=(candidate.personStateRecords || []).filter(record=>record.active!==false);
+    const signature=record=>JSON.stringify({type:record.type,person:record.person,target:record.target,address:record.address,tone:record.tone,context:record.context,official:record.official,stance:record.stance,conflict:record.conflict,trajectory:record.trajectory || ''});
+    const rows=after.map(record=>{
+      const old=before.find(item=>String(item.id)===String(record.id)) || before.find(item=>item.type===record.type&&item.person===record.person&&item.target===record.target);
+      if(old&&signature(old)===signature(record))return '';
+      const label=`${record.person || '인물'} → ${record.target || '상대'} · ${record.type==='speech'?'호칭·말투':'관계·감정선'}`;
+      return `<details class="rpcm-update-diff-part"><summary>${esc(label)} · ${old?'수정':'추가'}</summary>${record.type === 'relationship' && String(old?.trajectory || '') !== String(record.trajectory || '') ? `<div class="rpcm-update-diff-columns"><div><strong>핵심 전환 · 기존</strong><pre>${esc(old?.trajectory || '(없음)')}</pre></div><div><strong>핵심 전환 · 제안</strong><pre>${esc(record.trajectory || '(없음)')}</pre></div></div>` : ''}<div class="rpcm-update-diff-columns"><div><strong>기존</strong><pre>${esc(old?JSON.stringify(old,null,2):'(없음)')}</pre></div><div><strong>제안</strong><pre>${esc(JSON.stringify(record,null,2))}</pre></div></div></details>`;
+    }).filter(Boolean);
+    return rows.length?`<details><summary>방향별 호칭·관계 변화 ${rows.length}건</summary>${rows.join('')}</details>`:'';
+  }
+
+  function fullRebuildDiffCardsHtml(prepared,room) {
+    return FULL_REBUILD_DOMAINS.map(({key,label}) => {
+      const domain=prepared.domains[key];
+      if (!domain.valid) return `<section class="rpcm-rebuild-domain is-invalid" data-rebuild-domain="${key}"><div class="rpcm-rebuild-domain-head"><div><strong>${esc(label)}</strong><small>⚠ 검증 실패 · 반영 선택 불가</small></div><input type="checkbox" disabled aria-label="${esc(label)} 반영 불가"></div><p>${esc(domain.error)}</p></section>`;
+      const counts=domain.diffs.reduce((result,part)=>{result.added+=part.stats.added;result.changed+=part.stats.changed;result.removed+=part.stats.removed;return result;},{added:0,changed:0,removed:0});
+      const details=`${key==='personInfo'?fullRebuildPersonDirectionDiffHtml(room,domain.candidate):''}${manualUpdateDiffHtml({diffParts:domain.diffs})}${domain.loreDiff.length?`<details><summary>자료집 카드 판정 ${domain.loreDiff.length}건</summary>${manualUpdateDiffHtml({loreDiff:domain.loreDiff})}</details>`:''}${domain.protectedNotes.length?`<p>보호 유지 · ${esc(domain.protectedNotes.join(' · '))}</p>`:''}`;
+      return `<section class="rpcm-rebuild-domain" data-rebuild-domain="${key}"><div class="rpcm-rebuild-domain-head"><div><strong>${esc(label)}</strong><small>${domain.summary.map(esc).join(' · ')}</small><small>+${counts.added} 추가 · ~${counts.changed} 수정 · −${counts.removed} 제거${domain.protectedNotes.length?` · 보호 ${domain.protectedNotes.length}`:''}</small></div><label><input type="checkbox" data-rebuild-select="${key}" checked> 반영</label></div><details class="rpcm-rebuild-domain-detail"><summary>Diff 보기</summary>${details}</details></section>`;
+    }).join('');
+  }
+
+  function openFullRebuildImportDialog(room) {
+    const job=room.fullRebuildJob;
+    if (!job) { notify('먼저 이 방에서 전체 재구축 TXT를 만들어 주세요. 이전 파일의 source를 검증할 작업 기록이 없습니다.','warn'); return; }
+    document.querySelector('#rpcm-full-rebuild-dialog')?.remove();
+    const backdrop=document.createElement('div');
+    backdrop.id='rpcm-full-rebuild-dialog';
+    backdrop.innerHTML=`<section class="rpcm-update-dialog rpcm-update-result-dialog rpcm-full-rebuild-dialog" role="dialog" aria-modal="true" aria-label="전체 기억 재구축 JSON 가져오기"><header><div><h2>전체 기억 재구축 · 최종 JSON 가져오기</h2><p>${job.parts.length}개 TXT · ${job.source.turnCount}턴 · 여섯 영역 모두 검토한 결과에서 반영할 영역을 고릅니다.</p></div><button type="button" class="rpcm-update-dialog-close" aria-label="닫기" data-rpcm-close="icon">${rpcmUiIcon('close')}</button></header><div class="rpcm-update-result-body"><label>Wish-RP-Manager-전체재구축.json<input type="file" accept=".json,application/json" data-rebuild-file><textarea data-rebuild-json spellcheck="false" placeholder="최종 JSON 파일을 선택하거나 순수 JSON을 붙여넣으세요."></textarea></label><div class="rpcm-update-result-status" role="status">파일 선택만으로 저장되지 않습니다.</div><div class="rpcm-update-diff" hidden></div></div><footer><span>선택 영역만 한 번에 저장 · 적용 전 자동 백업</span><button type="button" class="rpcm-btn secondary rpcm-update-dialog-close">취소</button><button type="button" class="rpcm-btn secondary" data-rebuild-preview>형식 검증 · Diff</button><button type="button" class="rpcm-btn primary" data-rebuild-apply disabled>선택 영역 반영</button></footer></section>`;
+    const status=backdrop.querySelector('.rpcm-update-result-status'), diff=backdrop.querySelector('.rpcm-update-diff');
+    const input=backdrop.querySelector('[data-rebuild-json]'), file=backdrop.querySelector('[data-rebuild-file]');
+    const preview=backdrop.querySelector('[data-rebuild-preview]'), apply=backdrop.querySelector('[data-rebuild-apply]');
+    let prepared=null, storedSnapshot='', newerTurns=0, softWarnings=[], busy=false;
+    const selected=()=>new Set([...diff.querySelectorAll('[data-rebuild-select]:checked')].map(node=>node.dataset.rebuildSelect));
+    const syncSelection=()=>{apply.disabled=!prepared || !selected().size || busy;};
+    const invalidate=()=>{prepared=null;apply.disabled=true;diff.hidden=true;diff.innerHTML='';status.textContent='결과가 바뀌었습니다. 다시 검증해 주세요.';};
+    input.oninput=invalidate;
+    file.onchange=async()=>{
+      const chosen=file.files?.[0]; if(!chosen)return;
+      try{if(!/\.json$/i.test(chosen.name)||chosen.size>8000000)throw new Error('8MB 이하 UTF-8 .json 파일을 선택해 주세요.');input.value=new TextDecoder('utf-8',{fatal:true}).decode(await chosen.arrayBuffer());invalidate();status.textContent=`${chosen.name} 읽음 · 검증을 눌러 주세요.`;}
+      catch(error){status.textContent=`파일 읽기 실패: ${error.message}`;}
+      file.value='';
+    };
+    diff.onchange=event=>{if(event.target.matches('[data-rebuild-select]'))syncSelection();};
+    diff.onclick=event=>{const select=event.target.closest('[data-rebuild-select-all]');if(!select)return;for(const box of diff.querySelectorAll('[data-rebuild-select]'))box.checked=select.dataset.rebuildSelectAll==='all';syncSelection();};
+    preview.onclick=async()=>{
+      if(busy)return;busy=true;preview.disabled=true;apply.disabled=true;status.textContent='전체 RP source·part·지침을 검증하고 각 영역을 따로 확인하는 중…';
+      try{
+        const source=await assertFullRebuildSource(room,job);
+        const result=parseFullRebuildJson(input.value,job,room);
+        await assertFullRebuildPartsAgainstSource(result,source.sourceTurns);
+        const stored=await synchronizeFullRebuildStoredRoomStrict(room,job,'full-rebuild-preview-sync');
+        const drift=await fullRebuildSoftDrift(stored,job,source);
+        const preparedResult=prepareFullRebuildResult(room,job,result,source.sourceTurns);
+        storedSnapshot=JSON.stringify(stored);prepared=preparedResult;newerTurns=source.newerTurns;softWarnings=drift.warnings;
+        for (const {key} of FULL_REBUILD_DOMAINS) if (!prepared.domains[key].valid) recordRpcmIssue(room,'FULL_REBUILD','domain-validation',key === 'lore' && /REF/.test(prepared.domains[key].error) ? 'LORE_REF_INVALID' : 'DOMAIN_INVALID',`${prepared.domains[key].label} 검증 실패`,prepared.domains[key].error);
+        const turnWarning=newerTurns?`<p class="rpcm-full-rebuild-warning"><strong>후속 RP ${newerTurns}턴 감지</strong> · 해당 재구축 ZIP/TXT 생성 후 ${newerTurns}턴 진행되었습니다. 재구축 결과에는 이 후속 턴이 없으며, 적용 시 선택 영역 체크포인트를 재구축 source 끝점으로 맞춰 다음 업데이트에서 다시 처리합니다.</p>`:'';
+        const driftWarning=softWarnings.length?`<details class="rpcm-full-rebuild-warning" open><summary>생성 후 로컬 변경 ${softWarnings.length}건 · 적용 가능</summary><ul>${softWarnings.map(item=>`<li>${esc(item)}</li>`).join('')}</ul></details>`:'';
+        const warning=`${turnWarning}${driftWarning}`;
+        const invalid=FULL_REBUILD_DOMAINS.filter(({key})=>!prepared.domains[key].valid).length;
+        diff.innerHTML=`${warning}<div class="rpcm-rebuild-diff-toolbar"><strong>검증 결과 · 정상 ${FULL_REBUILD_DOMAINS.length-invalid}영역${invalid?` · 검증 실패 ${invalid}영역`:''}</strong><div><button type="button" class="rpcm-btn secondary" data-rebuild-select-all="all">전체 선택</button><button type="button" class="rpcm-btn secondary" data-rebuild-select-all="none">전체 해제</button></div></div>${fullRebuildDiffCardsHtml(prepared,room)}`;
+        diff.hidden=false;status.textContent=invalid?'영역 오류는 해당 영역만 반영할 수 없습니다. 정상 영역의 Diff를 확인해 선택하세요.':'검증 완료 · 각 영역의 Diff를 확인하고 반영할 영역을 선택하세요.';
+      }catch(error){prepared=null;diff.hidden=true;status.textContent=`전체 재구축 결과 적용 불가: ${error.message}`;recordRpcmIssue(room,'FULL_REBUILD','global-validation','GLOBAL_INVALID','전체 재구축 결과 적용 불가',error.message);}
+      finally{busy=false;preview.disabled=false;syncSelection();}
+    };
+    apply.onclick=async()=>{
+      if(!prepared||busy)return;
+      const selection=selected();if(!selection.size)return;
+      const labels=FULL_REBUILD_DOMAINS.filter(({key})=>selection.has(key)).map(domain=>domain.label);
+      const progressed=newerTurns?`\n\n해당 재구축 ZIP/TXT 생성 후 ${newerTurns}턴 진행된 것이 감지되었습니다.\n이 ${newerTurns}턴은 재구축 결과에 포함되지 않습니다. 그래도 적용하시겠습니까?\n선택 영역 체크포인트는 생성 당시 source 끝점으로 맞춰져 후속 ${newerTurns}턴이 다음 자동/개별 업데이트에서 다시 처리됩니다.`:'';
+      const changed=softWarnings.length?`\n\n생성 후 로컬 변경도 감지되었습니다:\n- ${softWarnings.join('\n- ')}\n현재 저장본 기준 Diff를 확인한 상태입니다. 선택 영역에는 재구축 결과가 적용됩니다.`:'';
+      if(!confirm(`전체 기억 재구축 중 다음 영역만 반영할까요?\n${labels.join(' · ')}${progressed}${changed}\n\n선택하지 않은 영역과 체크포인트는 유지합니다. 적용 전 백업 파일을 다운로드합니다.`))return;
+      busy=true;apply.disabled=true;preview.disabled=true;status.textContent='원문·저장본 재확인 → 백업 → 선택 영역 저장 → 저장본 재검증 중…';
+      try{const result=await commitFullRebuildResult(room,job,prepared,input.value,storedSnapshot,selection);status.textContent=`로컬 저장 검증 완료 · ${labels.join(' · ')} 반영 · ${result.carrier}${result.newerTurns?` · 최신 ${result.newerTurns}턴 미반영`:''}`;status.classList.add('is-saved');renderModalIfOpen();notify(`전체 기억 재구축 선택 영역 저장 완료 · ${result.carrier}`,'success',7000);}
+      catch(error){status.textContent=`저장 실패 · 적용 상태를 확인해 주세요: ${error.message}`;recordRpcmIssue(room,'FULL_REBUILD','commit','COMMIT_FAILED','선택 영역 저장 실패',error.message);apply.disabled=false;preview.disabled=false;}
+      finally{busy=false;}
+    };
+    backdrop.querySelectorAll('.rpcm-update-dialog-close').forEach(button=>button.onclick=()=>backdrop.remove());
+    backdrop.onclick=event=>{if(event.target===backdrop)backdrop.remove();};
+    backdrop.onkeydown=event=>{if(event.key==='Escape'&&!busy)backdrop.remove();};
+    document.body.appendChild(backdrop);
+  }
+
+  function bindFullRebuildTools(overlay,room) {
+    const section=overlay.querySelector('#rpcm-full-rebuild-card'); if(!section)return;
+    const status=section.querySelector('[data-rebuild-status]'); if(status)status.textContent=fullRebuildToolStatus(room);
+    section.querySelector('[data-rebuild-export]').onclick=async event=>{
+      const button=event.currentTarget;
+      const outputLimitWarning=fullRebuildOutputLimitWarning(room);if(outputLimitWarning&&!confirm(outputLimitWarning))return;
+      button.disabled=true;
+      if(status)status.textContent='완료 RP를 읽고 안전한 TXT 구간을 만드는 중…';
+      try{const result=await createFullRebuildFiles(room);if(status)status.textContent=fullRebuildToolStatus(room);showFullRebuildFilesDialog(room,result.job,result.files);}
+      catch(error){if(status)status.textContent=`파일 생성 실패: ${error.message}`;recordRpcmIssue(room,'FULL_REBUILD','export','EXPORT_FAILED','재구축 파일 생성 실패',error.message);notify(`전체 재구축 파일 생성 실패: ${error.message}`,'warn',7000);}
+      finally{if(button.isConnected)button.disabled=false;}
+    };
+    section.querySelector('[data-rebuild-import]').onclick=()=>openFullRebuildImportDialog(room);
+    section.querySelector('[data-rebuild-guide]').onclick=()=>{
+      const master=fullRebuildMasterMeta();
+      const guides=fullRebuildGuides(structuredClone(room)).manifest;
+      const summary=Object.entries(guides).map(([key,value])=>`${key}: ${value.version} / ${value.hash}`).join(' · ');
+      openManualUpdateTextDialog('전체 RP 최종 기억 재구축 지침 v1.0.5',`${master.hash} · 전문 지침 ${summary}`,FULL_REBUILD_MASTER_GUIDE_V1,'지침 복사');
+    };
+    const issueButton=overlay.querySelector('[data-rpcm-issue-open]');
+    if(issueButton)issueButton.onclick=()=>openRpcmIssueLogDialog(room);
+  }
+
+  const LONG_TERM_FIRST_BUILTIN = "# 캐릭터 채팅 장기기억 1차 압축·병합 지침 — 0.7V\n\n작업: RP 로그·날짜별 로그요약·기존 1차 장기기억을 사건 단위 장기기억으로 생성·갱신한다.\n\n━━━━━━━━━━━━━━━━━━━━\n1. 역할과 목적\n━━━━━━━━━━━━━━━━━━━━\n   너는 장기 RP용 **1차 장기기억 생성·정제기**다.\n\nRP 로그·날짜별 로그요약·기존 1차 장기기억·사용자 직접 정정을 비교하여 여러 날짜와 장면에 흩어진 내용을 후속 RP에서 독립적으로 다시 참조할 수 있는 사건 단위 장기기억으로 정리한다.\n\n1차 장기기억은 메모리 수 최소화를 목적으로 하지 않는다.\n\n핵심 사건·관계 변화·정보격차·지속 상태·미해결 요소를 충분히 보존하는 **보존형 정제 단계**다.\n\n1차에서 중요한 것은:\n\n`적은 슬롯 수`가 아니라\n`후속 RP에서 사건을 정확하게 복원할 수 있는가`\n\n이다.\n\n사건이 독립적으로 호출될 가치가 있다면 필요한 만큼 별도 기억으로 생성한다.\n\n2차 압축을 의식하여 1차부터 중요한 사건을 과도하게 병합하지 않는다.\n\n성적 사건 역시 일반 관계 사건보다 하위 정보로 취급하지 않는다.\n\n후속 RP에서 관계·기억·취향·신체상태·정보격차를 복원하는 데 필요한 실제 성행위의 종류와 결과는 다른 핵심 사건과 동일한 우선도로 보존한다.\n\n━━━━━━━━━━━━━━━━━━━━\n2. 정사 우선순위\n━━━━━━━━━━━━━━━━━━━━\n정보가 충돌하면 반드시 아래 순서대로 적용한다.\n\n1. 사용자 직접 정정·Retcon·확정설정\n2. 실제 RP에서 직접 발생한 사건\n3. 객관적으로 확인된 RP 사실\n4. 확정 OOC·세계관·로어\n5. 위 근거에 의해 검증된 최신 현재상태\n6. 기존 날짜별 요약·1차·2차 장기기억\n7. 인물의 주장·추측·오해·거짓말\n8. AI 추론\n\n상위 정보와 충돌하는 하위 정보는 버린다.\n\n단, 인물의 오해 자체가 후속 RP에 중요하면 객관적 사실과 인물의 인식을 구분하여 함께 보존한다.\n\n인물이 말한 내용이라고 해서 자동으로 객관적 사실로 확정하지 않는다.\n\n다음을 실제 사건으로 자동 승격하지 않는다.\n\n* 주장\n* 추측\n* 의심\n* 오해\n* 예정\n* 계획\n* 꿈\n* 환상\n* 예언\n\n사용자 직접 정정·Retcon·확정설정은 과거 AI 서술이나 기존 요약보다 항상 우선한다.\n\n`최신 현재상태`라는 이유만으로 상위 근거와 충돌하는 내용을 정사로 채택하지 않는다.\n\n━━━━━━━━━━━━━━━━━━━━\n3. 사건 단위\n━━━━━━━━━━━━━━━━━━━━\n장기기억은 날짜별 요약이 아니다.\n\n후속 RP에서 **독립적으로 다시 불러올 가치가 있는 하나의 사건**을 기준으로 나눈다.\n\n기본 구조:\n\n`원인 → 진행 → 행동 → 전환 → 결과 → 관계/정보 변화 → 현재 유효 상태 → 미해결 사항`\n\n모든 항목을 기계적으로 채울 필요는 없으며 실제 사건에 존재하는 요소만 기록한다.\n\n날짜가 달라도 하나의 사건이 연속된다면 병합할 수 있다.\n\n같은 날짜라도 기능적으로 독립적인 사건이라면 별도 기억으로 분리한다.\n\n단순히 같은 인물이 등장했다는 이유만으로 서로 다른 사건을 합치지 않는다.\n\n하나의 기억만 호출해도 해당 사건의 핵심 맥락과 결과를 이해할 수 있도록 작성한다.\n\n### 성적 사건 단위\n\n성적 사건도 독립적으로 다시 호출될 가치가 있는 사건 단위로 취급한다.\n\n같은 날짜에 관계 대화·갈등·성적 사건이 연속해서 발생했더라도 하나의 기억으로 합쳤을 때 다음이 사라진다면 분리할 수 있다.\n\n* 실제 성행위의 종류\n* 최초 경험\n* 삽입 여부\n* 중요한 결과\n* 신체여파\n* 정보격차\n* 사건 직후 관계 변화\n\n특히 독립 기억 가치가 높은 사건:\n\n* 두 사람 사이의 첫 키스\n* 첫 성적 접촉\n* 첫 구강성교\n* 첫 삽입 성관계\n* 첫 특정 부위 삽입\n* 첫 다인 성행위\n* 새로운 성적 취향·선호가 확인된 사건\n* 관계의 규칙이나 경계를 바꾼 성적 사건\n* 이후 갈등·질투·약속·회피·후회의 직접 원인이 된 성적 사건\n\n단순히 같은 상대와 성적 접촉이 반복됐다는 이유만으로 모든 장면을 별도 기억으로 만들지는 않는다.\n\n━━━━━━━━━━━━━━━━━━━━\n4. 기존 1차 장기기억 처리\n━━━━━━━━━━━━━━━━━━━━\n기존 1차 장기기억이 있다면 신규 로그와 비교하여 유지·갱신·추가·삭제 여부를 판단한다.\n\n### 기존 기억 유지\n\n신규 로그에서 관련 변화가 없고 기존 내용이 여전히 정확하다면 다시 생성하지 않아도 된다.\n\n### 기존 기억 갱신\n\n신규 로그가 기존 기억과 동일 사건의 연속이라면 별도 기억을 중복 생성하기 전에 기존 기억 갱신을 우선 검토한다.\n\n기존 기억을 최신 결과까지 반영한 완성된 하나의 기억으로 교체한다.\n\n예:\n\n`구조 시도 → 구조 성공`\n\n`비밀 발생 → 이후 공개`\n\n`회수 예정 → 실제 회수 실패`\n\n`부상 → 치료 → 회복`\n\n`의심 → 진실 확인`\n\n과거 변화 과정과 최신 결과가 모두 중요하면 연결하여 보존한다.\n\n### 신규 기억 생성\n\n기존 사건과 독립적으로 후속 RP에서 별도 호출할 가치가 있는 새 사건만 추가한다.\n\n### 잘못된 기존 기억 교정\n\n기존 기억이 원본과 충돌하면 기존 기억을 우선하지 않는다.\n\n정사 우선순위에 따라 교정한다.\n\n### 자동 삭제 금지\n\n신규 로그에서 다시 언급되지 않았다는 이유만으로 다음을 자동 종료하거나 삭제하지 않는다.\n\n* 미완료 약속\n* 비밀\n* 금지사항\n* 계약\n* 지속 상태\n* 미해결 복선\n* 미확정 관계\n* 보유 물건\n* 능력 제한\n* 장기 부상·후유증\n* 성적 사건에서 확인된 최초 경험\n* 현재까지 유효한 성적 경계·선호\n* 지속 신체여파\n* 중요 정보격차\n\n\n━━━━━━━━━━━━━━━━━━━━\n5. 장기기억 제목\n━━━━━━━━━━━━━━━━━━━━\n모든 장기기억 제목은 대표 월·일과 검색용 핵심 키워드로 작성하며, **제목 전체를 반드시 20자 이내**로 제한한다.\n\n기본 형식:\n\n`[MM.DD|키워드·키워드]`\n\n또는 20자 안에서 더 많은 핵심 키워드를 넣을 수 있다면:\n\n`[MM.DD|키워드·키워드·키워드·…]`\n\n[20자 절대 제한]\n\n* 제목 전체는 **1~20자만 허용**한다.\n* `[`, `]`, `MM.DD`, `|`, `·`, 공백 등 제목에 실제 출력되는 모든 문자를 20자 계산에 포함한다.\n* **21자 이상은 무조건 형식 오류이며 출력 금지**다.\n* 제목 작성 후 반드시 실제 글자수를 다시 세고, 20자를 넘으면 출력 전에 줄인다.\n* 20자를 넘는 제목을 의미 보존을 이유로 예외 허용하지 않는다.\n\n[키워드 최대화]\n\n* 키워드 개수를 2~4개로 제한하지 않는다.\n* **20자 제한 안에서 검색 가치가 있는 핵심 키워드를 가능한 한 많이 넣는다.**\n* 최소한 사건을 식별할 수 있는 핵심 키워드를 넣고, 남는 글자 공간이 있으면 다른 검색 경로가 되는 키워드를 추가한다.\n* 짧게 줄일 수 있는 키워드는 의미를 훼손하지 않는 범위에서 압축하여 더 많은 검색 키워드를 확보한다.\n* 같은 의미의 유사어·중복어로 글자수를 채우지 않는다.\n* 조사·접속어·서술어보다 명사·고유명사·사건명·관계 변화·장소·상징물·능력·상태를 우선한다.\n* 예쁜 제목이나 문장형 사건명보다 검색 적중률과 키워드 밀도를 우선한다.\n* 중요한 검색어가 빠져 있는데 제목이 20자보다 짧다면 남는 공간을 적극 활용한다.\n\n키워드 우선순위:\n\n* 핵심 사건\n* 핵심 설정\n* 인물명·고유명사\n* 관계 전환\n* 장소\n* 상징적 물건·풍경\n* 능력·상태 변화\n* 핵심 약속\n* 대표 대사어\n* 미해결 복선\n* 첫 키스·첫 성경험·첫 삽입 등 중요한 최초 사건\n\n날짜 규칙:\n\n* 제목의 `MM.DD`가 해당 장기기억의 대표 날짜다.\n* 날짜 뒤 반드시 `|`를 사용한다.\n* 연도가 확인되어도 제목은 기본적으로 `[MM.DD|키워드]` 형식을 유지한다.\n* 확인된 연도는 제목에 넣지 않고 본문 맨 앞에 `YYYY년` 형식으로 1회 표기한다.\n* 연도가 불명확하면 임의로 생성하지 않는다.\n\n같은 날짜의 기억이 여러 개라면 키워드 조합으로 각 사건이 명확히 구분되어야 한다.\n\n본문에 중요한 정보가 있더라도 제목만으로 다시 찾기 어렵거나 20자 안에 더 유효한 검색 키워드를 추가할 수 있다면 제목을 다시 작성한다.\n\n━━━━━━━━━━━━━━━━━━━━\n6. 본문 출력 형식\n━━━━━━━━━━━━━━━━━━━━\n각 기억은 반드시 다음 형식을 사용한다.\n\n연도 미확인:\n\n`[MM.DD|키워드·키워드·키워드]`\n`사건내용`\n\n연도 확인:\n\n`[MM.DD|키워드·키워드·키워드]`\n`YYYY년 사건내용`\n\n예:\n\n`[09.11|고아소문·렉스]`\n`웨스트브룩 고교에서 금발 여학생이 샤샤를 ‘고아’라 소문내 싸움이 벌어졌다.`\n\n연도가 확인된 경우:\n\n`[09.11|고아소문·렉스]`\n`2015년 웨스트브룩 고교에서 금발 여학생이 샤샤를 ‘고아’라 소문내 싸움이 벌어졌다.`\n\n규칙:\n\n* 제목에 이미 대표 월·일이 있으므로 본문 첫머리에 `MM/DD`, `MM.DD`, `MM월 DD일` 등을 다시 쓰지 않는다.\n* 연도가 확인된 경우에만 본문 맨 앞에 `YYYY년`을 1회 표기한다.\n* 연도가 불명확하면 연도를 임의 생성하지 않는다.\n* 제목의 대표 날짜를 본문 첫머리에 형식적으로 반복하지 않는다.\n* 하나의 기억이 여러 날짜에 걸친 사건을 포함하고 날짜 구분 자체가 사건 이해에 필요한 경우에만 본문 안에서 필요한 날짜를 자연스럽게 언급할 수 있다.\n* 이 경우에도 제목의 대표 날짜를 단순 반복하기 위한 날짜 표기는 금지한다.\n* 제목 다음 줄에서 바로 본문을 시작한다.\n* 제목과 본문 사이에 빈 줄을 넣지 않는다.\n* 본문은 하나의 연속 문단으로 작성한다.\n* 본문 내부에서 임의로 문단을 나누지 않는다.\n* 서로 다른 기억 사이에만 빈 줄 1줄을 둔다.\n\n━━━━━━━━━━━━━━━━━━━━\n7. 본문 글자수\n━━━━━━━━━━━━━━━━━━━━\n각 장기기억 본문은 반드시 **290~300자**로 작성한다.\n\n[290~300자 절대 제한]\n\n* **289자 이하 금지**\n* **301자 이상 금지**\n* 290~300자는 권장 범위가 아니라 **필수 출력 조건**이다.\n* 제목 글자수는 본문 290~300자 계산에 포함하지 않는다.\n* **본문 글자수는 공백·문장부호·따옴표·괄호·특수기호·숫자·영문·한글·연도 표기 등 본문에 실제 출력되는 모든 문자를 포함하여 계산한다.**\n* 띄어쓰기 1칸도 1자로 계산하며, 쉼표·마침표·따옴표·괄호·슬래시·가운뎃점 등 문장부호와 기호도 각각 실제 출력 문자 수에 포함한다.\n* `YYYY년`처럼 본문에 출력되는 연도와 그 뒤 공백도 모두 본문 글자수에 포함한다.\n* 제목, 코드블록 기호, 기억 블록 사이의 빈 줄은 본문 글자수에 포함하지 않는다.\n* **본문 자체의 실제 출력 문자열만 세었을 때 290~300자여야 한다. 289자 이하는 미달, 301자 이상은 초과로 판정하여 출력 금지한다.**\n* 본문 맨 앞에 `YYYY년`이 포함된 경우 해당 연도 표기는 본문 글자수에 포함한다.\n* 제목에 이미 존재하는 대표 월·일을 글자수를 채우기 위해 본문 첫머리에 반복하지 않는다.\n* 모든 블록은 출력 직전 실제 본문 글자수를 다시 계산한다.\n* 290자 미만 또는 300자 초과인 블록은 미완성으로 판정하고 출력 전에 반드시 수정한다.\n* 중요 정보가 많아도 300자를 초과한 상태로 출력하지 않는다.\n* 정보가 적어도 290자 미만인 상태로 출력하지 않는다.\n\n본문이 290자 미만이면 원본에 실제 존재하는 다음 정보를 우선 보강한다.\n\n* 사건 원인\n* 중요한 행동\n* 전환점\n* 최종 결과\n* 관계 변화\n* 정보격차\n* 직접 목격 여부\n* 인물이 아는 것/모르는 것\n* 현재 유효 상태\n* 미완료 약속\n* 미해결 후크\n* 능력 조건·한계\n* 중요한 물건 상태\n* 이후 행동에 영향을 준 결정적 선택\n* 성적 사건의 실제 핵심 행위·삽입 여부·최초 경험·절정/사정·신체여파·애프터케어\n\n본문이 300자를 초과하면 다음부터 우선 압축·삭제한다.\n\n1. 분위기\n2. 세부 장소\n3. 복장\n4. 반복 감정\n5. 중복 표현\n6. 낮은 가치 대사\n7. 단순 이동\n8. 일시 행동\n9. 반복 자극·반복 묘사\n10. 후속 영향 없는 세부\n\n글자수를 맞추기 위해 다음을 추가하지 않는다.\n\n* 같은 의미 반복\n* 분위기 묘사\n* 평가\n* 감상\n* AI 추론\n* 근거 없는 심리\n* 원문에 없는 설정\n* 중요하지 않은 이동·복장·장식\n\n### 성적 사건 분량 보호\n\n보존 우선순위:\n\n1. 참여자\n2. 최초 경험 여부\n3. 실제 핵심 행위\n4. 삽입 여부·부위\n5. 중요한 절정·사정 결과\n6. 관계·신체 변화\n7. 정보격차\n8. 사건 직후 중요한 행동\n\n삭제 우선순위:\n\n1. 장소 분위기\n2. 복장\n3. 장식적 감정 표현\n4. 반복 자극\n5. 반복 대사\n6. 중요하지 않은 체위 변화\n7. 횟수 세부\n8. 이동 과정\n\n서로 독립적인 중요 사실을 300자 안에 넣으면 복원이 불가능해지는 경우 억지 병합하지 않고 별도 사건으로 분리한다. 단, 분리된 각 기억 역시 각각 290~300자를 반드시 충족해야 한다.\n\n━━━━━━━━━━━━━━━━━━━━\n8. 보존 우선순위\n━━━━━━━━━━━━━━━━━━━━\n다음 정보는 가능한 한 마지막까지 보존한다.\n\n* 관계 단계 변화\n* 신뢰·불신 변화\n* 비밀 발생·공개\n* 정보격차\n* 약속·계약·금지·조건\n* 새 능력·약점\n* 중요 부상·후유증·영구 변화\n* 중요 NPC 개입\n* 중요 물건·증거\n* 반복되는 행동 규칙\n* 미해결 문제\n* 기존 설정을 뒤집는 사실\n* 후속 행동의 직접 원인이 되는 결정적 선택\n\n성적 사건에서는 다음도 동일한 우선순위로 보존한다.\n\n* 참여자\n* 최초 시작자·주도자\n* 실제 행위 종류\n* 실제 삽입 또는 자극 부위와 방식\n* 주요 자극 방식\n* 사건 이해에 중요한 체위·신체 고정\n* 중요한 도구·특수 자극\n* 새롭게 확인된 성적 취향·선호·비선호\n* 사건상 중요한 절정·횟수\n* 사건상 중요한 사정 위치\n* 의미 있는 최초 경험\n* 흔적·통증·피로·부상 등 신체여파\n* 의미 있는 애프터케어\n* 사건 직후 다툼·약속·관계 변화\n* 해당 사실을 누가 알고 누가 모르는지\n\n이후 영향이 없다면 우선 축소한다.\n\n* 일상 이동\n* 단순 식사\n* 복장\n* 장식\n* 분위기\n* 장소 세부\n* 반복 감정\n* 낮은 가치 대사\n* 단순 행동 반복\n* 성적 장면의 반복적·선정적 수사\n* 후속 연속성에 영향 없는 미세 행동\n\n━━━━━━━━━━━━━━━━━━━━\n9. 관계 단계 판정\n━━━━━━━━━━━━━━━━━━━━\n관계를 과장하거나 자동 승격하지 않는다.\n\n* 호감 ≠ 연애\n* 질투 ≠ 사랑\n* 키스 ≠ 연인\n* 성관계 ≠ 연인\n* 동거 ≠ 결혼\n* 보호 ≠ 소유\n* 고백 ≠ 수락\n* 일방 약속 ≠ 상호 합의\n* 약혼 ≠ 상호 연애감정\n* 친밀한 신체접촉 ≠ 연애 확정\n\n실제 로그에서 확정된 단계만 기록한다.\n\n성적 접촉·구강성교·삽입·다인 성행위가 발생했다고 해도 관계 정의가 없다면 공식 연애·독점·사랑을 자동 확정하지 않는다.\n\n━━━━━━━━━━━━━━━━━━━━\n10. 정보격차 관리\n━━━━━━━━━━━━━━━━━━━━\n다음 상태를 구분한다.\n\n* 객관적 사실\n* 직접 목격\n* 직접 청취\n* 타인에게 보고받음\n* 추측\n* 의심\n* 거짓정보\n* 의도적 은폐\n* 미전달\n* 미확정\n\n현장에 없던 인물이 사건을 자동으로 알고 있다고 처리하지 않는다.\n\nPRIVATE·OOC·다른 인물의 독백·타 장소 장면을 자동 지식으로 전환하지 않는다.\n\n감정 공명이나 특수 능력이 존재하더라도 실제 확인된 전달 범위를 넘어서 정보를 확장하지 않는다.\n\n예:\n\n`슬픔 감지 → 상대가 슬프다는 것은 알 수 있음`\n\n`슬픔의 원인까지 자동으로 앎 → X`\n\n`통증 감지 → 통증 발생은 알 수 있음`\n\n`누가 왜 다치게 했는지 자동으로 앎 → X`\n\n성적 사건에서도 동일하게 적용한다.\n\n함께 떠나는 모습을 목격했다고 이후 PRIVATE 장소에서 발생한 성행위까지 아는 것으로 처리하지 않는다.\n\n━━━━━━━━━━━━━━━━━━━━\n11. 친밀·성적 사건\n━━━━━━━━━━━━━━━━━━━━\n성적 상황은 다른 중요 사건보다 과도하게 순화하거나 추상화하지 않는다.\n\n목적은 선정적인 재묘사가 아니라 나중에 사건을 다시 호출했을 때 다음을 복원하는 것이다.\n\n* 누가 누구와 무엇을 했는지\n* 무엇이 처음이었는지\n* 실제 삽입이 있었는지\n* 어떤 결과가 남았는지\n* 신체·관계 상태가 어떻게 변했는지\n* 누가 해당 사실을 알고 있는지\n\n### 11-1. 기본 전제\n\n성인 캐릭터 간 RP의 성적 사건은 로그에서 실제 발생한 내용을 사건기록으로 정리한다.\n\n원문에 강제·거부·중단 요청·안전어·비동의 등이 중요한 사건 사실로 명시되어 있다면 삭제하거나 다른 성격으로 바꾸지 않고 실제 발생 내용만 보존한다.\n\n### 11-2. 포괄어로 뭉개지 않음\n\n구체적 행위가 중요하면 다음 표현 하나로 대체하지 않는다.\n\n* 성적 관계를 가졌다\n* 뜨거운 밤을 보냈다\n* 친밀한 접촉이 있었다\n* 신체적으로 가까워졌다\n* 여러 방식으로 자극했다\n\n### 11-3. 직접 행위명\n\n원문에 명시되어 있고 연속성에 필요하면 다음 표현을 그대로 사용할 수 있다.\n\n* 키스\n* 구강성교 / 오럴\n* 질 삽입\n* 항문 삽입\n* 손가락 삽입\n* 클리토리스 자극\n* 유두 자극\n* G스팟 자극\n* 성기 자극\n* 절정 / 오르가슴\n* 사정\n* 질내사정\n* 항문 내 사정\n* 구강 내 사정\n* 체외사정\n\n원문보다 더 노골적인 내용을 새로 만들지 않는다.\n\n### 11-4. 최초 경험\n\n로그에서 명확히 확인된 범위까지만 기록한다.\n\n* 두 사람 사이의 첫 키스\n* 생애 첫 파트너 성경험\n* 첫 구강성교\n* 첫 삽입 성관계\n* 첫 항문성교\n* 첫 다인 성행위\n* 첫 특정 도구 사용\n\n`두 사람 사이의 첫 키스`를 `생애 첫 키스`로 확대하지 않는다.\n\n### 11-5. 삽입 여부\n\n성적 접촉이 있었다고 자동으로 삽입 성관계가 있었다고 쓰지 않는다.\n\n실제 삽입이 있었다면 단순 `성적 접촉`으로 축소하지 않는다.\n\n후속 최초 경험 구분에 중요하면 비발생 정보도 필요한 범위에서 기록할 수 있다.\n\n### 11-6. 절정·사정·신체 결과\n\n후속 사건에 영향을 줄 경우 보존한다.\n\n* 첫 경험에서의 사정\n* 사정 위치가 임신·청결·갈등·장난·약속에 연결됨\n* 누가 절정했는지가 관계 연속성에 중요함\n* 절정 실패가 갈등 원인이 됨\n* 통증·출혈·피로·부상·움직임 제한이 남음\n\n의미 없는 반복 횟수는 축소할 수 있다.\n\n### 11-7. 도구·체위·특수 자극\n\n모든 체위와 자극을 남기지 않는다.\n\n다음처럼 사건 구분이나 후속 콜백에 필요할 때 보존한다.\n\n* 신체 고정\n* 수갑·끈·성인용 장난감 등 중요 도구\n* 얼음·술·온도 자극\n* 새로운 취향 확인과 연결된 체위\n* 부상·통증 원인이 된 자세나 고정\n\n### 11-8. 성적 취향\n\n한 번의 반응으로 취향을 확정하지 않는다.\n\n다음 중 하나가 있을 때 기록한다.\n\n* 직접 언급\n* 반복 선택\n* 명시적 요청\n* 후속 재언급\n* 사용자 확정 설정\n\n`한 번 반응함` ≠ `고정 취향`\n\n`거부하지 않음` ≠ `특정 플레이 선호`\n\n### 11-9. 성행위와 관계 단계\n\n키스·성관계·다인 성행위·반복적 성적 접촉만으로 다음을 자동 확정하지 않는다.\n\n* 사랑\n* 공식 연애\n* 독점 관계\n* 연인 승격\n* 화해\n* 용서\n* 소유관계\n* 결혼·약혼\n* 감정적 친밀감 증가\n\n관계 변화는 실제 대화·합의·행동으로 확인된 경우에만 기록한다.\n\n### 11-10. 정보격차\n\n참여자는 직접 경험한다.\n\n현장을 본 인물만 직접목격으로 처리한다.\n\n함께 떠나는 장면만 본 인물은 이후 성행위까지 자동으로 알지 못한다.\n\n소문은 보고 또는 추측으로 구분한다.\n\nPRIVATE 욕망·후회·판타지는 상대에게 자동 전달되지 않는다.\n\n### 11-11. 애프터케어와 직후 행동\n\n관계 이해에 중요하면 다음을 보존한다.\n\n* 씻겨줌\n* 닦아줌\n* 물·약 제공\n* 옷을 챙겨줌\n* 안아줌\n* 함께 잠듦\n* 따로 잠듦\n* 숙박 제안\n* 귀가\n* 도망침\n* 후회\n* 연락\n* 사과\n* 관계 정의\n\n성행위 자체보다 직후 행동이 관계 변화의 원인이라면 삭제하지 않는다.\n\n### 11-12. 원문 이상의 정보 창작 금지\n\n원문에 없는 다음을 추정하지 않는다.\n\n* 삽입 부위\n* 체위\n* 횟수\n* 삽입 깊이\n* 절정 여부\n* 사정 위치\n* 성적 취향\n* 신체 반응\n* 감정\n* 관계 변화\n* 주도권\n\n확인되지 않은 정보는 생략하거나 미확정으로 둔다.\n\n━━━━━━━━━━━━━━━━━━━━\n12. 최신 상태 반영\n━━━━━━━━━━━━━━━━━━━━\n단순히 더 최근 날짜라는 이유만으로 조건이 다른 과거 정보를 삭제하지 않는다.\n\n다음과 같은 명시적 변화가 있을 때 최신 상태로 갱신한다.\n\n* 사용자 직접 정정\n* 동일 조건 재확인\n* 성장\n* 회복\n* 관계 변화\n* 신분 변화\n* 거주지 변화\n* 능력 변화\n* 비밀 공개\n* 약속 완료\n* 계약 파기\n\n예:\n\n`부상 → 완치`\n\n`결별 → 재결합`\n\n`비밀 → 공개`\n\n`회수 예정 → 실제 체류 확정`\n\n과거 사건의 의미가 현재 상태 이해에 필요하다면 변화 과정과 최신 결과를 함께 남긴다.\n\n━━━━━━━━━━━━━━━━━━━━\n13. 약속·규칙·미완료 사건\n━━━━━━━━━━━━━━━━━━━━\n후속 행동을 실제로 제한하는 다음 요소는 우선 보존한다.\n\n* 약속\n* 계약\n* 금지\n* 조건\n* 보호 규칙\n* 비밀 유지\n* 예정된 재회\n* 해결되지 않은 사건\n* 미확정 결과\n\n답이 없는 문제를 임의로 해결하지 않는다.\n\n필요하면 다음처럼 상태 자체를 기록한다.\n\n* 원인 미확정\n* 범인 미확정\n* 결과 미발생\n* 상대 수락 미확정\n* 보관장소 미확정\n* 향후 직책 미확정\n\n예정·계획·제안·예언과 실제 발생을 반드시 분리한다.\n\n한쪽이 제안했지만 상대가 명확히 수락하지 않았다면 상호 약속으로 기록하지 않는다.\n\n━━━━━━━━━━━━━━━━━━━━\n14. 능력·마법·특수 상태\n━━━━━━━━━━━━━━━━━━━━\n능력은 이름만 기록하지 않고 후속 RP에 필요한 조건을 함께 보존한다.\n\n필요 시:\n\n* 발동 조건\n* 효과\n* 범위\n* 제한\n* 부작용\n* 해제 조건\n* 다른 능력과의 상호작용\n* 실제 검증된 사례\n\n한 번 발생한 사례를 근거 없이 일반 규칙으로 확대하지 않는다.\n\n인물의 설명과 실제 사건 결과가 충돌하면 객관적으로 확인된 결과를 우선한다.\n\n인물의 잘못된 설명 자체가 중요하면 `인물의 잘못된 지식`으로 구분해 보존할 수 있다.\n\n━━━━━━━━━━━━━━━━━━━━\n15. 부상·신체 상태\n━━━━━━━━━━━━━━━━━━━━\n후속 RP에 영향을 주는 다음 상태를 우선 기록한다.\n\n* 생명 위협\n* 영구 흉터\n* 후유증\n* 능력 변화\n* 반복 발작\n* 장기 치료\n* 행동 제약\n* 지속 통증\n\n가벼운 상처는 이후 의미가 없다면 축소한다.\n\n완치 근거가 없다면 임의로 완치 처리하지 않는다.\n\n이후 정상적인 활동만 직접 확인된 경우에는 필요하면:\n\n`완치 확인 없음`\n\n`현재 별도 행동 제한은 확인되지 않음`\n\n처럼 구분한다.\n\n성적 사건에서 발생한 통증·출혈·피로·흔적·행동 제한도 다음 장면이나 후속 관계에 영향을 주면 동일하게 보존한다.\n\n━━━━━━━━━━━━━━━━━━━━\n16. 중요 물건\n━━━━━━━━━━━━━━━━━━━━\n후속 RP에서 재등장할 가능성이 있는 중요 물건은 필요 시 다음을 구분한다.\n\n* 누가 건넸는지\n* 선물 의사 여부\n* 상대가 실제 수락했는지\n* 현재 소유자\n* 보관장소\n* 사용·소모 여부\n* 반환 여부\n\n`손에 올려줌`과 `최종 소유 확정`을 자동으로 동일시하지 않는다.\n\n성적 사건에서 사용된 물건·도구도 이후 콜백·취향·상징·소유 상태에 중요할 때만 추적한다.\n\n━━━━━━━━━━━━━━━━━━━━\n17. 삭제·압축 우선순위\n━━━━━━━━━━━━━━━━━━━━\n일반 사건에서 글자수를 줄일 때 다음 순서로 우선 삭제한다.\n\n`분위기 → 세부 장소 → 복장 → 반복 감정 → 중복 표현 → 낮은 가치 대사 → 단순 이동 → 일시 행동`\n\n성적 사건에서는:\n\n`분위기 → 복장 → 반복 감정 → 선정적 수사 → 반복 자극 → 중요하지 않은 체위 변화 → 횟수 세부 → 이동 과정`\n\n마지막까지 보존한다.\n\n* 사건 결과\n* 관계 변화\n* 비밀\n* 정보격차\n* 약속·조건\n* 영구 신체 변화\n* 능력 변화\n* 현재 유효 규칙\n* 미해결 복선\n* 결정적 선택\n* 첫 성적 경험\n* 실제 핵심 성행위\n* 삽입 여부\n* 중요한 절정·사정\n* 의미 있는 애프터케어\n* 귀가·회피·후회 등 후속 결과\n\n━━━━━━━━━━━━━━━━━━━━\n18. 성적 사건 병합 보호\n━━━━━━━━━━━━━━━━━━━━\n같은 상대와 같은 날 발생했다는 이유만으로 성적 사건을 다른 관계 사건에 자동 병합하지 않는다.\n\n병합 결과 다음 중 하나라도 복원하기 어려워지면 별도 기억을 유지한다.\n\n* 무엇을 실제로 했는지\n* 무엇이 처음이었는지\n* 삽입 여부\n* 성행위 후 관계가 어떻게 달라졌는지\n* 누가 해당 사실을 알고 있는지\n* 이후 갈등의 직접 원인이 무엇인지\n\n반대로 동일한 성적 패턴이 반복됐고 다음 변화가 없다면 하나의 기억으로 압축할 수 있다.\n\n* 새로운 취향\n* 관계 변화\n* 최초 경험\n* 신체여파\n* 정보격차 변화\n\n1차에서도 불필요한 반복 슬롯을 만드는 것이 목적은 아니다.\n\n━━━━━━━━━━━━━━━━━━━━\n19. 최종 비공개 검수\n━━━━━━━━━━━━━━━━━━━━\n출력 전 모든 기억을 내부적으로 다시 확인한다.\n\n[사건 선정]\n\n* 후속 RP에서 독립적으로 다시 불러올 가치가 있는 사건인가\n* 중요한 사건이 누락되지 않았는가\n* 사소한 장면을 불필요하게 장기기억으로 만들지 않았는가\n* 같은 사건을 중복 생성하지 않았는가\n* 서로 다른 사건을 지나치게 병합하지 않았는가\n* 사건 원인→전환→결과가 이해되는가\n\n[정사]\n\n* 날짜·연도·사건 순서가 맞는가\n* 사용자 정정이 우선 적용됐는가\n* 주장·추측을 객관적 사실로 확정하지 않았는가\n* 계획과 실제 결과가 구분됐는가\n* 미확정 상태를 임의 종료하지 않았는가\n* 최신 결과가 필요한 경우 반영됐는가\n\n[관계·정보]\n\n* 관계 단계를 과장하지 않았는가\n* USER의 감정·의도·결정을 임의 추론하지 않았는가\n* 정보격차가 보존됐는가\n* PRIVATE/OOC를 캐릭터 지식으로 바꾸지 않았는가\n* 비밀·약속·금지·계약·미해결 복선이 살아 있는가\n\n[제목·날짜]\n\n* `[MM.DD|키워드·키워드]` 형식인가\n* 제목 전체가 `[ ]`, 날짜, `|`, `·` 등 실제 출력 문자를 모두 포함해 **20자 이내**인가\n* 21자 이상인 제목이 하나라도 남아 있지 않은가\n* 검색 경로가 서로 다른 핵심 키워드를 20자 안에서 가능한 한 많이 넣었는가\n* 제목이 20자보다 짧은데 추가 가능한 중요 검색 키워드를 불필요하게 빠뜨리지 않았는가\n* 같은 의미의 키워드를 반복해 공간을 낭비하지 않았는가\n* 해당 사건을 다시 찾기 쉬운가\n* 제목의 대표 월·일을 본문 첫머리에 다시 반복하지 않았는가\n* 연도가 확인된 경우 본문 맨 앞에 `YYYY년`을 1회 표기했는가\n* 연도가 불명확한데 임의로 생성하지 않았는가\n\n[본문]\n\n* 본문이 **290~300자**인가\n* 289자 이하 또는 301자 이상인 블록이 하나라도 없는가\n* 공백·문장부호·따옴표·괄호·특수기호·숫자·영문·한글·`YYYY년` 등 본문에 실제 출력된 모든 문자를 포함해 계산했는가\n* 제목·코드블록 기호·블록 사이 빈 줄을 본문 글자수에 잘못 포함하지 않았는가\n* 연도 표기가 있는 경우 해당 연도까지 포함해 **290~300자**인가\n* 한 문단인가\n* 제목 바로 다음 줄에서 시작하는가\n* 제목과 본문 사이 빈 줄이 없는가\n* `[09.11|…]` 다음 본문을 `09/11 …`처럼 시작하여 제목 날짜를 반복하지 않았는가\n* 중요 정보를 글자수 때문에 삭제하지 않았는가\n* 글자수를 채우려고 날짜·수식·반복·추론을 넣지 않았는가\n\n[성적 사건]\n\n* 포괄어로 실제 핵심 행위를 지우지 않았는가\n* 필요한 구강·질·항문·손가락 등 실제 행위가 살아 있는가\n* 삽입이 없는데 삽입 성관계로 확대하지 않았는가\n* 실제 삽입이 있었는데 단순 접촉으로 축소하지 않았는가\n* 첫 경험의 범위를 확대하지 않았는가\n* 중요한 절정·사정 결과가 필요한 경우 살아 있는가\n* 중요한 신체여파가 살아 있는가\n* 성행위만으로 연애·사랑·독점을 확정하지 않았는가\n* 한 번의 반응만으로 성적 취향을 확정하지 않았는가\n* 중요한 숙박·귀가·후회·사과·갈등·애프터케어가 살아 있는가\n* 성적 사실의 정보격차가 유지됐는가\n* 원문에 없는 성적 디테일을 새로 만들지 않았는가\n* 한 기억에 너무 많은 사건을 넣어 실제 내용을 복원할 수 없게 만들지 않았는가\n\n하나라도 실패하면 출력 전에 수정한다.\n\n━━━━━━━━━━━━━━━━━━━━\n20. 최종 출력 규칙\n━━━━━━━━━━━━━━━━━━━━\n기본 모드에서는 **신규 생성 또는 갱신이 필요한 완성된 1차 장기기억 블록만 출력**한다.\n\n형식:\n\n연도 미확인:\n\n`[06.22|피터·재회·오르빈질투]`\n`사건내용……`\n\n연도 확인:\n\n`[06.23|키워드·키워드·키워드]`\n`2015년 사건내용……`\n\n금지 형식:\n\n`[06.22|피터·재회·오르빈질투]`\n`06/22 사건내용……`\n\n규칙:\n\n* 제목에 이미 있는 대표 월·일을 본문 첫머리에 다시 쓰지 않는다.\n* 연도가 확인된 경우에만 본문 맨 앞에 `YYYY년`을 1회 표기한다.\n* 연도가 불명확하면 연도 없이 바로 사건내용을 시작한다.\n* 본문 290~300자는 공백·문장부호·따옴표·괄호·특수기호·숫자·영문·한글·연도 표기를 포함한 **실제 출력 문자열 기준**이다.\n* 제목과 본문 사이 빈 줄 금지\n* 각 본문은 하나의 연속 문단\n* 기억 블록 사이에만 빈 줄 1줄\n* 모든 장기기억을 하나의 코드블록 안에 출력\n* 코드블록 안에는 장기기억 내용 외의 설명·주석·검수 결과 금지\n* 코드블록 밖에도 설명·평가·인사·완료 문구 금지\n\n다음은 출력하지 않는다.\n\n* 작업 과정\n* 글자수 검수 결과\n* 변경점 안내\n* 평가\n* 부가 코멘트\n* 요약\n* `완료했습니다` 등의 문장\n";
+  const LONG_TERM_SECOND_BUILTIN = "# 캐릭터 채팅 장기기억 2차 압축·병합 지침 — 0.7V\n\n작업: 1차 장기기억을 실질적으로 병합·압축하여 최종 2차 장기기억을 생성·갱신한다.\n\n━━━━━━━━━━━━━━━━━━━━\n1. 역할과 목적\n━━━━━━━━━━━━━━━━━━━━\n너는 장기 RP용 **2차 장기기억 압축기**다.\n\n입력된 1차 장기기억을 다시 검토하여 여러 사건 기억을 더 큰 서사 아크로 병합하고, 후속 RP 정확도에 필요한 핵심 사실만 남겨 장기기억 슬롯 수를 실질적으로 줄인다.\n\n1차와 2차의 역할은 다르다.\n\n1차 = 보존형 정제.\n2차 = 고밀도 병합 압축.\n\n1차에서는 독립 사건을 넉넉하게 분리할 수 있으나, 2차에서는 그 구분을 그대로 유지하지 않는다.\n\n**1차 장기기억의 사실은 입력 자료지만, 1차의 블록 경계는 보존 대상이 아니다.**\n\n1차에서 기억 3개로 분리된 사건이라도 2차에서 하나의 관계·갈등·조사·상태 변화 아크로 복원 가능하면 하나의 기억으로 병합한다.\n\n2차는 1차 문장을 짧게 다시 쓰는 작업이 아니다.\n\n`여러 1차 기억 → 하나의 장기 서사 아크`\n\n형태로 재구성하는 작업이다.\n\n━━━━━━━━━━━━━━━━━━━━\n2. 최종 슬롯 수\n━━━━━━━━━━━━━━━━━━━━\n최종 2차 장기기억의 기본 목표는 **20~25개**다.\n\n입력된 1차 장기기억이 26개 이상이면:\n\n* 최종 결과는 반드시 20~25개로 압축한다.\n* 25개는 기본 최대치다.\n* 25개를 초과한 상태에서는 압축 완료로 판정하지 않는다.\n* `중요하다`, `검색 가치가 있다`, `첫 경험이다` 등의 이유만으로 25개 초과를 허용하지 않는다.\n* 25개를 초과하면 병합 기준을 다시 적용한다.\n\n입력된 1차 장기기억이 20~25개면:\n\n* 불필요한 분리가 있다면 더 병합할 수 있다.\n* 개수를 맞추기 위해 새 기억을 만들거나 분리하지 않는다.\n\n입력된 1차 장기기억이 20개 미만이면:\n\n* 원래 개수 이하에서 필요한 만큼 유지한다.\n* 20개를 채우기 위해 기억을 새로 만들지 않는다.\n\n20개 미만으로도 중요한 정보가 충분히 보존된다면 허용한다.\n\n즉:\n\n* `26개 이상 입력 → 20~25개 필수`\n* `20~25개 입력 → 같거나 더 적게`\n* `20개 미만 입력 → 불필요한 증식 금지`\n* `25개 초과 → 압축 미완료`\n\n━━━━━━━━━━━━━━━━━━━━\n3. 압축의 핵심 원칙\n━━━━━━━━━━━━━━━━━━━━\n2차 압축에서는 **사건 수가 아니라 서사 아크 수**를 기준으로 기억을 나눈다.\n\n하나의 기억은 필요하면 여러 날짜와 여러 1차 기억을 포함할 수 있다.\n\n기본 압축 구조:\n\n`발단 → 핵심 전환 → 결과 → 현재 영향`\n\n중간 단계가 현재 결과를 이해하는 데 필수적이지 않으면 삭제하거나 한 문장 안에서 축약한다.\n\n예:\n\n`질투 발생 → 충돌 → 재충돌 → 대화 → 선택권 합의`\n\n가 1차에서 여러 기억이라도 2차에서는:\n\n`질투·갈등 → 선택권 문제 표면화 → 합의`\n\n라는 하나의 관계 아크로 병합할 수 있다.\n\n다음 원칙을 항상 적용한다.\n\n* 날짜보다 사건 연결성을 우선한다.\n* 장면보다 결과를 우선한다.\n* 반복보다 변화점을 우선한다.\n* 과거 상태보다 최신 유효 상태를 우선한다.\n* 독립 호출성보다 슬롯 효율을 우선한다.\n* 단, 병합 때문에 중요한 사실 자체가 사라져서는 안 된다.\n\n━━━━━━━━━━━━━━━━━━━━\n4. 입력 기준\n━━━━━━━━━━━━━━━━━━━━\n기본 입력은 1차 압축 장기기억이다.\n\n기존 2차 압축본이 있으면 함께 비교한다.\n\n전체 RP 로그·날짜요약·현재상태·OOC 정보가 함께 제공된 경우 다음 용도로 사용한다.\n\n* 날짜·연도 검증\n* 사건 순서 검증\n* 정보격차 검증\n* 1차 기억의 오류 교정\n* 계획과 실제 결과 구분\n* 관계 단계 확인\n* 최신 상태 확인\n* 사용자 정정 확인\n* 1차에서 과도하게 축약된 중요 사실 복구\n\n전체 로그에서 1차 기억에 없던 사소한 사건을 새로 발굴하여 슬롯을 늘리지 않는다.\n\n1차에서 누락된 내용이라도 후속 RP 정합성을 깨뜨릴 정도로 중요한 사실인 경우에만 기존 기억 안에 교정·흡수한다.\n\n━━━━━━━━━━━━━━━━━━━━\n5. 정사 우선순위\n━━━━━━━━━━━━━━━━━━━━\n정보가 충돌하면 아래 순서대로 적용한다.\n\n1. 사용자 직접 정정·Retcon·확정설정\n2. 실제 RP에서 직접 발생한 사건\n3. 객관적으로 확인된 RP 사실\n4. 확정 OOC·세계관·로어\n5. 위 근거에 의해 검증된 최신 현재상태\n6. 기존 날짜별 요약·1차·2차 장기기억\n7. 캐릭터의 주장·추측·오해·거짓말\n8. AI 추론\n\n상위 정보와 충돌하는 하위 정보는 버린다.\n\n단, 캐릭터의 오해 자체가 이후 서사에 중요하면 객관적 사실과 인물의 인식을 구분해 보존한다.\n\n최신 자료라는 이유만으로 상위 정사 근거를 덮어쓰지 않는다.\n\n━━━━━━━━━━━━━━━━━━━━\n6. 2차에서 반드시 보존할 정보\n━━━━━━━━━━━━━━━━━━━━\n다음은 후속 RP 연속성에 직접 영향을 줄 경우 우선 보존한다.\n\n* 현재 관계와 결정적 관계 전환\n* 사건의 핵심 원인과 최종 결과\n* 현재 행동에 영향을 주는 중요한 선택\n* 비밀·거짓말·은폐\n* 중요한 정보격차\n* KNOWS / KNOWS X\n* 현재 유효한 약속·계약·조건·금지\n* 미해결 복선\n* 생사 변화\n* 신분·소속·거주 변화\n* 지속되는 부상·후유증\n* 능력 변화·제약\n* 현재 유효한 세계관 규칙\n* 중요 NPC의 결정적 개입\n* 현재도 의미가 있는 물건·증거\n* 실패가 후속 행동에 영향을 주는 사건\n* 사용자 확정 설정\n* 진행 중인 조사·분쟁·위기\n* 후속 회상에서 반드시 구분되어야 하는 중요 최초 경험\n\n여기서 `보존한다`는 **별도 슬롯으로 유지한다는 뜻이 아니다.**\n\n다른 기억 안에 넣어도 사실을 정확히 복원할 수 있다면 병합한다.\n\n━━━━━━━━━━━━━━━━━━━━\n7. 적극적으로 삭제·축소할 정보\n━━━━━━━━━━━━━━━━━━━━\n다음은 현재 연속성에 영향이 없다면 2차에서 적극적으로 삭제한다.\n\n* 이동 과정\n* 식사 메뉴\n* 복장 세부\n* 장식·배경\n* 분위기 묘사\n* 사소한 시각\n* 반복 감정\n* 반복 대사\n* 전투·경기·행동의 세부 동작\n* 일회성 소품\n* 완전히 종료된 일시 상태\n* 중요하지 않은 NPC 반응\n* 반복되는 관계 설명\n* 이미 다른 기억에 포함된 배경\n* 결과에 영향 없는 준비 과정\n* 계획 후 실제 실행으로 대체된 중간 상태\n* 이미 해결된 오해의 세부 과정\n* 반복되는 성적 패턴\n* 선정적 수사\n* 반복 자극\n* 후속 영향 없는 체위·횟수·미세 행동\n\n1차에서 독립 기억으로 존재한다는 사실 자체는 보존 이유가 아니다.\n\n━━━━━━━━━━━━━━━━━━━━\n8. 병합 판단 기준\n━━━━━━━━━━━━━━━━━━━━\n다음 중 하나 이상이 맞으면 병합을 우선 검토한다.\n\n### 8-1. 같은 원인에서 시작됨\n\n예:\n질투 → 갈등 → 대화 → 합의\n\n### 8-2. 같은 목표를 향함\n\n예:\n조사 시작 → 단서 확보 → 범인 확인\n\n### 8-3. 같은 관계 아크임\n\n예:\n호감 → 첫 키스 → 갈등 → 관계 정의\n\n### 8-4. 같은 비밀의 변화 과정임\n\n예:\n비밀 발생 → 은폐 → 의심 → 공개\n\n### 8-5. 같은 약속·계약의 변화 과정임\n\n예:\n제안 → 수락 → 이행\n\n### 8-6. 같은 부상·상태의 변화 과정임\n\n예:\n부상 → 치료 → 재활 → 회복\n\n### 8-7. 같은 능력·세계관 규칙을 설명함\n\n발동 사례가 여러 날짜에 나뉘었더라도 하나의 규칙 기억으로 묶을 수 있다.\n\n### 8-8. 같은 물건의 생애주기임\n\n예:\n획득 → 전달 → 사용 → 반환\n\n### 8-9. 이전 상태와 최신 상태 관계임\n\n예:\n불신 → 화해\n미확정 → 확정\n부상 → 회복\nKNOWS X → 전달 완료\n\n### 8-10. 한 기억을 없애고 내용을 다른 기억에 넣어도 복원이 가능함\n\n이 경우 별도 슬롯은 제거한다.\n\n━━━━━━━━━━━━━━━━━━━━\n9. 우선 병합 대상\n━━━━━━━━━━━━━━━━━━━━\n다음은 25개 이하로 줄일 때 가장 먼저 병합한다.\n\n* 같은 인물 관계에서 연속된 관계 변화\n* 같은 갈등의 발생·심화·해결\n* 같은 비밀의 생성·은폐·발각\n* 같은 약속의 제안·수락·이행\n* 같은 조사·작전의 준비·실행·결과\n* 같은 부상의 발생·치료·회복\n* 같은 능력의 발견·검증·현재 규칙\n* 같은 신분·소속·거주 변화\n* 같은 물건의 획득·사용·반환\n* 오래된 상태와 이를 대체한 최신 상태\n* 여러 슬롯에서 반복되는 동일 관계 설명\n* 여러 슬롯에 반복되는 동일 KNOWS / KNOWS X\n* 하나의 원인에서 이어진 서로 다른 날짜의 사건\n* 서로를 이해하기 위해 결국 함께 읽어야 하는 기억\n\n**같은 날짜인지 여부는 병합 기준이 아니다.**\n\n━━━━━━━━━━━━━━━━━━━━\n10. 별도 슬롯 유지 기준\n━━━━━━━━━━━━━━━━━━━━\n다음은 다른 기억에 병합하면 핵심 사실이 실제로 왜곡되거나 복원 불가능해지는 경우에만 별도 슬롯으로 유지한다.\n\n* 전혀 다른 서사 아크\n* 서로 직접 연결되지 않는 별개의 인물 관계\n* 독립적으로 적용되는 핵심 세계관 규칙\n* 현재 별도로 진행 중인 중대한 미해결 위기\n* 병합하면 KNOWS / KNOWS X가 뒤섞이는 비밀\n* 병합하면 서로 다른 사건의 원인과 결과가 혼동되는 경우\n* 다른 기억에 넣으면 중요한 최초 경험의 실제 내용이 무엇인지 알 수 없게 되는 경우\n* 후속 RP에서 별도로 구분하지 않으면 명백한 정합성 오류가 발생하는 경우\n\n다음 사유만으로 별도 슬롯을 유지하지 않는다.\n\n* 중요한 사건임\n* 인상적인 장면임\n* 날짜가 다름\n* 첫 경험임\n* 검색 가치가 있음\n* 제목 키워드가 다름\n* 1차에서 별도 기억이었음\n* 기존 2차에서도 이미 별도 기억이었음\n\n검색성은 가능한 한 **제목 키워드와 본문 안의 고유명사·사건명**으로 해결한다.\n\n━━━━━━━━━━━━━━━━━━━━\n11. 검색성과 슬롯 수의 우선순위\n━━━━━━━━━━━━━━━━━━━━\n2차에서는 검색성을 위해 슬롯을 무조건 분리하지 않는다.\n\n하나의 병합 기억에서도 다음 방법으로 검색성을 유지할 수 있다.\n\n* 제목 전체 20자 안에서 서로 다른 핵심 키워드를 가능한 한 많이 배치\n* 본문에 인물명·사건명·장소명·능력명·물건명 직접 표기\n* 여러 날짜가 실제 사건 이해에 필요하면 본문 안에서 필요한 날짜만 자연스럽게 언급\n* 변화 전후 상태를 짧게 함께 기록\n\n`별도 슬롯이 있어야만 검색 가능하다`고 자동 판단하지 않는다.\n\n**검색 가능한 하나의 압축 기억 > 검색 가능한 여러 중복 기억**\n\n━━━━━━━━━━━━━━━━━━━━\n12. 현재 상태 우선\n━━━━━━━━━━━━━━━━━━━━\n과거 상태보다 현재까지 이어진 최종 상태를 우선한다.\n\n예:\n\n`의식불명 → 회복`\n→ 회복을 최종 상태로 보존하고, 의식불명은 회복 원인 이해에 필요한 만큼만 남긴다.\n\n`미확정 약속 → 실제 이행`\n→ 이행 결과를 중심으로 병합한다.\n\n`부상 → 치료 → 재활 → 복귀`\n→ 별도 4슬롯으로 남기지 않고 부상 아크 하나로 압축할 수 있다.\n\n`비밀 → 공개`\n→ 현재 모두가 아는 사실이라면 과거 KNOWS X를 별도 슬롯으로 유지하지 않고 공개 과정과 현재 인지 상태를 함께 기록한다.\n\n단, 과거 사건 자체가 현재 행동의 직접 원인이라면 원인을 삭제하지 않는다.\n\n━━━━━━━━━━━━━━━━━━━━\n13. 계획·약속과 실제 결과\n━━━━━━━━━━━━━━━━━━━━\n다음을 엄격히 구분한다.\n\n* 계획\n* 제안\n* 약속\n* 수락\n* 실행\n* 완료\n* 실패\n* 취소\n* 미확정\n\n`하고 싶다고 말함` ≠ `합의`\n\n`초대함` ≠ `실제 참석`\n\n`조사 예정` ≠ `범인 확인`\n\n`성관계를 제안함` ≠ `실제 성관계 발생`\n\n이후 실제 결과가 발생했다면 계획 단계는 독립 슬롯으로 유지하지 말고 결과 기억에 흡수한다.\n\n단, 계획 자체가 이후 갈등의 직접 원인이 된 경우 필요한 만큼 보존한다.\n\n━━━━━━━━━━━━━━━━━━━━\n14. 정보격차\n━━━━━━━━━━━━━━━━━━━━\n캐릭터가 직접 보거나 듣거나 확립된 경로로 전달받은 사실만 KNOWS로 처리한다.\n\n자동 공유 금지:\n\n* PRIVATE 장면\n* 다른 장소 사건\n* OOC 정보\n* 상대 속마음\n* AI 서술자의 설명\n* 전달 근거 없는 기억·원인\n* 특수 능력의 확인 범위를 넘어선 정보\n\n정보격차가 현재도 중요한 경우 보존한다.\n\n이미 정보가 전달되어 격차가 해소됐다면 과거 KNOWS X를 별도 슬롯으로 유지하지 않고 다음처럼 한 기억 안에서 갱신한다.\n\n`초기에는 A만 알고 B는 몰랐으나 이후 B에게 전달됨.`\n\n즉 정보격차도 **변화 과정 전체를 여러 슬롯로 쪼개지 않고 최신 상태까지 병합**한다.\n\n━━━━━━━━━━━━━━━━━━━━\n15. 관계 단계\n━━━━━━━━━━━━━━━━━━━━\n아래는 서로 동일하지 않다.\n\n* 호감 ≠ 연애\n* 질투 ≠ 사랑\n* 보호 ≠ 소유\n* 고백 ≠ 수락\n* 상호 호감 ≠ 공식 연애\n* 키스 ≠ 연애 확정\n* 성관계 ≠ 연애 확정\n* 동거 ≠ 혼인\n* 약혼 ≠ 사랑\n* 혼인 의향 ≠ 합의\n\n로그에서 실제로 확정된 단계까지만 기록한다.\n\n관계의 과거 단계가 여러 기억에 나뉘어 있다면 현재 단계에 도달한 핵심 전환만 남겨 하나의 관계 아크로 병합할 수 있다.\n\n━━━━━━━━━━━━━━━━━━━━\n16. 친밀·성적 사건\n━━━━━━━━━━━━━━━━━━━━\n성적 사건은 다른 핵심 관계 사건과 동일하게 실제 발생 사실을 보존한다.\n\n2차의 목적은 선정적인 재묘사가 아니라 다음을 복원 가능하게 유지하는 것이다.\n\n* 누가 참여했는지\n* 무엇이 처음이었는지\n* 실제 어떤 핵심 행위가 있었는지\n* 삽입 여부와 필요한 부위\n* 중요한 절정·사정 결과\n* 신체여파\n* 관계 변화\n* 직후 행동\n* 정보격차\n\n원문에 명시된 구체적 행위가 중요하면 다음과 같은 직접 행위명을 사용할 수 있다.\n\n* 키스\n* 구강성교 / 오럴\n* 질 삽입\n* 항문 삽입\n* 손가락 삽입\n* 클리토리스 자극\n* 유두 자극\n* G스팟 자극\n* 성기 자극\n* 절정 / 오르가슴\n* 사정\n* 질내사정\n* 항문 내 사정\n* 구강 내 사정\n* 체외사정\n\n`성적 관계를 가졌다`, `친밀한 시간을 보냈다` 같은 포괄어만 사용해 실제 핵심 행위를 지우지 않는다.\n\n단, 원문보다 더 노골적인 내용을 새로 만들지 않는다.\n\n━━━━━━━━━━━━━━━━━━━━\n17. 성적 사건 병합 원칙\n━━━━━━━━━━━━━━━━━━━━\n**첫 키스·첫 성경험·첫 삽입·첫 특정 행위라는 이유만으로 자동으로 별도 슬롯을 만들지 않는다.**\n\n중요한 최초 경험은 반드시 사실로 보존하되, 같은 관계 아크의 다른 사건 안에 정확히 넣을 수 있으면 병합한다.\n\n예:\n\n`첫 키스`\n`첫 구강성교`\n`직후 귀가`\n`다음날 관계 갈등`\n\n이 모두 하나의 연속 관계 전환 아크라면 1~2개의 기억으로 압축할 수 있다.\n\n병합 후에도 다음을 확인할 수 있어야 한다.\n\n* 실제 무엇을 했는지\n* 무엇이 처음이었는지\n* 삽입이 있었는지\n* 중요한 결과가 무엇이었는지\n* 이후 관계에 어떤 영향을 줬는지\n* 누가 알고 누가 모르는지\n\n이 정보가 살아 있으면 별도 성적 사건 슬롯을 유지할 필요가 없다.\n\n반대로 다른 기억에 넣으면 위 사실이 실제로 사라지거나 잘못 연결되는 경우에만 분리한다.\n\n동일한 성적 패턴이 반복됐고 다음 변화가 없다면 추가 슬롯을 만들지 않는다.\n\n* 새로운 최초 경험\n* 새로운 취향 확인\n* 관계 단계 변화\n* 중요한 신체여파\n* 정보격차 변화\n* 후속 갈등·약속의 발생\n\n━━━━━━━━━━━━━━━━━━━━\n18. 성적 사실 정확성\n━━━━━━━━━━━━━━━━━━━━\n성적 접촉이 있었다고 자동으로 삽입 성관계가 있었다고 쓰지 않는다.\n\n실제 삽입이 있었다면 단순 `성적 접촉`으로 축소하지 않는다.\n\n예:\n\n`구강성교는 있었으나 질·항문 삽입은 없었다.`\n\n`질 삽입 성관계가 발생했다.`\n\n최초 경험은 확인된 범위까지만 기록한다.\n\n`두 사람 사이의 첫 키스` ≠ `생애 첫 키스`\n\n한 번의 반응만으로 고정 취향을 확정하지 않는다.\n\n취향·선호는 다음 중 하나가 있을 때 기록한다.\n\n* 직접 언급\n* 반복 선택\n* 명시적 요청\n* 후속 재언급\n* 사용자 확정 설정\n\n성적 행위만으로 사랑·연애·독점·화해·용서 등을 자동 확정하지 않는다.\n\n━━━━━━━━━━━━━━━━━━━━\n19. 성적 사건의 결과·애프터케어\n━━━━━━━━━━━━━━━━━━━━\n다음은 후속 관계나 신체상태에 영향을 줄 경우 보존한다.\n\n* 통증\n* 출혈\n* 피로\n* 부상\n* 행동 제한\n* 씻김·닦아줌\n* 물·약 제공\n* 부축\n* 함께 잠듦 / 따로 잠듦\n* 숙박 제안\n* 귀가\n* 회피\n* 후회\n* 사과\n* 관계 정의\n\n단순 반복이나 분위기 묘사는 삭제한다.\n\n성적 사건의 참여자는 직접 경험으로 처리한다.\n\n현장을 본 인물만 직접목격이다.\n\n함께 떠나는 장면만 본 인물은 이후 성행위까지 자동으로 알지 못한다.\n\nPRIVATE 욕망·후회·판타지는 상대에게 자동 전달되지 않는다.\n\n━━━━━━━━━━━━━━━━━━━━\n20. 부상·건강 상태\n━━━━━━━━━━━━━━━━━━━━\n후속 RP에 영향을 주는 상태만 우선 보존한다.\n\n* 큰 부상\n* 흉터\n* 후유증\n* 지속 질환\n* 장기 쇠약\n* 반복 발작\n* 행동 제약\n* 지속 통증\n* 이후 행동에 영향을 주는 공포·트라우마\n\n부상 발생·치료·재활·회복이 여러 슬롯으로 나뉘었다면 하나의 상태 변화 아크로 병합한다.\n\n완치 근거가 없다면 임의로 완치 처리하지 않는다.\n\n반대로 회복이 명확히 확인됐다면 오래된 부상 상태를 현재 상태처럼 남기지 않는다.\n\n━━━━━━━━━━━━━━━━━━━━\n21. 능력·세계관 규칙\n━━━━━━━━━━━━━━━━━━━━\n능력·마법·특수 규칙은 이름만 남기지 말고 후속 RP에 필요한 조건을 보존한다.\n\n필요 시:\n\n* 발동 조건\n* 효과\n* 범위\n* 한계\n* 부작용\n* 비용\n* 예외\n* 해제 조건\n* 확인된 사례\n* 미확정 부분\n\n같은 능력의 여러 실험·발동 사례가 각각 기억으로 존재한다면 규칙 하나를 설명하기 위한 증거로 병합한다.\n\n사례 하나를 일반 법칙으로 확대하지 않는다.\n\n━━━━━━━━━━━━━━━━━━━━\n22. 중요 물건\n━━━━━━━━━━━━━━━━━━━━\n중요 물건은 필요 시 다음을 추적한다.\n\n* 누가 줬는지\n* 왜 줬는지\n* 현재 소유자\n* 사용·소비 여부\n* 반환 여부\n* 현재 의미\n\n획득·전달·사용·반환이 각각 슬롯으로 존재한다면 하나의 물건 아크로 병합한다.\n\n일회성 소품은 삭제한다.\n\n━━━━━━━━━━━━━━━━━━━━\n23. 복잡한 사건 압축\n━━━━━━━━━━━━━━━━━━━━\n작전·정치·사업·조사·경기·사회적 사건 등은 다음 우선순위로 압축한다.\n\n`목적 → 결정적 선택 → 결과 → 중요 인물/정보/물건 → 피해 → 후속 영향 → 현재 상태`\n\n세부 실행 과정은 과감히 줄인다.\n\n예:\n\n`사업 시작 → 첫 거래 → 추가 거래 → 성장 → 사회적 인정 → 위기 → 현재 상태`\n\n가 여러 기억으로 나뉘어 있으면 최종 1~2개의 사업 아크로 압축한다.\n\n━━━━━━━━━━━━━━━━━━━━\n24. 중복 제거\n━━━━━━━━━━━━━━━━━━━━\n같은 사실을 여러 기억에 상세하게 반복하지 않는다.\n\n가장 적합한 기억 하나에 상세히 남기고 다른 기억에서는 필요하면 최소 연결만 둔다.\n\n특히 다음 반복을 제거한다.\n\n* 동일한 관계 정의\n* 동일한 능력 설명\n* 동일한 비밀\n* 동일한 KNOWS / KNOWS X\n* 동일한 부상 상태\n* 동일한 약속\n* 동일한 최초 경험 설명\n* 동일한 사건의 결론\n* 동일한 현재 상태\n\n한 사실이 여러 기억을 이해하는 데 필요하다는 이유만으로 매번 전체 설명을 복제하지 않는다.\n\n━━━━━━━━━━━━━━━━━━━━\n25. 날짜 규칙\n━━━━━━━━━━━━━━━━━━━━\n장기기억의 대표 월·일은 제목에만 표기한다.\n\n기본 제목:\n\n`[MM.DD|키워드·키워드]`\n\n본문에서는 제목에 이미 표시된 대표 월·일을 첫머리에 다시 반복하지 않는다.\n\n연도 미확인:\n\n`[09.11|고아소문·렉스]`\n`웨스트브룩 고교에서 금발 여학생이 샤샤를 ‘고아’라 소문내 싸움이 벌어졌다.`\n\n연도 확인:\n\n`[09.11|고아소문·렉스]`\n`2015년 웨스트브룩 고교에서 금발 여학생이 샤샤를 ‘고아’라 소문내 싸움이 벌어졌다.`\n\n규칙:\n\n* 제목의 `MM.DD`가 해당 기억의 대표 날짜다.\n* 본문 첫머리에 `MM/DD`, `MM.DD`, `MM월 DD일`을 다시 쓰지 않는다.\n* 연도가 확인된 경우에만 본문 맨 앞에 `YYYY년`을 1회 표기한다.\n* 연도가 불명확하면 임의 생성하지 않는다.\n* 같은 연도에 속한 사건이라도 모든 문장이나 날짜마다 연도를 반복하지 않는다.\n* 하나의 2차 기억에 여러 날짜의 사건이 병합된 경우에도 대표 날짜는 제목에 하나만 둔다.\n* 여러 날짜의 구분이 실제 사건 순서·정보격차·관계 변화를 이해하는 데 필요한 경우에만 본문 안에서 필요한 날짜를 자연스럽게 언급한다.\n* 날짜 구분이 필요하지 않다면 여러 날짜를 기계적으로 나열하지 않는다.\n* 서로 다른 연도에 걸친 사건을 하나의 기억으로 병합해야 한다면 연도 변화가 발생하는 지점만 명확히 표시한다.\n* 원문의 연도·연호·달력 체계가 불확실하면 새로 계산하거나 환산하지 않는다.\n━━━━━━━━━━━━━━━━━━━━\n26. 제목 규칙\n━━━━━━━━━━━━━━━━━━━━\n모든 2차 장기기억 제목은 대표 월·일과 검색용 핵심 키워드로 작성하며, **제목 전체를 반드시 20자 이내**로 제한한다.\n\n기본 형식:\n\n`[MM.DD|키워드·키워드]`\n\n또는 20자 안에서 더 많은 핵심 키워드를 넣을 수 있다면:\n\n`[MM.DD|키워드·키워드·키워드·…]`\n\n[20자 절대 제한]\n\n* 제목 전체는 **1~20자만 허용**한다.\n* `[`, `]`, `MM.DD`, `|`, `·`, 공백 등 제목에 실제 출력되는 모든 문자를 20자 계산에 포함한다.\n* **21자 이상은 무조건 형식 오류이며 출력 금지**다.\n* 제목 작성 후 반드시 실제 글자수를 다시 세고, 20자를 넘으면 출력 전에 줄인다.\n* 20자를 넘는 제목을 중요도·검색성·정보량을 이유로 예외 허용하지 않는다.\n\n[키워드 최대화]\n\n* 키워드 개수를 2~4개로 제한하지 않는다.\n* **20자 제한 안에서 검색 가치가 있는 핵심 키워드를 가능한 한 많이 넣는다.**\n* 병합된 2차 기억은 여러 1차 기억의 검색 경로를 잃기 쉬우므로 남는 글자 공간을 적극적으로 활용한다.\n* 핵심 인물·사건·관계 변화·장소·능력·물건·상태·최초 경험 가운데 실제 검색 가능성이 높은 단어를 우선한다.\n* 짧게 줄일 수 있는 키워드는 의미를 훼손하지 않는 범위에서 압축하여 더 많은 검색 경로를 확보한다.\n* 같은 의미의 유사어·중복어로 글자수를 채우지 않는다.\n* 문장형 제목·조사·접속어·서술어를 피하고 명사·고유명사 중심으로 압축한다.\n* 중요한 검색어가 빠져 있는데 제목이 20자보다 짧다면 남는 공간을 적극 활용한다.\n* 첫 경험이 병합 기억 안에 있더라도 검색 가치가 높고 20자 안에 들어가면 제목 키워드로 포함할 수 있다.\n\n날짜 규칙:\n\n* 대표 월·일은 제목에 1개만 둔다.\n* 연도가 확인되어도 제목은 `[MM.DD|키워드]` 형식을 유지한다.\n* 확인된 연도는 제목이 아니라 본문 맨 앞에 `YYYY년`으로 1회 표기한다.\n* 연도가 불명확하면 임의로 생성하지 않는다.\n\n검색성을 위해 별도 슬롯부터 만들지 않는다. 먼저 **20자 제목 안의 키워드 밀도**를 최대한 높여 검색성을 확보한다.\n\n━━━━━━━━━━━━━━━━━━━━\n27. 본문 길이\n━━━━━━━━━━━━━━━━━━━━\n각 2차 장기기억 본문은 반드시 **290~300자**로 작성한다.\n\n[290~300자 절대 제한]\n\n* **289자 이하 금지**\n* **301자 이상 금지**\n* 290~300자는 권장 범위가 아니라 **필수 출력 조건**이다.\n* 제목 글자수는 본문 290~300자 계산에 포함하지 않는다.\n* **본문 글자수는 공백·문장부호·따옴표·괄호·특수기호·숫자·영문·한글·연도 표기 등 본문에 실제 출력되는 모든 문자를 포함하여 계산한다.**\n* 띄어쓰기 1칸도 1자로 계산하며, 쉼표·마침표·따옴표·괄호·슬래시·가운뎃점 등 문장부호와 기호도 각각 실제 출력 문자 수에 포함한다.\n* `YYYY년`처럼 본문에 출력되는 연도와 그 뒤 공백도 모두 본문 글자수에 포함한다.\n* 제목, 코드블록 기호, 기억 블록 사이의 빈 줄은 본문 글자수에 포함하지 않는다.\n* **본문 자체의 실제 출력 문자열만 세었을 때 290~300자여야 한다. 289자 이하는 미달, 301자 이상은 초과로 판정하여 출력 금지한다.**\n* 본문 맨 앞에 `YYYY년`이 포함된 경우 해당 연도 표기는 본문 글자수에 포함한다.\n* 제목에 이미 존재하는 대표 월·일을 글자수를 채우기 위해 본문 첫머리에 반복하지 않는다.\n* 모든 블록은 출력 직전 실제 본문 글자수를 다시 계산한다.\n* 290자 미만 또는 300자 초과인 블록은 압축 미완성으로 판정하고 출력 전에 반드시 수정한다.\n* 정보량이 많아도 300자를 초과한 상태로 출력하지 않는다.\n* 정보량이 적어도 290자 미만인 상태로 출력하지 않는다.\n\n본문이 290자 미만이면 같은 서사 아크 안에서 원본 1차 기억에 실제 존재하는 다음 정보를 우선 보강한다.\n\n* 발단·원인\n* 핵심 전환\n* 최종 결과\n* 현재 영향\n* 관계 변화\n* 비밀·정보격차\n* KNOWS / KNOWS X\n* 약속·조건\n* 지속 상태\n* 중요한 능력 규칙\n* 미해결 복선\n* 결정적 선택\n* 중요 최초 경험\n* 실제 핵심 성행위\n* 필요한 삽입 여부\n* 중요한 신체여파\n* 현재 상태\n\n본문이 300자를 초과하면 다음부터 우선 압축·삭제한다.\n\n1. 분위기\n2. 복장\n3. 장소 세부\n4. 반복 감정\n5. 반복 대사\n6. 이동\n7. 중간 과정\n8. 이미 다른 기억에 있는 배경\n9. 후속 영향 없는 세부 행동\n10. 반복되는 성적 자극·체위·횟수\n11. 이미 제목 키워드만으로 충분히 식별되는 중복 설명\n\n마지막까지 보존:\n\n* 최종 결과\n* 관계 변화\n* 비밀·정보격차\n* 약속·조건\n* 지속 상태\n* 중요 능력 규칙\n* 미해결 복선\n* 결정적 선택\n* 중요 최초 경험\n* 실제 핵심 성행위\n* 필요한 삽입 여부\n* 중요한 신체여파\n* 현재 상태\n\n300자 안에 모든 1차 세부를 보존하려 하지 않는다.\n\n**2차는 1차의 세부를 무손실 복제하는 단계가 아니다.**\n\n후속 RP에 필요한 핵심 연속성을 290~300자 안에 고밀도로 재구성한다.\n\n━━━━━━━━━━━━━━━━━━━━\n28. 25개 초과 시 강제 재압축 절차\n━━━━━━━━━━━━━━━━━━━━\n1차 기억이 26개 이상인데 1차 병합 결과가 25개를 초과하면 아래 절차를 반드시 수행한다.\n\n1단계.\n동일 인물 관계의 기억을 다시 모은다.\n\n2단계.\n동일 갈등·목표·비밀·약속·능력·부상·물건의 기억을 다시 모은다.\n\n3단계.\n원인과 결과가 따로 나뉜 기억을 합친다.\n\n4단계.\n이전 상태와 최신 상태가 따로 존재하면 하나로 합친다.\n\n5단계.\n해결된 중간 사건을 현재 결과 기억에 흡수한다.\n\n6단계.\n독립 검색 가치만을 이유로 분리된 기억을 합친다.\n\n7단계.\n첫 경험·성적 사건 중 관계 아크에 흡수 가능한 기억을 합친다.\n\n8단계.\n본문에서 반복되는 배경·관계 설명을 제거하여 더 많은 핵심 사실을 한 슬롯에 넣는다.\n\n9단계.\n제목은 전체 20자를 넘지 않게 유지하면서 남는 공간에 검색 키워드를 최대한 추가한다.\n\n10단계.\n각 본문을 290~300자로 맞추고, 289자 이하·301자 이상 블록을 모두 재작성한다.\n\n11단계.\n다시 총 슬롯 수를 센다.\n\n25개를 초과하면 1~11단계를 다시 수행한다.\n\n`더 이상 합칠 수 없어 보인다`는 이유로 26개 이상을 출력하지 않는다.\n\n━━━━━━━━━━━━━━━━━━━━\n29. 추가 압축 중 금지사항\n━━━━━━━━━━━━━━━━━━━━\n슬롯 수를 줄이기 위해 다음을 해서는 안 된다.\n\n* 서로 무관한 사건을 한 기억에 무작위로 나열\n* 인물 관계를 혼합해 누가 누구와 겪은 사건인지 모르게 만들기\n* KNOWS / KNOWS X 삭제\n* 미확정 정보를 확정\n* 계획을 실제 결과로 변경\n* 관계 단계 과장\n* 최초 경험 범위 확대\n* 삽입 여부 왜곡\n* 중요한 사건 자체 삭제\n* 현재 진행 중인 위기 삭제\n* 사용자 확정 설정 삭제\n* 서로 다른 세계관 규칙을 하나로 오인하게 병합\n* 원문에 없는 사실 창작\n\n압축은 **정보를 재배치·축약하는 것**이지 사실을 바꾸는 것이 아니다.\n\n━━━━━━━━━━━━━━━━━━━━\n30. 이어서 작업할 때\n━━━━━━━━━━━━━━━━━━━━\n사용자가 이후 새로운 1차 장기기억을 보내며\n\n`이어서`\n`추가`\n`계속`\n`2차 압축`\n`더 압축`\n\n등을 요청하면 새 기억만 처리하지 않는다.\n\n반드시:\n\n`기존 최신 2차 전체본 + 새 1차 기억`\n\n을 함께 다시 검토한다.\n\n새 기억이 기존 아크와 연결되면 기존 2차 기억을 갱신·확장한다.\n\n신규 슬롯 추가가 필요한 경우에도 전체 슬롯 수를 다시 계산한다.\n\n기존 2차가 24개인데 신규 기억으로 27개가 되었다면 3개를 그대로 추가하지 않는다.\n\n기존 전체를 재병합해 다시 **20~25개** 안으로 맞춘다.\n\n오래된 상태가 해결되었다면 기존 기억도 갱신한다.\n\n따라서 누적 2차본은 매번 현재까지의 최신 정합본이어야 한다.\n\n사용자가 명시적으로 `새로 추가된 것만 줘`라고 요청한 경우에만 증분 결과를 출력한다.\n\n━━━━━━━━━━━━━━━━━━━━\n31. 출력 형식\n━━━━━━━━━━━━━━━━━━━━\n각 기억은 다음 형식을 사용한다.\n\n연도 미확인:\n\n`[MM.DD|키워드·키워드]`\n`내용...`\n\n연도 확인:\n\n`[MM.DD|키워드·키워드]`\n`YYYY년 내용...`\n\n예:\n\n`[09.11|고아소문·렉스]`\n`웨스트브룩 고교에서 금발 여학생이 샤샤를 ‘고아’라 소문내 싸움이 벌어졌다.`\n\n연도가 확인된 경우:\n\n`[09.11|고아소문·렉스]`\n`2015년 웨스트브룩 고교에서 금발 여학생이 샤샤를 ‘고아’라 소문내 싸움이 벌어졌다.`\n\n금지:\n\n`[09.11|고아소문·렉스]`\n`09/11 웨스트브룩 고교에서……`\n\n규칙:\n\n* 제목 전체는 실제 출력 문자를 모두 포함해 반드시 20자 이내\n* 제목은 20자 안에서 검색 가치가 있는 키워드를 가능한 한 많이 포함\n* 본문은 반드시 290~300자\n* 본문 290~300자는 공백·문장부호·따옴표·괄호·특수기호·숫자·영문·한글·연도 표기를 포함한 **실제 출력 문자열 기준**이다.\n* 21자 이상 제목, 289자 이하 본문, 301자 이상 본문은 출력 금지\n* 제목과 본문 사이 빈 줄 없음\n* 제목의 대표 월·일을 본문 첫머리에 반복하지 않음\n* 연도가 확인된 경우 본문 맨 앞에 `YYYY년`만 1회 표기\n* 연도가 불명확하면 연도 없이 바로 내용을 시작\n* 여러 날짜가 병합된 경우 날짜 구분이 사건 이해에 필요한 부분에서만 필요한 날짜를 자연스럽게 언급\n* 본문은 한 문단\n* 기억 블록 사이에만 빈 줄 1줄\n* ID 제거\n* 설명·평가·작업과정 출력 금지\n\n기본 모드의 최종 응답은 복붙 가능한 **최신 2차 장기기억 전체본 하나의 코드블록**만 출력한다.\n\n코드블록 밖에 설명·인사·완료 문구를 붙이지 않는다.\n━━━━━━━━━━━━━━━━━━━━\n33. 최종 비공개 검수\n━━━━━━━━━━━━━━━━━━━━\n출력 전 반드시 내부적으로 확인한다.\n\n[개수]\n\n* 입력 1차 기억이 26개 이상인가\n* 그렇다면 최종 결과가 20~25개인가\n* 25개를 초과하지 않는가\n* 25개를 초과했는데 압축 완료로 처리하지 않았는가\n\n[병합]\n\n* 1차의 블록 경계를 그대로 보존하지 않았는가\n* 같은 관계 아크가 여러 슬롯으로 불필요하게 나뉘지 않았는가\n* 날짜가 다르다는 이유만으로 분리하지 않았는가\n* 원인·전개·결과가 별도 슬롯으로 남지 않았는가\n* 이전 상태와 최신 상태가 각각 슬롯을 차지하지 않았는가\n* 같은 비밀·약속·부상·능력·물건·갈등이 반복되지 않는가\n* 검색성만을 이유로 별도 슬롯을 유지하지 않았는가\n* 첫 경험이라는 이유만으로 자동 분리하지 않았는가\n\n[정합성]\n\n* 날짜·연도가 맞는가\n* 사용자 정정이 반영됐는가\n* 계획과 결과가 구분됐는가\n* 관계 단계를 과장하지 않았는가\n* 정보격차가 유지됐는가\n* PRIVATE/OOC를 캐릭터 지식으로 바꾸지 않았는가\n* 미확정 사실을 확정하지 않았는가\n* 중요 약속·복선·증거가 살아 있는가\n* 현재 상태가 최신값인가\n\n[제목·본문 길이]\n\n* 모든 제목이 실제 출력 문자를 전부 포함해 **20자 이내**인가\n* 21자 이상 제목이 하나라도 남아 있지 않은가\n* 각 제목에 20자 제한 안에서 검색 가치가 있는 핵심 키워드를 가능한 한 많이 넣었는가\n* 제목이 20자보다 짧은데 추가 가능한 중요 검색 키워드를 불필요하게 빠뜨리지 않았는가\n* 모든 본문이 **290~300자**인가\n* 289자 이하 또는 301자 이상 본문이 하나라도 남아 있지 않은가\n* 공백·문장부호·따옴표·괄호·특수기호·숫자·영문·한글·`YYYY년` 등 본문에 실제 출력된 모든 문자를 포함해 계산했는가\n* 제목·코드블록 기호·블록 사이 빈 줄을 본문 글자수에 잘못 포함하지 않았는가\n* 연도 표기가 있는 경우 해당 `YYYY년`까지 포함하여 290~300자인가\n* 글자수를 맞추려고 제목 날짜를 본문에 반복하거나 원문에 없는 내용을 추가하지 않았는가\n\n[날짜·형식]\n\n* 제목에 대표 `MM.DD`가 정확히 들어갔는가\n* 제목의 월·일을 본문 첫머리에 다시 반복하지 않았는가\n* `[09.11|…]` 다음 본문을 `09/11 …`처럼 시작하지 않았는가\n* 연도가 확인된 경우 본문 맨 앞에 `YYYY년`을 1회 표기했는가\n* 연도가 불명확한데 임의로 생성하지 않았는가\n* 여러 날짜를 병합한 기억에서 필요 없는 날짜를 기계적으로 나열하지 않았는가\n* 서로 다른 연도가 실제로 존재할 때 필요한 지점에서 연도 변화가 구분되는가\n\n[성적 사건]\n\n* 포괄어로 핵심 성행위를 지우지 않았는가\n* 필요한 실제 행위가 살아 있는가\n* 삽입 여부가 정확한가\n* 첫 경험 범위를 확대하지 않았는가\n* 중요한 절정·사정·신체여파가 필요한 경우 살아 있는가\n* 성행위만으로 사랑·연애·독점을 확정하지 않았는가\n* 한 번의 반응으로 취향을 일반화하지 않았는가\n* 중요한 귀가·회피·후회·사과·애프터케어가 필요한 경우 살아 있는가\n* 성적 사실의 KNOWS / KNOWS X가 유지됐는가\n* 원문에 없는 성적 디테일을 만들지 않았는가\n* 성적 사건이라는 이유만으로 불필요한 별도 슬롯을 유지하지 않았는가\n\n[정보 밀도]\n\n* 본문에 장면 재현보다 지속 정보가 많은가\n* 1차 세부를 그대로 옮겨 적지 않았는가\n* 하나의 슬롯이 하나의 큰 아크를 담당하는가\n* 여러 1차 기억이 실제로 하나의 2차 기억에 흡수되었는가\n* 삭제된 세부가 후속 RP 정확도에 필요한 정보는 아닌가\n\n하나라도 실패하면 출력 전에 수정한다.\n\n특히 입력 1차 기억이 26개 이상인데 최종 결과가 25개를 초과한 경우에는 다른 검수가 모두 통과해도 최종 출력하지 않고 병합 단계로 돌아간다.\n";
+  const LONG_TERM_FIRST_SHA256 = "2f4e29c59358f529e9ec3efe8b4d5103b1f49893e9bd0de1bb119847b3645506";
+  const LONG_TERM_SECOND_SHA256 = "bd3c7821e50464d52f7491be47b6187eaed65752b1b6fbc59ebcc7cb4851af85";
+
+  // Long-term memory uses Crack summary cards for content and optional room metadata
+  // for coverage, drafts and automation. It never moves manual update checkpoints.
+  const LONG_TERM_LOCK_PREFIX = 'rpcm_long_term_lock_v1:';
+  const LONG_TERM_REFERENCE_LOCK_PREFIX = 'crack_ext_auto_memory_lock_v1:';
+  const longTermRuntime = { roomId:'', turns:[], inventory:[], selected:new Set(), busy:false, lastPoll:0, firstRange:'manual', firstStart:1, firstEnd:0, draftView:'', lastError:'', tab:'auto', externalText:'', search:'', secondSearch:'', pinOnly:false, originFilter:'all' };
+  const longTermOwner = `rpcm-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const LONG_TERM_GUIDE_KEYS = Object.freeze({ first:'장기기억 1차', autoFirst:'장기기억 자동 1차', second:'장기기억 2차 압축', native:'크랙 생성 기억 관리' });
+
+  function longTermReconcileObject(target,source) {
+    for(const key of Object.keys(target))if(!Object.hasOwn(source,key))delete target[key];
+    for(const [key,value] of Object.entries(source)){
+      if(rpcmRoomPlain(value)&&rpcmRoomPlain(target[key]))longTermReconcileObject(target[key],value);
+      else target[key]=rpcmRoomClone(value);
+    }
+    return target;
+  }
+  function longTermInteger(value,fallback,min){const n=Number(value);return value!=null&&Number.isSafeInteger(n)&&n>=min?n:fallback;}
+  const LONG_TERM_NATIVE_BUILTIN=`자동 장기기억 정리 지침
+RP 원문과 사용자 확정 메모를 사실 근거로 삼는다. Crack의 미검증 자동 요약은 저장용 슬롯이며 사실로 믿지 않는다.
+같은 사건이 이어질 때만 OPEN_TAIL을 갱신한다. 원인·행동·결과가 다른 사건은 새 슬롯에 별도 기억으로 남긴다. SEALED 기억과 보호된 사용자 기억은 읽기 전용이다.
+관계 방향, 인지 범위와 정보격차, 날짜, 미해결 조건을 보존한다. 슬롯을 줄이려고 독립 사건을 억지로 합치거나 사실을 누락하지 않는다. 저장 슬롯이 부족하면 WAIT_FOR_SLOT을 반환한다.
+중간 병합은 닫힌 최근 구간만, 전체 압축은 허용된 자동 기억만 대상으로 한다. 원본 삭제는 병합 결과 저장·조회 확인 뒤에만 진행한다.
+출력 형식과 수정 가능한 ID는 작업 패킷에 지정된 계약을 따른다. 제목은 대괄호 포함 20자, 본문은 한 문단 290~300자 이내로 작성한다.`;
+  function longTermState(room) {
+    if (!room.longTermMemory || typeof room.longTermMemory !== 'object') room.longTermMemory = {};
+    const meta = room.longTermMemory;
+    meta.version = 1;
+    if (!meta.firstStage || typeof meta.firstStage !== 'object') meta.firstStage = {};
+    const first = meta.firstStage;
+    first.autoEnabled = false; // RP 원문 자동 생성 기능 삭제. 이전 설정도 실행하지 않습니다.
+    first.autoApply = false; // 기존 초안은 직접 검토하는 경우에만 반영합니다.
+    first.modeRevision = Number(first.modeRevision)||0;
+    first.processedCursor = String(first.processedCursor||'');
+    first.autoIntervalTurns = Math.max(1, Math.min(100, Number(first.autoIntervalTurns) || 20));
+    first.autoBaseline = String(first.autoBaseline || '');
+    first.nativeBaselineIds = Array.isArray(first.nativeBaselineIds)?first.nativeBaselineIds.map(String):[];
+    first.autoCursor = String(first.autoCursor || '');
+    first.manualBaseline = String(first.manualBaseline || '');
+    first.autoStatus = String(first.autoStatus || '대기');
+    first.autoError = String(first.autoError || '');
+    first.autoDraft = first.autoDraft && typeof first.autoDraft === 'object' ? first.autoDraft : null;
+    first.pendingApply = first.pendingApply && typeof first.pendingApply === 'object' ? first.pendingApply : null;
+    first.failedEndKey = String(first.failedEndKey || '');
+    if (!meta.nativeAuto || typeof meta.nativeAuto !== 'object') meta.nativeAuto = {};
+    const native = meta.nativeAuto;
+    native.enabled = native.enabled === true;
+    native.autoApply = typeof native.autoApply==='boolean'?native.autoApply:native.enabled;
+    native.modeRevision = Number(native.modeRevision)||0;
+    native.status = String(native.status || '대기');
+    native.error = String(native.error || '');
+    native.lastInventoryHash = String(native.lastInventoryHash || '');
+    native.nativeHashes = native.nativeHashes && typeof native.nativeHashes === 'object' ? native.nativeHashes : {};
+    native.managedHashes = native.managedHashes && typeof native.managedHashes === 'object' ? native.managedHashes : {};
+    native.userModifiedIds = Array.isArray(native.userModifiedIds) ? native.userModifiedIds.map(String) : [];
+    native.scopeReady = native.scopeReady === true;
+    native.scopeBaselineIds = Array.isArray(native.scopeBaselineIds) ? [...new Set(native.scopeBaselineIds.map(String))] : [];
+    native.scopeStartedAt = String(native.scopeStartedAt || '');
+    native.scopeAnchorKey = String(native.scopeAnchorKey || '');
+    native.scopeAnchorHash = String(native.scopeAnchorHash || '');
+    native.pendingApply = native.pendingApply && typeof native.pendingApply === 'object' ? native.pendingApply : null;
+    native.retryAfter = Number(native.retryAfter) || 0;
+    native.consecutiveFailures = Math.max(0, Number(native.consecutiveFailures) || 0);
+    native.contextCards = Math.max(0,Math.min(20,longTermInteger(native.contextCards,5,0)));
+    native.intervalTurns = longTermInteger(native.intervalTurns,10,1);
+    native.readTurns = longTermInteger(native.readTurns,10,1);
+    native.excludeRecentTurns = longTermInteger(native.excludeRecentTurns,1,0);
+    native.sourceCursor = String(native.sourceCursor||'');
+    native.sourceCursorHash = String(native.sourceCursorHash||'');
+    native.managedOrder = Array.isArray(native.managedOrder)?[...new Set(native.managedOrder.map(String))]:[];
+    native.openTailId = String(native.openTailId||'');
+    native.midSegmentIds = Array.isArray(native.midSegmentIds)?[...new Set(native.midSegmentIds.map(String))]:null;
+    native.mergeEvery = Math.max(1,Math.min(30,longTermInteger(native.mergeEvery,5,1))); // Legacy metadata is kept; scheduling now uses completed RP turns.
+    native.midMergeTurns = Math.max(0,Math.min(100,longTermInteger(native.midMergeTurns,10,0)));
+    native.processedSinceMerge = Math.max(0, Number(native.processedSinceMerge) || 0);
+    native.maxSlots = Math.max(5,Math.min(100,longTermInteger(native.maxSlots,20,5)));
+    native.targetSlots = Math.max(3,Math.min(native.maxSlots,Math.min(100,longTermInteger(native.targetSlots,16,3))));
+    if (!Array.isArray(meta.batches)) meta.batches = [];
+    if (!Array.isArray(meta.protectedIds)) meta.protectedIds = [];
+    if (!Array.isArray(meta.finalCompressedIds)) meta.finalCompressedIds = [];
+    if (!meta.guides || typeof meta.guides !== 'object') meta.guides = {};
+    if (!meta.drafts || typeof meta.drafts !== 'object') meta.drafts = {};
+    return meta;
+  }
+
+  function longTermClearManualPending(room) {
+    const meta = longTermState(room);
+    let cleared = 0;
+    if (meta.drafts.first) { meta.drafts.first = null; cleared++; }
+    if (meta.drafts.externalPacket?.kind === 'first') { meta.drafts.externalPacket = null; cleared++; }
+    return cleared;
+  }
+
+  function longTermGuide(room, key) {
+    const value = longTermState(room).guides[key];
+    if (value && typeof value === 'object' && String(value.text || '').trim()) return String(value.text);
+    return key==='native'?LONG_TERM_NATIVE_BUILTIN:key === 'first' || key === 'autoFirst' ? LONG_TERM_FIRST_BUILTIN : LONG_TERM_SECOND_BUILTIN;
+  }
+  function longTermGuideHash(room, key) { return simpleHash(longTermGuide(room,key)+(key==='native'?'\n'+longTermGuide(room,'first')+'\n'+longTermGuide(room,'second'):'')); }
+  function longTermId(item) { return String(item?.id || item?._id || item?.summaryId || item?.summary_id || ''); }
+  function longTermFingerprint(item) { return simpleHash(`${String(item?.title || '').trim()}\n${String(item?.summary || '').trim()}`); }
+  function longTermProtectedIds(room) {
+    const meta = longTermState(room);
+    return new Set([...meta.protectedIds, ...meta.finalCompressedIds, ...meta.nativeAuto.userModifiedIds, ...(meta.nativeAuto.scopeReady?meta.nativeAuto.scopeBaselineIds:[]), ...meta.batches.filter(batch=>!batch.nativeStorage).flatMap(batch => batch.crackSummaryIds || [])].map(String));
+  }
+  function longTermNative(item, room) {
+    return String(item?.createdBy || '').toLowerCase() === 'assistant' && String(item?.badge || '').trim() !== '추가'
+      && !longTermProtectedIds(room).has(longTermId(item));
+  }
+  function longTermInventoryHash(items) {
+    return simpleHash(items.map(item => `${longTermId(item)}:${longTermFingerprint(item)}`).sort().join('|'));
+  }
+  function longTermFirstUpdateTargets(room, inventory, cards) {
+    const meta=longTermState(room);
+    const generated=new Set(meta.batches.filter(batch=>['auto-first','manual-first'].includes(batch.mode)).flatMap(batch=>batch.crackSummaryIds||[]).map(String));
+    return cards.map(card=>{
+      const matches=inventory.filter(item=>String(item.title||'').trim()===card.title);
+      if(!matches.length)return '';
+      if(matches.length!==1)throw new Error(`같은 제목의 기존 장기기억이 여러 개입니다: ${card.title}`);
+      const id=longTermId(matches[0]);
+      if(!generated.has(id)||meta.protectedIds.includes(id))throw new Error(`기존 사용자·보호 카드와 제목이 겹칩니다: ${card.title}. 직접 확인해 주세요.`);
+      return id;
+    });
+  }
+  function longTermApiBase(room) { return `https://crack-api.wrtn.ai/crack-gen/v3/chats/${encodeURIComponent(apiChatIdOf(room))}`; }
+  function longTermAssertMutationLock(room) {
+    const lock=longTermReadLock(longTermLockKey(room));
+    if(lock?.owner!==longTermOwner||Number(lock.expiresAt)<=Date.now())throw new Error('장기기억 작업 잠금이 만료·변경되었습니다. 서버 변경을 중단합니다.');
+    const external=longTermReadLock(`${LONG_TERM_REFERENCE_LOCK_PREFIX}${apiChatIdOf(room)}`);
+    if(external&&Number(external.expiresAt)>Date.now())throw new Error('다른 장기기억 자동 정리 확장프로그램이 작업 중입니다.');
+  }
+  async function longTermFetch(room, readOptions = null) {
+    const progress=readOptions?.progress,passive=readOptions?.passive===true;
+    // WRPM_REF_REVIEW_TIMING_DIAG_V1: optional GET-only counters, no extra network requests.
+    const diagnostics=readOptions?.diagnostics;
+    const all=progress?[...progress.items]:[],seen=new Set(progress?.seen||[]);let cursor=progress?.cursor||'';
+    const check=()=>{if(state.currentRoom!==room)throw new Error('장기기억 조회 중 방이 바뀌었습니다.');readOptions?.check?.();const budget=readOptions?.referenceBudget;if(budget&&(budget.cancelled||(Number.isFinite(budget.deadline)&&Date.now()>=budget.deadline)))throw Object.assign(new Error('추가 자료 조회 시간 상한에 도달했습니다.'),{code:'RPCM_REFERENCE_BUDGET'});};
+    // WRPM_REF_REVIEW_TIMING_DIAG_V1 BEGIN: total fetch includes per-page processing (GET separately tracked).
+    const entireFetchStarted=diagnostics?performance.now():0;
+    try{
+    check();if(progress?.complete)return all;
+    for (;;) {
+      check();
+      const url = `${longTermApiBase(room)}/summaries?limit=20&type=longTerm&orderBy=newest&filter=all${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
+      // WRPM_REF_REVIEW_TIMING_DIAG_V1 BEGIN: count actual GET elapsed (success or error).
+      const fetchStarted=diagnostics?performance.now():0;
+      let result;
+      try{result=await apiRequest('GET', url,undefined,readOptions);}
+      finally{if(diagnostics){diagnostics.longTermGetMs=(diagnostics.longTermGetMs||0)+performance.now()-fetchStarted;diagnostics.longTermGetRequests=(diagnostics.longTermGetRequests||0)+1;}}
+      // WRPM_REF_REVIEW_TIMING_DIAG_V1 END
+      check();
+      const page = result?.data?.summaries;
+      if (!Array.isArray(page)) throw new Error('Crack 장기기억 목록 응답을 확인할 수 없습니다.');
+      all.push(...page);
+      const next = String(result?.data?.nextCursor || '');
+      if(next&&(!page.length||seen.has(next)||all.length>10000))throw new Error('장기기억 목록 페이지가 불완전합니다.');
+      if(next)seen.add(next);
+      if(progress)Object.assign(progress,{items:all,cursor:next,seen:[...seen],complete:!next,pages:progress.pages+1});
+      // WRPM_REF_REVIEW_TIMING_DIAG_V1: completed pages/cards, not an estimate from requested limit.
+      if(diagnostics){diagnostics.longTermPages=(diagnostics.longTermPages||0)+1;diagnostics.longTermCards=all.length;}
+      if (!next) break;
+      cursor = next;
+    }
+    if (state.currentRoom !== room) throw new Error('장기기억 조회 중 방이 바뀌었습니다.');
+    if(!passive&&longTermNativeDisplay.dialog&&longTermNativeDisplay.roomId===String(room.chatId)){longTermNativeDisplay.inventory=all;queueMicrotask(()=>longTermDecorateNativeCards(room,longTermNativeDisplay.dialog,all));}
+    if(!passive)rpcmNewBadgeInventory(room,all);return all;
+    }finally{if(diagnostics)diagnostics.longTermFetchMs=(diagnostics.longTermFetchMs||0)+performance.now()-entireFetchStarted;}
+    // WRPM_REF_REVIEW_TIMING_DIAG_V1 END
+  }
+
+  async function longTermPost(room, card) {
+    const epoch=state.routeEpoch;const guard=()=>{if(state.routeEpoch!==epoch||state.currentRoom!==room)throw new Error('장기기억 전송 전 방이 바뀌었습니다. 서버 변경을 중단했습니다.');longTermAssertMutationLock(room);};guard();
+    return apiRequest('POST', `${longTermApiBase(room)}/summaries`, { type:'shortTerm', title:card.title, summary:card.summary }, {beforeSend:guard,immediatelyBeforeSend:guard});
+  }
+  async function longTermPatch(room, id, card) {
+    const epoch=state.routeEpoch;const guard=()=>{if(state.routeEpoch!==epoch||state.currentRoom!==room)throw new Error('장기기억 전송 전 방이 바뀌었습니다. 서버 변경을 중단했습니다.');longTermAssertMutationLock(room);};guard();
+    return apiRequest('PATCH', `${longTermApiBase(room)}/summaries/${encodeURIComponent(id)}`, { title:card.title, summary:card.summary }, {beforeSend:guard,immediatelyBeforeSend:guard});
+  }
+  async function longTermDelete(room, id, areaResetToken=null) {
+    const epoch=state.routeEpoch;const guard=()=>{if(state.routeEpoch!==epoch||state.currentRoom!==room)throw new Error('장기기억 전송 전 방이 바뀌었습니다. 서버 변경을 중단했습니다.');longTermAssertMutationLock(room);};guard();
+    return apiRequest('DELETE', `${longTermApiBase(room)}/summaries/${encodeURIComponent(id)}`, undefined, {beforeSend:guard,immediatelyBeforeSend:guard,areaResetToken});
+  }
+  async function longTermHash(value) {
+    const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(value)));
+    return [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+  }
+
+  const longTermResultReports = new Map();
+  function longTermInspectResult(text) {
+    const raw=String(text||'').replace(/\r\n?/g,'\n'),lines=raw.split('\n'),blocks=[],issues=[];let current=null,offset=0,headerSeen=false,openingFenceSeen=false;
+    if(raw.length>600000)return {text:raw,blocks:[],issues:[{index:-1,title:'입력 크기',line:1,endLine:1,start:0,end:0,messages:['결과가 600,000자 안전 한도를 넘습니다. 파일과 작업 범위를 확인해 주세요.']}]};
+    const lastContent=lines.findLastIndex(line=>line.trim());
+    for(let i=0;i<lines.length;i++){
+      const line=lines[i],trim=line.trim();
+      // Only the result header and outer fence are transport syntax. Identical
+      // lines inside a card are body content and must receive the same validation.
+      if(!current&&!blocks.length&&!headerSeen&&/^JOB_ID\s*=/.test(trim)){headerSeen=true;offset+=line.length+1;continue;}
+      if(!current&&!blocks.length&&!openingFenceSeen&&/^```[^\n]*$/.test(trim)){openingFenceSeen=true;offset+=line.length+1;continue;}
+      if(current&&openingFenceSeen&&i===lastContent&&trim==='```'){offset+=line.length+1;continue;}
+      const match=line.match(/^\[([^\]\n]+)\]\s*$/);
+      if(match){if(current)blocks.push(current);current={title:match[1],summary:'',start:offset,end:raw.length,line:i+1,endLine:i+1};}
+      else if(current&&trim){current.summary+=(current.summary?'\n':'')+line;current.endLine=i+1;}
+      else if(!current&&trim)issues.push({index:-1,title:'제목 앞의 텍스트',line:i+1,endLine:i+1,start:offset,end:offset+line.length,messages:['[제목] 앞의 설명은 제거해 주세요.']});
+      if(current)current.end=offset+line.length;
+      offset+=line.length+1;
+    }
+    if(current)blocks.push(current);
+    if(!blocks.length)issues.push({index:-1,title:'결과 형식',line:1,endLine:lines.length,start:0,end:raw.length,messages:['[MM.DD|키워드] 제목과 다음 줄의 본문을 찾지 못했습니다.']});
+    const titles=new Map();blocks.forEach((block,index)=>{const found=titles.get(block.title)||[];found.push(index);titles.set(block.title,found);});
+    blocks.forEach((block,index)=>{
+      const messages=[],title='['+block.title.trim()+']',body=block.summary.trim(),count=[...body].length;
+      if(!/^\[\d{2}\.\d{2}\|[^\]\n]+\]$/.test(title))messages.push('제목은 [MM.DD|키워드] 형식이어야 합니다.');
+      if([...title].length>20)messages.push('제목 '+[...title].length+'자 · 대괄호 포함 20자 이하로 줄여 주세요.');
+      if(body.includes('\n'))messages.push('본문에 줄바꿈이 있습니다. 한 문단으로 합쳐 주세요.');
+      if(count<290||count>300)messages.push('본문 '+count+'자 · '+(count<290?(290-count)+'자 이상 추가':(count-300)+'자 이상 줄이기')+' (290~300자).');
+      if(/^(?:\d{2}[/.]\d{2}|\d{2}월\s*\d{1,2}일)/.test(body))messages.push('본문 첫머리에 반복된 제목 날짜를 제거해 주세요.');
+      if(titles.get(block.title).length>1)messages.push('같은 제목이 '+titles.get(block.title).map(n=>(n+1)+'번').join('·')+' 블록에 중복됩니다.');
+      if(messages.length)issues.push({...block,index,messages});
+    });
+    return {text:raw,blocks,issues};
+  }
+  function longTermResultReportKey(room,section){return String(room.chatId)+':'+(section.dataset.kind||longTermState(room).drafts.externalPacket?.kind||'first');}
+  function longTermResultReportHtml(report){
+    if(!report)return '';
+    return `<div class="rpcm-ltm-validation ${report.issues.length||report.error?'has-errors':'is-valid'}" data-ltm-validation role="status"><header><strong>${report.issues.length?'수정할 블록 '+report.issues.length+'개':'형식 검사 통과 · '+report.blocks.length+'개 블록'}</strong><small>${report.issues.length?'아래 항목을 누르면 입력창의 해당 부분을 선택합니다.':'저장 전 원본·작업 범위 검증은 별도로 진행합니다.'}</small></header>${report.error?`<p role="alert">${esc(report.error)}</p>`:''}${report.issues.map((issue,index)=>`<button type="button" data-ltm-validation-jump="${index}"><strong>${issue.index<0?'입력 확인':(issue.index+1)+'번 블록'} · ${esc(issue.title)}</strong><small>${issue.line}~${issue.endLine}줄</small><span>${issue.messages.map(esc).join('<br>')}</span></button>`).join('')}</div>`;
+  }
+  function longTermShowResultReport(room,section,text){
+    const report=longTermInspectResult(text);longTermResultReports.set(longTermResultReportKey(room,section),report);
+    const editor=section.querySelector('[data-ltm-import-text]');if(!editor)return report;
+    let host=section.querySelector('[data-ltm-validation-host]');if(!host){host=document.createElement('div');host.dataset.ltmValidationHost='';editor.insertAdjacentElement('afterend',host);}host.innerHTML=longTermResultReportHtml(report);return report;
+  }
+
+  function longTermParseCards(text) {
+    const raw = String(text || '').replace(/\r\n?/g, '\n').trim().replace(/^```[^\n]*\n/, '').replace(/\n```$/, '').trim();
+    if (!raw) throw new Error('장기기억 결과가 비어 있습니다.');
+    const cards = []; let current = null;
+    for (const line of raw.split('\n')) {
+      const match = line.match(/^\[([^\]\n]+)\]\s*$/);
+      if (match) { if (current) cards.push(current); current = { title:match[1], summary:'' }; }
+      else if (current && line.trim()) current.summary += (current.summary ? '\n' : '') + line;
+      else if (!current && line.trim()) throw new Error('제목 앞에 허용되지 않는 설명이 있습니다.');
+    }
+    if (current) cards.push(current);
+    if (!cards.length) throw new Error('장기기억 카드 제목을 찾지 못했습니다.');
+    const report=longTermInspectResult(raw);if(report.issues.length){const issue=report.issues[0];const error=new Error((issue.index>=0?(issue.index+1)+'번 ['+issue.title+'] · ':'')+issue.messages.join(' '));error.validationReport=report;throw error;}
+    for (const card of cards) longTermValidateCard(card);
+    return cards;
+  }
+  function longTermValidateCard(card) {
+    const title = String(card.title || '').trim(), body = String(card.summary || '').trim();
+    const fullTitle = `[${title}]`;
+    if (!/^\[\d{2}\.\d{2}\|[^\]\n]+\]$/.test(fullTitle) || [...fullTitle].length > 20) throw new Error(`장기기억 제목 형식·20자 제한 위반: ${fullTitle}`);
+    if (body.includes('\n') || [...body].length < 290 || [...body].length > 300) throw new Error(`${fullTitle} 본문은 한 문단 290~300자여야 합니다. (현재 ${[...body].length}자)`);
+    if (/^(?:\d{2}[/.]\d{2}|\d{2}월\s*\d{1,2}일)/.test(body)) throw new Error(`${fullTitle} 본문 첫머리에 제목 날짜가 반복됩니다.`);
+    return { title, summary:body };
+  }
+
+  function longTermLockKey(room) { return `${LONG_TERM_LOCK_PREFIX}${apiChatIdOf(room)}`; }
+  function longTermReadLock(key) { try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch (_) { return null; } }
+  const longTermActiveLocks=new Set();
+  async function longTermWithLock(room, task, fn) {
+    const key = longTermLockKey(room), now = Date.now();
+    if(longTermActiveLocks.has(key))throw new Error('다른 장기기억 작업이 진행 중입니다. 완료 뒤 다시 시도해 주세요.');
+    const other = longTermReadLock(key);
+    if (other && other.owner !== longTermOwner && Number(other.expiresAt) > now) throw new Error('다른 탭에서 장기기억 작업 중입니다.');
+    const external = longTermReadLock(`${LONG_TERM_REFERENCE_LOCK_PREFIX}${apiChatIdOf(room)}`);
+    if (external && Number(external.expiresAt) > now) throw new Error('기존 장기기억 자동 정리 확장프로그램이 작업 중입니다. 중복 자동 실행을 중단했습니다.');
+    const renew = () => localStorage.setItem(key, JSON.stringify({ owner:longTermOwner, task, expiresAt:Date.now()+45000 }));
+    renew();
+    if (longTermReadLock(key)?.owner !== longTermOwner) throw new Error('장기기억 작업 잠금을 확보하지 못했습니다.');
+    longTermActiveLocks.add(key);
+    const timer = setInterval(()=>{if(longTermReadLock(key)?.owner===longTermOwner)renew();}, 15000);
+    try { return await fn(); }
+    finally { longTermActiveLocks.delete(key);clearInterval(timer); if (longTermReadLock(key)?.owner === longTermOwner) localStorage.removeItem(key); }
+  }
+
+  async function longTermLoadTurns(room) {
+    const turns = await loadManualCompletedTurns(room);
+    if (longTermRuntime.roomId !== String(room.chatId)) {
+      longTermRuntime.roomId = String(room.chatId); longTermRuntime.selected.clear(); longTermRuntime.inventory = [];
+      longTermRuntime.externalText=String(longTermState(room).drafts.externalPacket?.resultText||''); longTermRuntime.search=''; longTermRuntime.secondSearch=''; longTermRuntime.originFilter='all'; longTermRuntime.tab='auto';longTermRuntime.firstRange='manual';longTermRuntime.firstStart=1;longTermRuntime.firstEnd=0;
+    }
+    longTermRuntime.turns = turns;
+    return turns;
+  }
+  async function longTermAutomaticTurns(room) {
+    const first=longTermState(room).firstStage;
+    const manual=longTermLastManualBatch(room);
+    const anchors=[first.autoCursor||first.autoBaseline,first.processedCursor,manual?.sourceEndKey].filter(Boolean);
+    const turns=anchors.length?await loadRpcmCompletedRange(room,anchors):await longTermLoadTurns(room);
+    if(state.currentRoom!==room)throw new Error('장기기억 원문 조회 중 방이 바뀌었습니다.');
+    return turns;
+  }
+  function longTermLastManualBatch(room) {
+    const meta=longTermState(room),reset=String(meta.firstStage.frontierResetAt||'');
+    return meta.batches.find(batch=>batch.mode==='manual-first'&&batch.sourceEndKey&&(!reset||String(batch.appliedAt||'')>reset));
+  }
+  function longTermResetFirstAnchor(room,key) {
+    const first=longTermState(room).firstStage;
+    if([first.pendingApply,first.autoDraft].some(draft=>draft?.savedIds?.some(Boolean)))throw new Error('부분 저장 확인이 끝나기 전에는 1차 시작점을 바꿀 수 없습니다.');
+    first.modeRevision++;first.frontierResetAt=nowIso();
+    first.autoBaseline=String(key||'');first.manualBaseline=String(key||'');first.processedCursor='';first.autoCursor='';
+    first.autoDraft=null;first.pendingApply=null;first.autoError='';first.failedEndKey='';first.retryAfter=0;first.consecutiveFailures=0;first.autoStatus='시작점 설정 · 새 RP 대기';
+    return longTermClearManualPending(room);
+  }
+  function longTermEffectiveAnchor(room,turns,mode='auto') {
+    const first=longTermState(room).firstStage;
+    const keys=[mode==='manual'?first.manualBaseline:first.autoCursor||first.autoBaseline,first.processedCursor];
+    if(mode==='manual')keys.push(first.autoCursor);
+    // Include old successful batches without migrating stored baseline formats.
+    const lastManual=longTermLastManualBatch(room);
+    if(lastManual)keys.push(lastManual.sourceEndKey);
+    let index=-1,key='';
+    for(const value of new Set(keys.filter(Boolean))){const found=rpcmFindTurnIndex(turns,value);if(found<0)throw new Error('장기기억 기준 턴이 현재 RP에 없습니다. 시작점·리롤·분기를 확인해 주세요.');if(found>index){index=found;key=String(value);}}
+    return {index,key};
+  }
+  function longTermRecordFrontier(room,draft) {
+    if(!['manual-first','auto-first'].includes(draft.mode))return;
+    const first=longTermState(room).firstStage,keys=draft.sourceKeys||[];
+    const old=keys.indexOf(first.processedCursor);
+    if(!first.processedCursor||old>=0&&old<draft.end)first.processedCursor=String(draft.lastKey);
+    const queued=first.pendingApply||first.autoDraft;
+    if(queued&&queued!==draft&&!queued.applyStarted&&keys.indexOf(queued.firstKey)>=0&&keys.indexOf(queued.firstKey)<=draft.end){
+      const covered=keys.indexOf(queued.lastKey);
+      if(covered>=0&&covered<=draft.end&&!queued.savedIds?.some(Boolean)){
+        first.supersededDrafts=[{...queued,supersededAt:nowIso(),reason:'수동 결과로 같은 RP 구간 저장 완료'},...(first.supersededDrafts||[])].slice(0,3);first.autoDraft=null;first.pendingApply=null;first.autoStatus='수동 저장 완료 · 다음 RP 대기';return;
+      }
+      queued.stale=true;queued.staleReason='수동 작업이 겹치는 구간을 먼저 적용했습니다. 새 기준점 이후로 다시 생성해 주세요.';first.autoStatus='중복 구간 · 재검토 필요';
+    }
+  }
+  function longTermManualWaiting(room) {
+    const meta=longTermState(room);
+    return !!(meta.drafts.first||meta.drafts.externalPacket?.kind==='first');
+  }
+  function longTermAutoGuard(room,lane,revision,connection) {
+    const config=longTermState(room)[lane];
+    if(state.currentRoom!==room||!(lane==='firstStage'?config.autoEnabled:config.enabled)||!config.autoApply
+       ||config.modeRevision!==revision||JSON.stringify(longTermAiSettings().settings)!==connection
+       ||longTermManualWaiting(room)||aiMemoryEditingNow())throw new Error('자동 반영 보류 · 설정 전환 또는 수동 작업 중입니다. 저장된 결과를 검토해 주세요.');
+  }
+  function longTermRange(room, turns, mode, startIndex, endIndex) {
+    const first = longTermState(room).firstStage;
+    const point=['full','custom'].includes(mode)?{key:'',index:-1}:longTermEffectiveAnchor(room,turns,mode==='manual'?'manual':'auto');
+    const cursor=point.key,anchor=point.index;
+    if (!['full','custom'].includes(mode) && cursor && anchor < 0) throw new Error(`${mode === 'manual' ? '수동' : '자동'} 기준 턴 ID를 현재 기록에서 찾지 못했습니다. 메시지 ID 변경·리롤·분기 가능성을 확인해 주세요.`);
+    let start = mode === 'full' ? 0 : mode === 'custom' ? Number(startIndex) : anchor + 1;
+    let end = mode === 'custom' ? Number(endIndex) : turns.length - 1;
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end >= turns.length || start > end) throw new Error('유효한 완료 RP 범위를 선택해 주세요.');
+    const chosen = turns.slice(start, end+1);
+    // Large completed ranges are exported as multiple TXT parts after the packet is assembled.
+    // Never silently discard completed turns.
+    return { start, end, chosen, anchor };
+  }
+  async function longTermSourceStamp(room, turns, range, guideKey) {
+    return {
+      roomId:String(room.chatId), chatId:String(apiChatIdOf(room)),
+      firstKey:String(turns[range.start].key), lastKey:String(turns[range.end].key),
+      start:range.start, end:range.end, count:range.chosen.length,sourceKeys:turns.slice(0,range.end+1).map(turn=>String(turn.key)),
+      sourceHash:await longTermHash(JSON.stringify(turns.slice(0,range.end+1).map(t => [String(t.key),String(t.text)]))),
+      memoHash:simpleHash(userCanonMemoBlock(room)), guideHash:longTermGuideHash(room,guideKey),
+    };
+  }
+  async function longTermBuildExternalPacket(room, kind, includeGuide, selection={}) {
+    const meta=longTermState(room),guideKey=kind==='second'?'second':'first';
+    const pending=meta.drafts.externalPacket;
+    if(kind==='first'&&[meta.firstStage.pendingApply,meta.firstStage.autoDraft,meta.drafts.first].some(draft=>draft?.applyStarted||draft?.savedIds?.some(Boolean)))throw new Error('일부 기억이 저장된 작업입니다. 저장 확인을 먼저 마친 뒤 수동 작업자료를 만들어 주세요.');
+    if(pending){if([meta.drafts.first,meta.drafts.second].some(draft=>draft?.externalJobId===pending.jobId&&draft.savedIds?.filter(Boolean).length))throw new Error('부분 저장된 결과의 확인을 먼저 마쳐 주세요.');if(!confirm('기존 외부 작업자료 대기를 새 작업자료로 바꿀까요? 저장된 기억은 유지됩니다.'))throw new Error('작업자료 생성을 취소했습니다.');}
+    const guide=longTermGuide(room,guideKey),guideFirst=guide.split(/\r?\n/,1)[0].trim();
+    const guideSource=meta.guides[guideKey]?.text?'custom':'builtin';
+    const guideVersion=guideFirst.match(/v\d+(?:\.\d+)*/i)?.[0]||(guideSource==='custom'?'custom':'builtin');
+    let inventory=null,packet,sourceText,sourceHash,sourceCount;
+    if(kind==='first'){
+      // 전체 RP 조회가 가장 오래 걸리므로 기존 장기기억은 조회가 끝난 뒤 snapshot합니다.
+      // 그렇지 않으면 원문을 읽는 동안 Crack 기억이 갱신됐을 때 이미 낡은 목록을 작업자료에 넣게 됩니다.
+      const turns=await longTermLoadTurns(room),mode=selection.mode||'manual';
+      const start=selection.startKey?turns.findIndex(turn=>String(turn.key)===String(selection.startKey)):Number(selection.startIndex);
+      const end=selection.endKey?turns.findIndex(turn=>String(turn.key)===String(selection.endKey)):Number(selection.endIndex);
+      const range=longTermRange(room,turns,mode,start,end);
+      const stamp=await longTermSourceStamp(room,turns,range,'first');
+      inventory=await longTermFetch(room);
+      if(state.currentRoom!==room)throw new Error('장기기억 작업자료 생성 중 방이 바뀌었습니다.');
+      packet={kind,stamp,inventoryHash:longTermInventoryHash(inventory)};
+      sourceHash=stamp.sourceHash;sourceCount=stamp.count;
+      sourceText=range.chosen.map((turn,index)=>`[TURN ${range.start+index+1} | ${turn.key}]\n${turn.text}`).join('\n\n');
+    }else{
+      inventory=await longTermFetch(room);
+      if(state.currentRoom!==room)throw new Error('장기기억 작업자료 생성 중 방이 바뀌었습니다.');
+      const allFirst=selection.sourceMode==='first-all';
+      const chosen=allFirst?longTermFirstStageCards(room,inventory):inventory.filter(item=>longTermRuntime.selected.has(longTermId(item)));
+      if(chosen.length<2||(!allFirst&&chosen.length!==longTermRuntime.selected.size))throw new Error(allFirst?'2차 압축할 1차 기억이 2개 이상 필요합니다.':'2차 압축 목록에서 원본 카드 2개 이상을 선택해 주세요.');
+      const source=chosen.map(item=>({id:longTermId(item),fingerprint:longTermFingerprint(item),title:String(item.title||''),summary:String(item.summary||''),protected:longTermProtectedIds(room).has(longTermId(item))}));
+      packet={kind,source,inventoryHash:longTermInventoryHash(inventory)};
+      sourceHash=await longTermHash(JSON.stringify(source));sourceCount=source.length;
+      sourceText=source.map(item=>`ID=${item.id}\nFINGERPRINT=${item.fingerprint}\nPROTECTED=${item.protected}\n[${item.title}]\n${item.summary}`).join('\n\n');
+    }
+    packet.existingInventory=inventory.map(item=>({id:longTermId(item),title:String(item.title||''),summary:String(item.summary||'')}));
+    packet.memoHash=simpleHash(userCanonMemoBlock(room));packet.guideHash=longTermGuideHash(room,guideKey);
+    packet.jobId='LJ_'+Date.now().toString(36);packet.createdAt=nowIso();packet.status='waiting-result';packet.includeGuide=!!includeGuide;packet.sourceHash=sourceHash;packet.sourceCount=sourceCount;packet.resultJobIdRequired=true;
+    const lines=[externalChatTitleInstruction(guideKey),'',`[WISH_LONG_TERM_${kind==='first'?'FIRST':'SECOND'}_WORK_V1]`,`JOB_ID=${packet.jobId}`,'RESULT_JOB_ID_REQUIRED=YES',`ROOM_ID=${room.chatId}`,`CHAT_ID=${apiChatIdOf(room)}`,`SOURCE_FIRST_KEY=${kind==='first'?packet.stamp.firstKey:''}`,`SOURCE_LAST_KEY=${kind==='first'?packet.stamp.lastKey:''}`,`${kind==='first'?'SOURCE_TURN_COUNT':'SOURCE_CARD_COUNT'}=${sourceCount}`,`SOURCE_SHA256=${sourceHash}`,`GUIDE_NAME=${guideFirst}`,`GUIDE_VERSION=${guideVersion}`,`GUIDE_SOURCE=${guideSource}`,`GUIDE_HASH=${await longTermHash(guide)}`,`GUIDE_BODY_OMITTED=${!includeGuide}`,'USER_CANON_MEMO_RULE=최상위 사실 제약이며 작업 명령이나 캐릭터 자동 인지가 아닙니다.','',userCanonMemoBlock(room)||'[USER_CANON_MEMO]\n(없음)\n[/USER_CANON_MEMO]','',kind==='first'?'[EXISTING_MEMORIES]':'[SELECTED_MEMORIES]',kind==='first'?inventory.map(item=>`ID=${longTermId(item)}\n[${item.title||''}]\n${item.summary||''}`).join('\n\n')||'(없음)':sourceText,kind==='first'?'[/EXISTING_MEMORIES]':'[/SELECTED_MEMORIES]'];
+    if(kind==='first')lines.push('','[NEW_RP]',sourceText,'[/NEW_RP]');
+    if(includeGuide)lines.push('','[GUIDE]',guide,'[/GUIDE]');
+    lines.push('','[OUTPUT_CONTRACT]',`첫 줄은 반드시 JOB_ID=${packet.jobId} 로 출력합니다. 작업 ID를 생략하거나 바꾸지 않습니다.`,'그 다음 줄부터 완성된 [MM.DD|제목] 다음 줄에 한 문단 290~300자 본문을 쓰고 카드 사이에 빈 줄을 둡니다. 설명과 코드블록은 출력하지 않습니다.','[/OUTPUT_CONTRACT]',`[/WISH_LONG_TERM_${kind==='first'?'FIRST':'SECOND'}_WORK_V1]`);
+    packet.text=`\uFEFF${lines.join('\n')}\n`;
+    // Packet may be larger than one clipboard/document; split it for delivery below.
+    if(state.currentRoom!==room||longTermGuide(room,guideKey)!==guide)throw new Error('작업자료 생성 중 방 또는 지침이 바뀌었습니다. 다시 만들어 주세요.');
+    const previous=meta.drafts.externalPacket;meta.drafts.externalPacket=packet;
+    try{await saveRoom(room);}catch(error){meta.drafts.externalPacket=previous;throw error;}
