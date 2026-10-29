@@ -1,0 +1,33 @@
+name: Verify Chimera 0.17.30.2 Argon Patch
+on:
+  push:
+    branches:
+      - chimera-0.17.30.2-review
+    paths:
+      - 'release-tools/**'
+permissions:
+  contents: write
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify main-derived source, apply minimal patch, run regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "chimera-0.17.30.2-review"
+          SOURCE='위시_RP_Manager_개선.user.js'
+          TARGET='/tmp/chimera-0.17.30.2.user.js'
+          echo '6199dd44646e4baf21c6dad2887b27e4cf954ac6beb1686563a61663ae28111f  위시_RP_Manager_개선.user.js' | sha256sum -c -
+          python3 release-tools/patch_30_2.py "$SOURCE" "$TARGET"
+          node --check "$TARGET"
+          node release-tools/test_30_2.mjs "$TARGET"
+          test "$(wc -c < "$TARGET")" -eq 5539196
+          sha256sum "$TARGET"
+          cp "$TARGET" "$SOURCE"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- "$SOURCE"
+          git commit -m 'Prepare verified Chimera 0.17.30.2 Argon main panel'
+          git push origin HEAD:chimera-0.17.30.2-review
