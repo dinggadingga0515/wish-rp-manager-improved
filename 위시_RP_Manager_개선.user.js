@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         🪽위시 RP Manager(키메라 버전)
 // @namespace    local.rp.context.manager
-// @version      0.17.30.1
+// @version      0.17.30.2
 // @description  [키메라 버전] 장기 RP의 현재상태·날짜로그·인물·타임라인·자료집을 관리하고, 검수형 AI 생성·컨텍스트 주입·통합 백업·기존 백업 이사를 지원합니다.
 // @author       User
 // @license      All Rights Reserved
@@ -144,7 +144,7 @@ const wrpmStartup=(()=>{
       host=document.createElement('div');host.id='wish-rpcm-startup-status';
       const root=host.attachShadow({mode:'open'}),style=document.createElement('style'),card=document.createElement('section'),title=document.createElement('strong'),text=document.createElement('span'),close=document.createElement('button');
       style.textContent=':host{all:initial}section{box-sizing:border-box;width:280px;border:1px solid #a8afc0;border-radius:12px;background:#202638;color:#f1f3f8;padding:12px;font:13px/1.5 system-ui;box-shadow:0 4px 20px #0005}strong,span{display:block}span{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:5px}button{font:inherit;margin-top:8px;padding:5px 9px;border:1px solid #a8afc0;border-radius:6px;background:#343c51;color:#fff;cursor:pointer}';
-      title.textContent='WISH 0.17.30.1 · 키메라 버전 실행 상태';text.setAttribute('role','status');text.setAttribute('aria-live','polite');close.type='button';close.textContent='닫기';close.onclick=()=>{dismissed=true;host?.remove();host=null;stop();};
+      title.textContent='WISH 0.17.30.2 · 키메라 버전 실행 상태';text.setAttribute('role','status');text.setAttribute('aria-live','polite');close.type='button';close.textContent='닫기';close.onclick=()=>{dismissed=true;host?.remove();host=null;stop();};
       card.append(title,text,close);root.append(style,card);document.documentElement.append(host);
       for(const [k,v]of Object.entries({position:'fixed',right:'16px',top:'112px','z-index':'2147483647',display:'block',visibility:'visible',opacity:'1',width:'280px',height:'auto'}))host.style.setProperty(k,v,'important');
     }
@@ -1012,13 +1012,13 @@ const wrpmFullBackupV2 = (() => {
   // 버전별 키를 쓰면 구버전과 신버전이 동시에 설치됐을 때 둘 다 실행될 수 있습니다.
   // 모든 버전이 공유하는 고정 키로 중복 실행을 막습니다.
   if(window.__WISH_RP_MANAGER_LOADED__){wrpmStartup.status('duplicate','다른 RP Manager가 실행 중입니다. 버전: '+String(window.__WISH_RP_MANAGER_LOADED__.version||'알 수 없음'));return;}
-  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.17.30.1(키메라 버전)', loadedAt: Date.now() };
+  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.17.30.2(키메라 버전)', loadedAt: Date.now() };
   // 같은 페이지에 남아 있는 v0.8.10 복사본이 뒤늦게 시작되는 경우도 차단합니다.
   window.__RP_MANAGER_0810_LOADED__ = true;
 
   const APP = {
     name: '🪽위시 RP Manager(키메라 버전)',
-    version: '0.17.30.1',
+    version: '0.17.30.2',
     releaseStage: '키메라 버전',
     dbName: 'RPContextManagerDB',
     dbVersion: 2,
@@ -3006,6 +3006,7 @@ USER 캐릭터의 다음 항목은 직접 RP, USER의 명시적 서술 또는 �
   const AI_SUMMARY_PROVIDERS = Object.freeze(Object.keys(AI_SUMMARY_PROVIDER_DEFAULTS));
   const AI_SUMMARY_PROVIDER_MODELS = Object.freeze({
     gemini:[
+      { value:'gemini-4-argon', label:'Gemini 4 Argon · 고성능·고비용' },
       { value:'gemini-3.8-flash', label:'Gemini 3.8 Flash · 추천' },
       { value:'gemini-3.7-flash', label:'Gemini 3.7 Flash · 이전 안정 버전' },
       { value:'gemini-3.5-flash', label:'Gemini 3.5 Flash' },
@@ -3017,6 +3018,7 @@ USER 캐릭터의 다음 항목은 직접 RP, USER의 명시적 서술 또는 �
       { value:'gemini-2.5-flash-lite', label:'Gemini 2.5 Flash-Lite · 구버전' },
     ],
     firebase:[
+      { value:'gemini-4-argon', label:'Gemini 4 Argon · 고성능·고비용' },
       { value:'gemini-3.8-flash', label:'Gemini 3.8 Flash · 추천' },
       { value:'gemini-3.7-flash', label:'Gemini 3.7 Flash · 이전 안정 버전' },
       { value:'gemini-3.5-flash', label:'Gemini 3.5 Flash' },
@@ -3028,6 +3030,7 @@ USER 캐릭터의 다음 항목은 직접 RP, USER의 명시적 서술 또는 �
       { value:'gemini-2.5-flash-lite', label:'Gemini 2.5 Flash-Lite · 구버전' },
     ],
     vertex:[
+      { value:'gemini-4-argon', label:'Gemini 4 Argon · 고성능·고비용' },
       { value:'gemini-3.8-flash', label:'Gemini 3.8 Flash · 추천' },
       { value:'gemini-3.7-flash', label:'Gemini 3.7 Flash · 이전 안정 버전' },
       { value:'gemini-3.5-flash', label:'Gemini 3.5 Flash' },
@@ -5436,7 +5439,7 @@ try {
       if(/^gemini-2\.5/.test(name))return {thinkingBudget:{low:/flash-lite$/.test(name)?512:256,medium:4096,high:8192}[level],includeThoughts:false};
       return {thinkingLevel:level.toUpperCase(),includeThoughts:false};
     }
-    if (/^gemini-3\.8-flash(?:$|-)/.test(name)) return { thinkingLevel:['low','medium','high'].includes(level) ? level.toUpperCase() : 'MEDIUM', includeThoughts:false };
+    if (name === 'gemini-4-argon' || /^gemini-3\.8-flash(?:$|-)/.test(name)) return { thinkingLevel:['low','medium','high'].includes(level) ? level.toUpperCase() : 'MEDIUM', includeThoughts:false };
     if (level !== 'low') return null;
     if (/^gemini-3(?:[.-]|$)/.test(name)) return { thinkingLevel:'LOW', includeThoughts:false };
     if (/^gemini-2\.5(?:[.-]|$)/.test(name)) return { thinkingBudget:128, includeThoughts:false };
@@ -22181,7 +22184,7 @@ ${dialogueText}`;
         if(index<0&&expandedReconnect.index<0){
           scanGaps.set(roomKey,{checkpoint:lastId,lastHead:head,nextProbeAt:Date.now()+30*60*1000,warned:true});
           if(cached?.checkpoint!==lastId){
-            console.warn('[WRPM 0.17.30.1] 자동 스캔 기준 턴 미발견: checkpoint 보존',roomKey);
+            console.warn('[WRPM 0.17.30.2] 자동 스캔 기준 턴 미발견: checkpoint 보존',roomKey);
             if(room===state.currentRoom)notify('자동 스캔의 이전 기준 턴을 최근 50개에서 찾지 못했습니다. 기존 기준점은 보존하고 최신 장면부터 재개합니다. 과거 미검토 구간이 있을 수 있습니다.','warn',6500);
           }
           gapScene=true;
