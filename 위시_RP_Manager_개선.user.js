@@ -1,5 +1,5 @@
 ﻿// ==UserScript==
-// @name         🪽위시 RP Manager(키메라 버전)(주입 안정화)
+// @name         🪽위시 RP Manager(키메라 버전)
 // @namespace    local.rp.context.manager
 // @version      0.17.30.5
 // @description  [키메라 버전] 장기 RP의 현재상태·날짜로그·인물·타임라인·자료집을 관리하고, 검수형 AI 생성·컨텍스트 주입·통합 백업·기존 백업 이사를 지원합니다.
