@@ -1,7 +1,7 @@
-﻿// ==UserScript==
+﻿﻿// ==UserScript==
 // @name         🪽위시 RP Manager(키메라 버전)
 // @namespace    local.rp.context.manager
-// @version      0.17.37.2
+// @version      0.17.37.3
 // @description  [키메라 버전] 장기 RP의 현재상태·날짜로그·인물·타임라인·자료집을 관리하고, 검수형 AI 생성·컨텍스트 주입·통합 백업·기존 백업 이사를 지원합니다.
 // @author       딩가딩가
 // @license      All Rights Reserved
@@ -180,7 +180,7 @@ const wrpmStartup=(()=>{
       host=document.createElement('div');host.id='wish-rpcm-startup-status';
       const root=host.attachShadow({mode:'open'}),style=document.createElement('style'),card=document.createElement('section'),title=document.createElement('strong'),text=document.createElement('span'),close=document.createElement('button');
       style.textContent=':host{all:initial}section{box-sizing:border-box;width:280px;border:1px solid #a8afc0;border-radius:12px;background:#202638;color:#f1f3f8;padding:12px;font:13px/1.5 system-ui;box-shadow:0 4px 20px #0005}strong,span{display:block}span{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:5px}button{font:inherit;margin-top:8px;padding:5px 9px;border:1px solid #a8afc0;border-radius:6px;background:#343c51;color:#fff;cursor:pointer}';
-      title.textContent='WISH 0.17.37.2 · 키메라 버전 실행 상태';text.setAttribute('role','status');text.setAttribute('aria-live','polite');close.type='button';close.textContent='닫기';close.onclick=()=>{dismissed=true;host?.remove();host=null;stop();};
+      title.textContent='WISH 0.17.37.3 · 키메라 버전 실행 상태';text.setAttribute('role','status');text.setAttribute('aria-live','polite');close.type='button';close.textContent='닫기';close.onclick=()=>{dismissed=true;host?.remove();host=null;stop();};
       card.append(title,text,close);root.append(style,card);document.documentElement.append(host);
       for(const [k,v]of Object.entries({position:'fixed',right:'16px',top:'200px','z-index':'2147483647',display:'block',visibility:'visible',opacity:'1',width:'280px',height:'auto'}))host.style.setProperty(k,v,'important');
     }
@@ -1102,13 +1102,13 @@ const wrpmFullBackupV2 = (() => {
   // 버전별 키를 쓰면 구버전과 신버전이 동시에 설치됐을 때 둘 다 실행될 수 있습니다.
   // 모든 버전이 공유하는 고정 키로 중복 실행을 막습니다.
   if(window.__WISH_RP_MANAGER_LOADED__){wrpmStartup.status('duplicate','다른 RP Manager가 실행 중입니다. 버전: '+String(window.__WISH_RP_MANAGER_LOADED__.version||'알 수 없음'));return;}
-  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.17.37.2(키메라 버전)', loadedAt: Date.now() };
+  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.17.37.3(키메라 버전)', loadedAt: Date.now() };
   // 같은 페이지에 남아 있는 v0.8.10 복사본이 뒤늦게 시작되는 경우도 차단합니다.
   window.__RP_MANAGER_0810_LOADED__ = true;
 
   const APP = {
     name: '🪽위시 RP Manager(키메라 버전)',
-    version: '0.17.37.2',
+    version: '0.17.37.3',
     releaseStage: '키메라 버전',
     buildLabel: '',
     dbName: 'RPContextManagerDB',
@@ -9549,6 +9549,8 @@ ${dialogueText}`;
       entry.category = normalizeKnowledgeCategory(entry.category);
       entry.archived = entry.archived === true;
       entry.inject = entry.inject === true;
+      entry.autoPinned = entry.autoPinned === true;
+      entry.autoExcluded = entry.autoExcluded === true;
       return entry;
     });
     // 기존 방은 주입 상태를 스스로 결정하게 합니다.
@@ -9560,7 +9562,7 @@ ${dialogueText}`;
     const grouped = new Map();
     for (const card of (cards || normalizeKnowledgeCards(room))) {
       if (card.archived) continue;
-      if (!card.inject || !rpcmKnowledgeCanInject(card)) continue;
+      if (!(card.autoPinned || (card.inject && !card.autoExcluded)) || !rpcmKnowledgeCanInject(card)) continue;
       const key = `${card.person.trim().toLocaleLowerCase()}\u0000${card.fact.trim().toLocaleLowerCase()}`;
       if (!card.person.trim() || !card.fact.trim()) continue;
       if (!grouped.has(key)) grouped.set(key, new Set());
@@ -9599,22 +9601,31 @@ ${dialogueText}`;
     return [...byName.values()];
   }
 
-  function personInformationItem(room, bundle, prepared = null) {
+  function personInformationItem(room, bundle, prepared = null, relevantKnowledgeIds = null) {
     const conflict = prepared?.conflicts || knowledgeConflicts(room);
     const name = bundle.name;
     const player = prepared?.player ?? currentPersonPlayerName(room,prepared);
-    const knowledge = room.knowledgeInjectionEnabled ? bundle.knowledge.filter(card => {
+    const valid = room.knowledgeInjectionEnabled ? bundle.knowledge.filter(card => {
       const key = `${card.person.trim().toLocaleLowerCase()}\u0000${card.fact.trim().toLocaleLowerCase()}`;
-      return card.inject && card.fact.trim() && rpcmKnowledgeCanInject(card)
+      return card.fact.trim() && rpcmKnowledgeCanInject(card)
         && (card.status !== 'mistaken' || card.actualFact.trim()) && !conflict.has(key);
     }) : [];
+    const candidates = valid.filter(card => card.autoPinned !== true && card.inject && card.autoExcluded !== true);
+    const knowledge = valid.filter(card => card.autoPinned === true
+      || (candidates.includes(card) && (!relevantKnowledgeIds || relevantKnowledgeIds.has(card.id))));
+    // 무관한 일반 후보는 버리지 않고 한 줄(카드당 80자 이내)로만 남긴다. 세부 문구는 넣지 않는다.
+    const briefLine = card => `- ${String(card.fact).replace(/\s+/g, ' ').trim().slice(0, 60)}: 장면과 무관, 세부 생략`;
+    const shortKeep = relevantKnowledgeIds ? candidates.filter(card => !relevantKnowledgeIds.has(card.id) && briefLine(card).length >= rpcmKnowledgeLine(card, bundle.name).length) : [];
+    knowledge.push(...shortKeep);
+    const brief = relevantKnowledgeIds ? candidates.filter(card => !relevantKnowledgeIds.has(card.id) && !shortKeep.includes(card))
+      .map(briefLine) : [];
     const speech = room.personStateInjectionEnabled ? bundle.speech.filter(record => record.inject && (!player || record.target.trim() === player)) : [];
     const relationships = room.personStateInjectionEnabled ? bundle.relationship.filter(record => record.inject && (!player || record.target.trim() === player)) : [];
-    if (!knowledge.length && !speech.length && !relationships.length) return null;
+    if (!knowledge.length && !brief.length && !speech.length && !relationships.length) return null;
     const labels = KNOWLEDGE_STATUS_LABELS;
     const related = relationships.map(record => [record.official && `실제 관계: ${record.official}`, record.stance && `${name}의 태도: ${record.stance}`, record.conflict && `남은 갈등·경계: ${record.conflict}`, record.trajectory && `핵심 전환: ${record.trajectory}`].filter(Boolean).join('\n')).join('\n\n');
     const spoken = speech.map(record => [record.address && `호칭: ${record.address}`, record.tone && `말투: ${record.tone}`, record.context && `적용 조건: ${record.context}`].filter(Boolean).join(' · ')).join('\n');
-    const known = knowledge.map(card=>rpcmKnowledgeLine(card,name)).join('\n');
+    const known = [...knowledge.map(card=>rpcmKnowledgeLine(card,name)), ...brief].join('\n');
     const content = [
       `[${name} → ${player || '상대'} · 인물정보]`,
       '한 인물의 인지·태도·호칭은 다른 인물의 지식이나 USER의 내면으로 옮기지 않는다.',
@@ -9626,16 +9637,79 @@ ${dialogueText}`;
       totalTurns:APP.defaultRetentionTurns, usedTurns:0, autoType:'person', recallReason:`최근 RP에서 ${name} 언급 · 인지·관계·호칭 함께 선택` };
   }
 
+  function relevantKnowledgeCardIds(room, bundles, contextText, scan) {
+    const out = new Set();
+    const query = stripAutomationNoise(contextText);
+    if (!room.knowledgeInjectionEnabled || !query) return out;
+    const queryLower = query.toLowerCase(), queryTokens = tokenizeRecallText(query);
+    const characterTerms = characterRecallTermSet(room);
+    for (const bundle of bundles) {
+      for (const term of characterDetectionTerms({ ...scan.slots.get(bundle.name), title:bundle.name })) {
+        const normalized = normalizedRecallTerm(term);
+        if (!normalized) continue;
+        characterTerms.add(normalized);
+        for (const token of tokenizeRecallText(normalized)) characterTerms.add(token);
+      }
+    }
+    // 사용자 페르소나(PC) 이름은 어떤 작품에서든 의미 단어가 아니다. 인물 탭 PC 표시와 같은 scan.player 를 쓴다.
+    const player = normalizedRecallTerm(scan.player || '');
+    if (player) {
+      characterTerms.add(player);
+      for (const token of tokenizeRecallText(player)) characterTerms.add(token);
+    }
+    // 같은 방 모든 카드 기준 문서: 희귀도(df)와 흔한 단어 판정에 쓴다. 카드 문장은 제목이 아니라 본문이다.
+    const sep = /[·|｜,/]+/;
+    const docById = new Map(), all = [];
+    for (const card of scan.cards) {
+      if (!String(card.fact || '').trim()) continue;
+      const line = [card.fact, card.actualFact, card.knownPart].map(v => String(v || '').trim()).filter(Boolean).join(' ');
+      const base = recallDocForBlock({ key:'knowledge:' + card.id, raw:line, events:'', body:line });
+      const doc = { ...base, phrases:String(card.fact).split(sep).map(v => v.trim().toLowerCase()).filter(v => v.length >= 2) };
+      docById.set(card.id, doc);
+      all.push(doc);
+    }
+    const df = new Map(), matchedAll = all.map(() => []);
+    for (let ti = 0; ti < queryTokens.length; ti++) {
+      const token = queryTokens[ti];
+      let n = 0;
+      for (let di = 0; di < all.length; di++) {
+        const d = all[di], textMatch = d.text.includes(token);
+        if (d.tokens.has(token) || textMatch) n++;
+        if (textMatch) matchedAll[di].push(ti);
+      }
+      df.set(token, n);
+      // 카드가 30장 이상인 방에서 카드의 30% 넘게 나오는 단어는 그 방의 배경어(흔한 말)라서 의미 단어로 세지 않는다.
+      if (all.length >= 30 && n / all.length > 0.3) characterTerms.add(token);
+    }
+    const indexOf = new Map(all.map((doc, i) => [doc, i]));
+    for (const bundle of bundles) {
+      for (const card of bundle.knowledge) {
+        const key = `${card.person.trim().toLocaleLowerCase()}\u0000${card.fact.trim().toLocaleLowerCase()}`;
+        if (card.autoPinned || !card.inject || card.autoExcluded || !card.fact.trim() || !rpcmKnowledgeCanInject(card)
+          || (card.status === 'mistaken' && !card.actualFact.trim()) || scan.conflicts.has(key)) continue;
+        const doc = docById.get(card.id);
+        if (!doc) continue;
+        const ev = localRecallCoreEvidence(doc, queryTokens, queryLower, characterTerms, all.length, df, matchedAll[indexOf.get(doc)]);
+        const words = [...new Set(ev.matchedCoreTokens)];
+        const meaningful = words.filter(w => !words.some(o => o !== w && o.includes(w)));
+        if (ev.matchedPhrases.length || (meaningful.length >= 2 && ev.coreScore >= 4)) out.add(card.id);
+      }
+    }
+    return out;
+  }
+
   function knowledgeInjectionItems(room, contextText = '', prepared = null) {
     const cleanText = String(contextText || '');
     if (!cleanText.trim()) return [];
     const scan = prepared || rpcmPreparePersonScan(room);
-    return scan.bundles.filter(bundle => {
+    const detected = scan.bundles.filter(bundle => {
       const slot = scan.slots.get(bundle.name);
       const evidence = characterRpDetectionEvidence(cleanText,
         { ...slot, title:bundle.name }, scan.owners, bundle.name);
       return evidence.accepted;
-    }).map(bundle => personInformationItem(room, bundle, scan)).filter(Boolean);
+    });
+    const relevant = relevantKnowledgeCardIds(room, detected, cleanText, scan);
+    return detected.map(bundle => personInformationItem(room, bundle, scan, relevant)).filter(Boolean);
   }
 
   function isKnowledgePendingItem(item) {
@@ -9649,10 +9723,8 @@ ${dialogueText}`;
     const pendingBefore=rpcmRoomClone(pending);
     const oldItems = clonePendingItems(pending.items);
     const scan = rpcmPreparePersonScan(room);
-    const activeNames = new Set(knowledgeInjectionItems(room, room.autoRecallContextText, scan).map(item => item.personName));
-    const bundles = new Map(scan.bundles.map(bundle => [bundle.name, bundle]));
     const removedKeys = new Set(quickRemovedPendingItems(pending).map(item => item.slotId));
-    const fresh = [...activeNames].map(name => bundles.get(name)).filter(Boolean).map(bundle => personInformationItem(room, bundle, scan)).filter(Boolean);
+    const fresh = knowledgeInjectionItems(room, room.autoRecallContextText, scan);
     const previousById = new Map((pending.items || []).filter(isKnowledgePendingItem).map(item => [item.slotId, item]));
     pending.items = (pending.items || []).filter(item => !isKnowledgePendingItem(item));
     for (const item of fresh) {
@@ -12676,6 +12748,47 @@ ${dialogueText}`;
     return Math.min(3,entities.filter(name=>aliasAppears(query.primary,String(name))).length);
   }
 
+  function localRecallCoreEvidence(d, queryTokens, queryLower, characterTerms, N, df, matchedTokenIndexes) {
+    let coreScore = 0;
+    let characterScore = 0;
+    const matchedCoreTokens = [];
+    const matchedTitleTokens = [];
+    const matchedRareTokens = [];
+    const matchedCharacterTerms = [];
+    const matchedPhrases = [];
+    for (const ti of matchedTokenIndexes) {
+      const token=queryTokens[ti];
+      const idf = 1 + Math.log((N + 1) / ((df.get(token) || 0) + 1));
+      const inTitle = d.titleLower.includes(token);
+      const isCharacter = characterTerms.has(token);
+      if (isCharacter) {
+        // 인물명은 어디에 있든 보조점수. 여러 명이 반복되어도 총 기여도를 제한합니다.
+        characterScore += (inTitle ? 0.95 : 0.28) * idf;
+        matchedCharacterTerms.push(token);
+      } else {
+        // 사건명/장소/물건/특이 단어는 제목 일치에 큰 가중치, 본문 희귀어에도 유효 가중치.
+        coreScore += (inTitle ? 6.4 : 1.45) * idf;
+        matchedCoreTokens.push(token);
+        if (inTitle) matchedTitleTokens.push(token);
+        if (!inTitle && idf >= 1.75) matchedRareTokens.push(token);
+      }
+    }
+
+    for (const phrase of d.phrases) {
+      if (!queryLower.includes(phrase)) continue;
+      const phraseTokens = tokenizeRecallText(phrase);
+      const isCharacterPhrase = characterTerms.has(phrase) || (phraseTokens.length > 0 && phraseTokens.every(t => characterTerms.has(t)));
+      if (isCharacterPhrase) {
+        characterScore += 1.6;
+        matchedCharacterTerms.push(phrase);
+      } else {
+        coreScore += 11;
+        matchedPhrases.push(phrase);
+      }
+    }
+    return { coreScore, characterScore, matchedCoreTokens, matchedCharacterTerms, matchedTitleTokens, matchedRareTokens, matchedPhrases };
+  }
+
   function scoreRelatedLogBlocks(blocks, contextText, excludedKeys = new Set(), room = state.currentRoom, semanticScores = null, profile = null) {
     const totalStarted=profile?performance.now():0;
     if(profile)profile.calls=(profile.calls||0)+1;
@@ -12716,45 +12829,9 @@ ${dialogueText}`;
     for (let di=0;di<docs.length;di++) {
       const d=docs[di];
       if (excludedKeys.has(d.block.key)) continue;
-      let coreScore = 0;
-      let characterScore = 0;
-      const matchedCoreTokens = [];
-      const matchedTitleTokens = [];
-      const matchedRareTokens = [];
-      const matchedCharacterTerms = [];
-      const matchedPhrases = [];
-
       const matchedTokenIndexes=matchedQueryTokenIndexes[di];scoreChecks+=matchedTokenIndexes.length;
-      for (const ti of matchedTokenIndexes) {
-        const token=queryTokens[ti];
-        const idf = 1 + Math.log((N + 1) / ((df.get(token) || 0) + 1));
-        const inTitle = d.titleLower.includes(token);
-        const isCharacter = characterTerms.has(token);
-        if (isCharacter) {
-          // 인물명은 어디에 있든 보조점수. 여러 명이 반복되어도 총 기여도를 제한합니다.
-          characterScore += (inTitle ? 0.95 : 0.28) * idf;
-          matchedCharacterTerms.push(token);
-        } else {
-          // 사건명/장소/물건/특이 단어는 제목 일치에 큰 가중치, 본문 희귀어에도 유효 가중치.
-          coreScore += (inTitle ? 6.4 : 1.45) * idf;
-          matchedCoreTokens.push(token);
-          if (inTitle) matchedTitleTokens.push(token);
-          if (!inTitle && idf >= 1.75) matchedRareTokens.push(token);
-        }
-      }
-
-      for (const phrase of d.phrases) {
-        if (!queryLower.includes(phrase)) continue;
-        const phraseTokens = tokenizeRecallText(phrase);
-        const isCharacterPhrase = characterTerms.has(phrase) || (phraseTokens.length > 0 && phraseTokens.every(t => characterTerms.has(t)));
-        if (isCharacterPhrase) {
-          characterScore += 1.6;
-          matchedCharacterTerms.push(phrase);
-        } else {
-          coreScore += 11;
-          matchedPhrases.push(phrase);
-        }
-      }
+      let { coreScore, characterScore, matchedCoreTokens, matchedCharacterTerms, matchedTitleTokens, matchedRareTokens, matchedPhrases } =
+        localRecallCoreEvidence(d, queryTokens, queryLower, characterTerms, N, df, matchedTokenIndexes);
 
       // 인물명 여러 개가 겹쳐도 핵심 사건 키워드보다 앞서지 못하도록 보조점수 상한을 둡니다.
       const matchedCausalAliases = causalLinks.filter(link => aliasAppears(d.text, link.term));
@@ -22698,7 +22775,7 @@ ${dialogueText}`;
         if(index<0&&expandedReconnect.index<0){
           scanGaps.set(roomKey,{checkpoint:lastId,lastHead:head,nextProbeAt:Date.now()+30*60*1000,warned:true});
           if(cached?.checkpoint!==lastId){
-            console.warn('[WRPM 0.17.37.2] 자동 스캔 기준 턴 미발견: checkpoint 보존',roomKey);
+            console.warn('[WRPM 0.17.37.3] 자동 스캔 기준 턴 미발견: checkpoint 보존',roomKey);
             if(room===state.currentRoom)notify('자동 스캔의 이전 기준 턴을 최근 50개에서 찾지 못했습니다. 기존 기준점은 보존하고 최신 장면부터 재개합니다. 과거 미검토 구간이 있을 수 있습니다.','warn',6500);
           }
           gapScene=true;
@@ -33890,6 +33967,7 @@ function rpcmRenderContinuityTools(overlay,room){
       const parsed = parsePersonStateOutput(personText,candidate);
       if (parsed.errors.length) throw new Error(`인물정보: ${parsed.errors.join(' / ')}`);
       const originalManualCategories = new Map((candidate.knowledgeCards || []).filter(card=>card && card.category && card.category !== 'auto').map(card=>[`${manualPersonName(card.person)}\u0000${String(card.fact||'').trim().toLocaleLowerCase('ko-KR')}`,card.category]));
+      const originalAutoFlags = new Map((candidate.knowledgeCards || []).filter(card=>card && (card.autoPinned===true||card.autoExcluded===true)).map(card=>[`${manualPersonName(card.person)}\u0000${String(card.fact||'').trim().toLocaleLowerCase('ko-KR')}`,{autoPinned:card.autoPinned===true,autoExcluded:card.autoExcluded===true}]));
       const protectedKnowledge = (candidate.knowledgeCards || []).filter(fullRebuildProtected);
       const protectedPerson = (candidate.personStateRecords || []).filter(fullRebuildProtected);
       const protectedIds = new Set([...protectedKnowledge,...protectedPerson].map(value => String(value.id)));
@@ -33904,7 +33982,7 @@ function rpcmRenderContinuityTools(overlay,room){
       const text = `[[WISH_PERSON_V1]]\n${rows.map(row => JSON.stringify(row)).join('\n')}\n[[/WISH_PERSON_V1]]`;
       const draft = fullRebuildDraft(candidate,'personInfo',job,sourceTurns);
       candidate = prepareManualUpdateResult(candidate,'personInfo',draft,{ result:text }).candidate;
-      for(const card of candidate.knowledgeCards||[]){const previous=originalManualCategories.get(`${manualPersonName(card.person)}\u0000${String(card.fact||'').trim().toLocaleLowerCase('ko-KR')}`);if(previous)card.category=previous;}
+      for(const card of candidate.knowledgeCards||[]){const previous=originalManualCategories.get(`${manualPersonName(card.person)}\u0000${String(card.fact||'').trim().toLocaleLowerCase('ko-KR')}`);if(previous)card.category=previous;const flags=originalAutoFlags.get(`${manualPersonName(card.person)}\u0000${String(card.fact||'').trim().toLocaleLowerCase('ko-KR')}`);if(flags)Object.assign(card,flags);}
       candidate.knowledgeCards = [...(candidate.knowledgeCards || []),...protectedKnowledge.map(value => structuredClone(value))];
       candidate.personStateRecords = [...(candidate.personStateRecords || []),...protectedPerson.map(value => structuredClone(value))];
       diffs.push(fullRebuildDiff('인물정보',personStateExportText(structuredClone(room)),personStateExportText(structuredClone(candidate))));
