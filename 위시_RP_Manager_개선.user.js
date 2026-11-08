@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         🪽위시 RP Manager(키메라 버전)
 // @namespace    local.rp.context.manager
-// @version      0.17.37.1
+// @version      0.17.37.2
 // @description  [키메라 버전] 장기 RP의 현재상태·날짜로그·인물·타임라인·자료집을 관리하고, 검수형 AI 생성·컨텍스트 주입·통합 백업·기존 백업 이사를 지원합니다.
 // @author       딩가딩가
 // @license      All Rights Reserved
@@ -180,7 +180,7 @@ const wrpmStartup=(()=>{
       host=document.createElement('div');host.id='wish-rpcm-startup-status';
       const root=host.attachShadow({mode:'open'}),style=document.createElement('style'),card=document.createElement('section'),title=document.createElement('strong'),text=document.createElement('span'),close=document.createElement('button');
       style.textContent=':host{all:initial}section{box-sizing:border-box;width:280px;border:1px solid #a8afc0;border-radius:12px;background:#202638;color:#f1f3f8;padding:12px;font:13px/1.5 system-ui;box-shadow:0 4px 20px #0005}strong,span{display:block}span{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:5px}button{font:inherit;margin-top:8px;padding:5px 9px;border:1px solid #a8afc0;border-radius:6px;background:#343c51;color:#fff;cursor:pointer}';
-      title.textContent='WISH 0.17.37.1 · 키메라 버전 실행 상태';text.setAttribute('role','status');text.setAttribute('aria-live','polite');close.type='button';close.textContent='닫기';close.onclick=()=>{dismissed=true;host?.remove();host=null;stop();};
+      title.textContent='WISH 0.17.37.2 · 키메라 버전 실행 상태';text.setAttribute('role','status');text.setAttribute('aria-live','polite');close.type='button';close.textContent='닫기';close.onclick=()=>{dismissed=true;host?.remove();host=null;stop();};
       card.append(title,text,close);root.append(style,card);document.documentElement.append(host);
       for(const [k,v]of Object.entries({position:'fixed',right:'16px',top:'200px','z-index':'2147483647',display:'block',visibility:'visible',opacity:'1',width:'280px',height:'auto'}))host.style.setProperty(k,v,'important');
     }
@@ -198,7 +198,7 @@ const wrpmStorageMaintenanceV11 = (() => {
     const ORIGIN = location.origin, DB_NAME = 'RPCM_AuxStorage_v1', LIMIT = 128 * 1024 * 1024;
     const PREFIX = 'RPCM_STORAGE_V11:' + ORIGIN + ':', PACK_PREFIX = 'RPCM_RESCUE_V2:' + ORIGIN + ':';
     const HISTORY = 'wish-rp-core-response-refiner-history:', ARCHIVE = 'wish-rp-correction-text-archive-v1:';
-    const cache = new Map(), queues = new Map(); let dbPromise = null, validator = null, codecQueue=Promise.resolve();
+    const cache = new Map(), queues = new Map(); let dbPromise = null, validator = null, codecQueue=Promise.resolve(),installationPending=null,installationFailedId='';
     function codec(task) {const run=codecQueue.catch(()=>{}).then(task);codecQueue=run.catch(()=>{});return run;}
     const encode = value => JSON.stringify({value});
     const bytes = text => new TextEncoder().encode(text).length;
@@ -206,10 +206,27 @@ const wrpmStorageMaintenanceV11 = (() => {
     const errorText = error => String(error?.message || error);
     const clone = value => structuredClone(value);
     const now = () => new Date().toISOString();
+    function persistInstallation(key,id){
+      let write;try{write=GM_setValue(key,id);}catch(error){installationFailedId=id;throw error;}
+      if(write&&typeof write.then==='function'){
+        installationPending=Promise.resolve(write).then(()=>{if(GM_getValue(key,null)!==id)throw new Error('설치 식별자 저장 확인 실패');installationFailedId='';return id;},error=>{installationFailedId=id;throw error;});
+        installationPending.catch(()=>{});
+      }else{if(GM_getValue(key,null)!==id){installationFailedId=id;throw new Error('설치 식별자 저장 확인 실패');}installationFailedId='';}
+      return id;
+    }
     function installation(create=true) {
       const key = 'RPCM_STORAGE_INSTALL_V11'; let id = GM_getValue(key, null);
-      if (id === null) { if(!create)throw new Error('설치 식별자가 없어 기존 소유권을 확인하지 못했습니다.');id = crypto.randomUUID(); GM_setValue(key,id); if (GM_getValue(key,null) !== id) throw new Error('설치 식별자 저장 확인 실패'); }
+      if (id === null) {
+        if(!create)throw new Error('설치 식별자가 없어 기존 소유권을 확인하지 못했습니다.');id=persistInstallation(key,crypto.randomUUID());
+      }else if(id===installationFailedId&&!installationPending)persistInstallation(key,id);
       if (typeof id !== 'string' || !/^[\w-]{16,80}$/.test(id)) throw new Error('설치 식별자 손상');
+      return id;
+    }
+    async function ensureInstallation() {
+      const key='RPCM_STORAGE_INSTALL_V11';let id=GM_getValue(key,null);if(id===null||id===installationFailedId)id=installation();
+      const pending=installationPending;if(pending)try{await pending;}finally{if(installationPending===pending)installationPending=null;}
+      id=GM_getValue(key,null);if(id===null||id===installationFailedId)throw new Error('설치 식별자 저장 확인 실패');
+      if(typeof id!=='string'||!/^[\w-]{16,80}$/.test(id))throw new Error('설치 식별자 손상');
       return id;
     }
     async function digest(value) {
@@ -234,7 +251,8 @@ const wrpmStorageMaintenanceV11 = (() => {
     }
     async function locked(task) {
       if (!globalThis.navigator?.locks?.request) throw new Error('이 환경은 탭 간 잠금을 지원하지 않습니다. 기존 자료를 유지합니다.');
-      return navigator.locks.request('RPCM_STORAGE_V11:' + ORIGIN + ':' + installation(), {mode:'exclusive'}, task);
+      const owner=await ensureInstallation();
+      return navigator.locks.request('RPCM_STORAGE_V11:' + ORIGIN + ':' + owner, {mode:'exclusive'}, task);
     }
     async function optionalLock(task) {
       if(globalThis.navigator?.locks?.request)return locked(task);
@@ -279,14 +297,14 @@ const wrpmStorageMaintenanceV11 = (() => {
     }
     function recordID(key) { return ORIGIN + ':' + installation() + ':' + key; }
     async function readRecord(key) {
-      const db=await openDB(); return new Promise((resolve,reject)=>{
+      await ensureInstallation();const db=await openDB(); return new Promise((resolve,reject)=>{
         const tx=db.transaction('archives','readonly'), request=tx.objectStore('archives').get(recordID(key)); let value;
         request.onsuccess=()=>{value=request.result;};
         tx.oncomplete=()=>resolve(value || null); tx.onabort=()=>reject(tx.error||new Error('기록 읽기 중단'));tx.onerror=()=>reject(tx.error||new Error('기록 읽기 실패'));
       });
     }
     async function writeRecord(key,value,verification='full') {
-      const rawDigest=await digest(value), record={id:recordID(key),origin:ORIGIN,installation:installation(),key,value,digest:rawDigest,at:now()};
+      await ensureInstallation();const rawDigest=await digest(value), record={id:recordID(key),origin:ORIGIN,installation:installation(),key,value,digest:rawDigest,at:now()};
       const db=await openDB(); await new Promise((resolve,reject)=>{
         const tx=db.transaction('archives','readwrite');tx.objectStore('archives').put(record);
         tx.oncomplete=resolve;tx.onabort=()=>reject(tx.error||new Error('기록 저장 중단'));tx.onerror=()=>reject(tx.error||new Error('기록 저장 실패'));
@@ -306,14 +324,14 @@ const wrpmStorageMaintenanceV11 = (() => {
     }
     async function refinerCacheWrite(key,value){key=assertRefinerCacheKey(key);await writeRecord(key,value,'none');return value;}
     async function refinerCacheDelete(key){
-      key=assertRefinerCacheKey(key);const db=await openDB();await new Promise((resolve,reject)=>{
+      key=assertRefinerCacheKey(key);await ensureInstallation();const db=await openDB();await new Promise((resolve,reject)=>{
         const tx=db.transaction('archives','readwrite');tx.objectStore('archives').delete(recordID(key));
         tx.oncomplete=resolve;tx.onabort=()=>reject(tx.error||new Error('응답교정 임시 캐시 삭제 중단'));tx.onerror=()=>reject(tx.error||new Error('응답교정 임시 캐시 삭제 실패'));
       });
       if(await readRecord(key))throw new Error('응답교정 임시 캐시 삭제 재읽기 불일치');
     }
     async function refinerCacheKeys(){
-      const db=await openDB(),owner=installation();return new Promise((resolve,reject)=>{
+      await ensureInstallation();const db=await openDB(),owner=installation();return new Promise((resolve,reject)=>{
         const keys=[],tx=db.transaction('archives','readonly'),request=tx.objectStore('archives').openCursor();
         request.onsuccess=()=>{const cursor=request.result;if(!cursor)return;const record=cursor.value;if(record?.origin===ORIGIN&&record?.installation===owner&&isRefinerCacheKey(record.key))keys.push(String(record.key));cursor.continue();};
         tx.oncomplete=()=>resolve(keys);tx.onabort=()=>reject(tx.error||new Error('응답교정 임시 캐시 목록 읽기 중단'));tx.onerror=()=>reject(tx.error||new Error('응답교정 임시 캐시 목록 읽기 실패'));
@@ -998,20 +1016,20 @@ const wrpmFullBackupV2 = (() => {
           const scope=row.key.match(/^(?:wish-rp-response-review-result-v1:chat:)(.+)$/)?.[1];if(scope&&!rooms.has(scope))continue;
           const incoming=settingsRecord(row.key)?settingsWithoutCredentials(row.value).value:row.value;
           const value=mergeExistingCredentials(incoming,await GM_getValue(row.key,undefined),payload,'GM',row.key);
-          await GM_setValue(row.key,clone(value));onCommitted?.({store:'GM',key:row.key});if(text(await GM_getValue(row.key,undefined))!==text(value))throw Error('GM 옵션 재읽기 불일치: '+row.key);completed.push({store:'GM',key:row.key});
+          await GM_setValue(row.key,clone(value));await onCommitted?.({store:'GM',key:row.key});if(text(await GM_getValue(row.key,undefined))!==text(value))throw Error('GM 옵션 재읽기 불일치: '+row.key);completed.push({store:'GM',key:row.key});
         }
         for(const row of payload.storageSnapshot.sections.local){
           if(!portableLocal(row.key)||selection.globalOnly&&!globalLocalOption(row.key))continue;
           const scope=row.key.match(/^(?:RPCM_new_items_v1:|rpcm-person-selected:)(.+)$/)?.[1];if(scope&&!rooms.has(scope))continue;
           const incoming=settingsRecord(row.key)?settingsWithoutCredentials(row.value).value:row.value;
           const value=mergeExistingCredentials(incoming,localStorage.getItem(row.key),payload,'localStorage',row.key);
-          localStorage.setItem(row.key,value);onCommitted?.({store:'localStorage',key:row.key});if(localStorage.getItem(row.key)!==value)throw Error('localStorage 옵션 재읽기 불일치: '+row.key);completed.push({store:'localStorage',key:row.key});
+          localStorage.setItem(row.key,value);await onCommitted?.({store:'localStorage',key:row.key});if(localStorage.getItem(row.key)!==value)throw Error('localStorage 옵션 재읽기 불일치: '+row.key);completed.push({store:'localStorage',key:row.key});
         }
       }
       const drafts=[];
       for(const row of payload.storageSnapshot.sections.session||[]){
         const id=JSON.parse(row.key.slice('wish-rpcm-result-draft:'.length));if(!rooms.has(id[0]))continue;
-        sessionStorage.setItem(row.key,row.value);onCommitted?.({store:'sessionStorage',key:row.key});if(sessionStorage.getItem(row.key)!==row.value)throw Error('현재 탭 작업 초안 재읽기 불일치');drafts.push(row);completed.push({store:'sessionStorage',key:row.key});
+        sessionStorage.setItem(row.key,row.value);await onCommitted?.({store:'sessionStorage',key:row.key});if(sessionStorage.getItem(row.key)!==row.value)throw Error('현재 탭 작업 초안 재읽기 불일치');drafts.push(row);completed.push({store:'sessionStorage',key:row.key});
       }
       hooks.restoreTransientDrafts?.(drafts);
       return {completed,skippedCredentials:true,optionsApplied:!!selection.includeOptions};
@@ -1071,7 +1089,7 @@ const wrpmFullBackupV2 = (() => {
     for(const row of records){const saved=actual.get(row.id);if(!saved||text(saved.value)!==text(row.value)||saved.digest!==row.digest)throw Error('복구 보관 원문 재읽기 불일치');}
     return {retained:records.length,scope:'Inactive recovery archive. Legacy routes, locks and pending injections not activated.'};
   }
-  function journal(value){const textValue=JSON.stringify({format:'WRPM_RESTORE_JOURNAL_V2',origin:ORIGIN,at:new Date().toISOString(),...value});GM_setValue(JOURNAL,textValue);if(GM_getValue(JOURNAL,null)!==textValue)throw Error('복원 진행 기록 저장 실패');}
+  async function journal(value){const textValue=JSON.stringify({format:'WRPM_RESTORE_JOURNAL_V2',origin:ORIGIN,at:new Date().toISOString(),...value});await GM_setValue(JOURNAL,textValue);if(GM_getValue(JOURNAL,null)!==textValue)throw Error('복원 진행 기록 저장 실패');}
   return {configure:value=>{hooks=value;},redactDiagnostic,diagnose,upgradeLegacy:payload=>operation(()=>upgradeLegacy(payload)),exportFull:()=>operation(create),exportRawPreimage:()=>operation(createRawPreimage),hasGlobalOptions,validate,verifySandbox:payload=>operation(()=>sandbox(payload)),verifyOptimization:(payload,preflight)=>operation(()=>verifyOptimization(payload,preflight)),requireOptimization,importOptions,
     forRecovery:(payload,data)=>operation(()=>forRecovery(payload,data)),prepareCleanup:payload=>operation(()=>prepareCleanup(payload)),requireCleanup,retainRecovery,journal,digest,signature:text,fileText:payload=>files.get(payload)||JSON.stringify(payload),gmRows,auxRows,readAux,portableGM,portableLocal,secretKey,PROCESS_LIMIT,FORMAT,isBusy:()=>busy};
 })();
@@ -1084,13 +1102,13 @@ const wrpmFullBackupV2 = (() => {
   // 버전별 키를 쓰면 구버전과 신버전이 동시에 설치됐을 때 둘 다 실행될 수 있습니다.
   // 모든 버전이 공유하는 고정 키로 중복 실행을 막습니다.
   if(window.__WISH_RP_MANAGER_LOADED__){wrpmStartup.status('duplicate','다른 RP Manager가 실행 중입니다. 버전: '+String(window.__WISH_RP_MANAGER_LOADED__.version||'알 수 없음'));return;}
-  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.17.37.1(키메라 버전)', loadedAt: Date.now() };
+  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.17.37.2(키메라 버전)', loadedAt: Date.now() };
   // 같은 페이지에 남아 있는 v0.8.10 복사본이 뒤늦게 시작되는 경우도 차단합니다.
   window.__RP_MANAGER_0810_LOADED__ = true;
 
   const APP = {
     name: '🪽위시 RP Manager(키메라 버전)',
-    version: '0.17.37.1',
+    version: '0.17.37.2',
     releaseStage: '키메라 버전',
     buildLabel: '',
     dbName: 'RPContextManagerDB',
@@ -13019,8 +13037,7 @@ ${dialogueText}`;
     const next={version:1,encoding:enabled?'utf-16le':'utf-8',changeId:crypto.randomUUID()};
     state.carrierEncodingSettingBusy=true;
     try{
-      try{await GM_setValue('RPCM_carrier_encoding_global_v1',next);}
-      catch(error){if(GM_getValue('RPCM_carrier_encoding_global_v1',null)?.changeId!==next.changeId)throw error;}
+      await GM_setValue('RPCM_carrier_encoding_global_v1',next);
       const stored=GM_getValue('RPCM_carrier_encoding_global_v1',null);
       if(stored?.changeId!==next.changeId||stored.encoding!==next.encoding)throw new Error('다른 탭에서 설정이 바뀌었습니다. 현재 전역 선택을 확인해 주세요.');
       // Room records, active injections and server messages are never rewritten here.
@@ -15922,7 +15939,7 @@ ${dialogueText}`;
           candidate._rpcmRevision=revision+1;candidate.updatedAt=nowIso();committedRoom=candidate;try{store.put(candidate);}catch(error){validationError=error;tx.abort();}
         };
         get.onerror=()=>tx.abort();
-        tx.oncomplete=()=>{try{onCommitted?.(committedRoom);resolve();}catch(error){reject(error);}};
+        tx.oncomplete=()=>Promise.resolve().then(()=>onCommitted?.(committedRoom)).then(resolve,reject);
         tx.onabort=()=>reject(validationError || new Error(abortedForStale?`최신 저장본과 자동 병합하지 못했습니다. ${staleReason} 다른 탭에서 같은 항목을 수정했다면 최신 화면을 다시 열어 주세요.`:`IndexedDB 저장이 취소됐습니다.${tx.error?.name?` (${tx.error.name}: ${tx.error.message||''})`:''}`));
         tx.onerror=()=>{const error=tx.error||new Error('IndexedDB 저장 실패');const name=String(error?.name||'').toLowerCase(),message=String(error?.message||error||'');reject(/quota/.test(name+' '+message.toLowerCase())?new Error(`브라우저 IndexedDB 저장공간 한도를 초과했습니다. RP Manager 데이터가 너무 커졌거나 브라우저가 이 사이트 저장공간을 제한하고 있습니다. (${message||error.name})`):error);};
       });
@@ -16064,7 +16081,7 @@ ${dialogueText}`;
         if(wrpmFullBackupV2.signature(get.result||null)!==wrpmFullBackupV2.signature(expected||null)){conflict=true;tx.abort();return;}
         try{library._rpcmLibraryRevision=Number(get.result?._rpcmLibraryRevision||0)+1;library._rpcmLibraryInstance=crypto.randomUUID();store.put(library);}catch(error){failure=error;tx.abort();}
       };
-      get.onerror=()=>tx.abort();tx.oncomplete=()=>{try{onCommitted?.(library);resolve();}catch(error){reject(error);}};
+      get.onerror=()=>tx.abort();tx.oncomplete=()=>Promise.resolve().then(()=>onCommitted?.(library)).then(resolve,reject);
       tx.onabort=()=>reject(failure||tx.error||new Error(conflict?'복원 직전 자료실이 바뀌어 덮어쓰기를 중단했습니다.':'자료실 복원 저장 중단'));tx.onerror=()=>reject(failure||tx.error||new Error('자료실 복원 저장 실패'));
     });
     const stored=await getCharacterLibrary(library.scopeId);
@@ -16106,8 +16123,8 @@ ${dialogueText}`;
     const originalRooms=new Map(preimage.rooms.map(row=>[row.chatId,row])),originalLibraries=new Map(preimage.characterLibraries.map(row=>[row.scopeId,row]));
     const scope=()=>{if(epoch!==state.routeEpoch)throw new Error('복원 중 방이 바뀌었습니다. 완료한 항목은 진행 기록에 남겼습니다.');};
     const sourceHash=await wrpmFullBackupV2.digest(payload.storageSnapshot.manifest);
-    wrpmFullBackupV2.journal({phase:'prepared',sourceHash,roomIds:[...roomIds],libraryIds:[...libraryIds],completed});
-    const recordCommitted=row=>{committed.push({...row,status:'committed-unverified'});wrpmFullBackupV2.journal({phase:'committed-unverified',sourceHash,completed,committed,globalOnly});};
+    await wrpmFullBackupV2.journal({phase:'prepared',sourceHash,roomIds:[...roomIds],libraryIds:[...libraryIds],completed});
+    const recordCommitted=async row=>{committed.push({...row,status:'committed-unverified'});await wrpmFullBackupV2.journal({phase:'committed-unverified',sourceHash,completed,committed,globalOnly});};
     state.fullBackupRestoreBusy=true;
     try{
       for(const source of payload.rooms){
@@ -16118,7 +16135,7 @@ ${dialogueText}`;
         if(!Array.isArray(restored.lorePacks))restored.lorePacks=[];normalizeRoomSlots(restored);
         restored._rpcmRevision=Number(current?._rpcmRevision||0);rpcmMergeRestoredCarrierCleanup(restored,current);
         await saveRestoredRoom(restored,current||null,()=>recordCommitted({store:'rooms',id:source.chatId}));completed.push({store:'rooms',id:source.chatId});
-        wrpmFullBackupV2.journal({phase:'data',sourceHash,completed,committed});
+        await wrpmFullBackupV2.journal({phase:'data',sourceHash,completed,committed});
       }
       for(const source of payload.characterLibraries){
         if(!libraryIds.has(source.scopeId))continue;scope();
@@ -16127,15 +16144,15 @@ ${dialogueText}`;
         await rpcmWriteRestoredLibrary(structuredClone(source),current||null,()=>recordCommitted({store:'characterLibraries',id:source.scopeId}));
         const saved=(await rpcmStrictCoreBackup()).characterLibraries.find(row=>row.scopeId===source.scopeId);
         if(!saved)throw new Error('자료실 복원 재읽기 실패');completed.push({store:'characterLibraries',id:source.scopeId});
-        wrpmFullBackupV2.journal({phase:'data',sourceHash,completed,committed});
+        await wrpmFullBackupV2.journal({phase:'data',sourceHash,completed,committed});
       }
-      scope();if(!globalOnly){if(!choice.recoveryOnly)await wrpmStorageMaintenanceV11.importExtension(payload.storageMaintenance,choice);completed.push({store:'managed',selection:choice.roomIds.length+choice.libraryIds.length});wrpmFullBackupV2.journal({phase:'managed',sourceHash,completed,committed});}
+      scope();if(!globalOnly){if(!choice.recoveryOnly)await wrpmStorageMaintenanceV11.importExtension(payload.storageMaintenance,choice);completed.push({store:'managed',selection:choice.roomIds.length+choice.libraryIds.length});await wrpmFullBackupV2.journal({phase:'managed',sourceHash,completed,committed});}
       scope();const options=choice.recoveryOnly?{completed:[]}:await wrpmFullBackupV2.importOptions(payload,{...choice,globalOnly},recordCommitted);completed.push(...options.completed);
       scope();const recovery=choice.recoveryOnly||globalOnly?{retained:0}:await wrpmFullBackupV2.retainRecovery(payload,choice);
-      wrpmFullBackupV2.journal({phase:'complete',sourceHash,completed,committed:committed.map(row=>({...row,status:'verified'})),recovery,globalOnly});
+      await wrpmFullBackupV2.journal({phase:'complete',sourceHash,completed,committed:committed.map(row=>({...row,status:'verified'})),recovery,globalOnly});
       return {completed,options,recovery,globalOnly,pendingActivation:false};
     }catch(error){
-      const partial=[...completed,...error.completed||[]];try{wrpmFullBackupV2.journal({phase:'partial',sourceHash,completed:partial,committed,globalOnly,error:String(error.message||error)});}catch(_){}
+      const partial=[...completed,...error.completed||[]];try{await wrpmFullBackupV2.journal({phase:'partial',sourceHash,completed:partial,committed,globalOnly,error:String(error.message||error)});}catch(_){}
       error.code='WRPM_RESTORE_PARTIAL';error.message='복원 미완료 · 쓰기 '+committed.length+'개 / 재읽기 완료 '+partial.length+'개 · 진행 기록과 복원 전 퇴피 JSON을 확인해 주세요. '+error.message;throw error;
     }finally{
       state.fullBackupRestoreBusy=false;
@@ -22681,7 +22698,7 @@ ${dialogueText}`;
         if(index<0&&expandedReconnect.index<0){
           scanGaps.set(roomKey,{checkpoint:lastId,lastHead:head,nextProbeAt:Date.now()+30*60*1000,warned:true});
           if(cached?.checkpoint!==lastId){
-            console.warn('[WRPM 0.17.37.1] 자동 스캔 기준 턴 미발견: checkpoint 보존',roomKey);
+            console.warn('[WRPM 0.17.37.2] 자동 스캔 기준 턴 미발견: checkpoint 보존',roomKey);
             if(room===state.currentRoom)notify('자동 스캔의 이전 기준 턴을 최근 50개에서 찾지 못했습니다. 기존 기준점은 보존하고 최신 장면부터 재개합니다. 과거 미검토 구간이 있을 수 있습니다.','warn',6500);
           }
           gapScene=true;
@@ -22703,6 +22720,7 @@ ${dialogueText}`;
       return empty(gapScene);
     }
     const baseline=rpcmRoomClone(room),draft=rpcmRoomClone(baseline);
+    try{
     const epoch=state.routeEpoch,revision=Number(room._rpcmRevision||0);
     const sceneMessages=(recentMessages||[]).filter(m=>['user','assistant'].includes(messageRoleOf(m))).slice(0,6);
     const cleanFreshText=sceneMessages.map(m=>stripAutomationNoise(messageTextOf(m),true)).filter(Boolean).join('\n');
@@ -22735,7 +22753,7 @@ ${dialogueText}`;
     }
     // Validate all touched top-level fields before copying staged state into live room.
     // No early reset, no blind replacement of manual/Quick changes made during awaits.
-    if(state.routeEpoch!==epoch||state.currentRoom!==room||Number(room._rpcmRevision||0)!==revision)
+    if(state.routeEpoch!==epoch||state.currentRoom!==room)
       throw rpcmHistoryStale('자동 스캔 중 방 또는 저장 상태가 바뀌었습니다.');
     const touched=Object.keys(draft).filter(key=>!['_rpcmRevision','updatedAt'].includes(key)&&
       rpcmRoomSig(Object.hasOwn(baseline,key),baseline[key])!==rpcmRoomSig(Object.hasOwn(draft,key),draft[key]));
@@ -22772,6 +22790,13 @@ ${dialogueText}`;
           if(resolved.has)room[key]=resolved.value;else delete room[key];
         }
         if(conflicts.length)console.warn('[WRPM 임시8] 자동 스캔 롤백 중 동시 편집 충돌: 사용자 최신값 보존',conflicts);
+      }
+      throw error;
+    }
+    }catch(error){
+      if(gapScene){
+        const cachedGap=scanGaps.get(roomKey);
+        if(cachedGap?.checkpoint===lastId)cachedGap.lastHead='';
       }
       throw error;
     }
@@ -23197,6 +23222,7 @@ ${dialogueText}`;
         if(rpcmCarrierTargetSignature(room?.pending)!==target)throw rpcmHistoryStale('대기 중 주입 대상이 바뀌었습니다.');
         let phaseStarted=Date.now();const recent=await fetchRecentMessages(apiChatIdOf(room),50,{untilAssistant:true,check:()=>{if(!rpcmCarrierScopeCurrent(room,readEpoch)||rpcmCarrierStopped(room)||rpcmCarrierTargetSignature(room?.pending)!==target)throw rpcmHistoryStale('주입 대상 조회 중 방·세션이 바뀌었습니다.');}});queuePhase.headReadMs=Date.now()-phaseStarted;const latest=recent.find(m=>messageRoleOf(m)==='assistant');
         if(!latest)throw new Error('현재 남아 있는 AI 답변이 없습니다.');
+        if(Object.hasOwn(options,'expectedAssistantId')&&(String(messageIdOf(latest)||'')!==String(options.expectedAssistantId||'')||String(messageIdOf(recent.find(m=>messageRoleOf(m)==='user'))||'')!==String(options.expectedUserId||'')))throw rpcmHistoryStale('판정 대기 중 최신 USER·AI가 바뀌었습니다. 다음 확인에서 다시 판정합니다.');
         if(String(room.pending?.messageId)===String(messageIdOf(latest))){phaseStarted=Date.now();const result=await syncPendingCarrierNow(room,'manual-recovery');queuePhase.lateResyncMs=Date.now()-phaseStarted;return result;}
         return await reanchorAfterResponseNow(room,latest,{...options,queuePhase});
       }finally{queuePhase.reanchorTotalMs=Date.now()-queuePhaseStarted;queueDiag?.setDetail?.(queuePhase);}
@@ -23226,6 +23252,14 @@ ${dialogueText}`;
     const retryingSameAssistant = !!recovery && String(recovery.failedMessageId || '') === String(latestAssistantId);
     const latestUserId=String(messageIdOf(recent.find(m=>messageRoleOf(m)==='user'))||'');
     const sameUser=p.lastObservedUserId!==undefined&&String(p.lastObservedUserId)===latestUserId;
+    const expectedHead={expectedAssistantId:String(latestAssistantId),expectedUserId:latestUserId};let automaticMoveOptions={...expectedHead};
+    if(!manual&&!sameUser&&!retryingSameAssistant&&!recent.some(message=>String(messageIdOf(message)||'')===String(p.messageId))){
+      let previousCarrier=null,reason='history-uncertain';
+      const url=`https://crack-api.wrtn.ai/crack-gen/v3/chats/${encodeURIComponent(apiChatIdOf(room))}/messages/${encodeURIComponent(p.messageId)}`;
+      try{const data=await rpcmApiRequestOnce('GET',url);previousCarrier=data?.data||data;}catch(error){if(rpcmNetStatus(error)===404)reason='history-rollback';else console.warn('[RP매니저] 이전 carrier 존재 확인 실패:',room.chatId,error);}
+      if(state.routeEpoch!==checkEpoch||checkRevision!==rpcmCarrierRevision(room)||room.pending!==p||rpcmCarrierStopped(room))return;
+      if(!previousCarrier||String(messageIdOf(previousCarrier)||'')!==String(p.messageId))automaticMoveOptions={...expectedHead,countTurn:false,reason};
+    }
     if (retryingSameAssistant && !manual) {
       if (recovery.holdUntilNextAssistant) return;
       if (Number(recovery.nextRetryAt || 0) > Date.now()) return;
@@ -23351,13 +23385,21 @@ ${dialogueText}`;
       const beforeReanchor = { ...p, items: clonePendingItems(p.items) };
       try {
         assertManualCurrent();
-        await reanchorAfterResponse(room, latestAssistant, manual ? {countTurn:false,reason:'manual-recovery'} : sameUser ? {countTurn:false,reason:'recovery'} : retryingSameAssistant ? {countTurn:true,reason:'recovery'} : {});
+        await reanchorAfterResponse(room, latestAssistant, manual ? {countTurn:false,reason:'manual-recovery'} : sameUser ? {...expectedHead,countTurn:false,reason:'recovery'} : retryingSameAssistant ? {...expectedHead,countTurn:true,reason:'recovery'} : automaticMoveOptions);
       } catch (e) {
         console.warn('[RP매니저] reanchor failed:', room.chatId, e);
         // An obsolete queued operation must not clean up or replace the newer
         // session as though its carrier move had failed.
         if(e?.code==='RPCM_CARRIER_RESPONSE_NOT_READY'){if(manual)throw e;return;}
-        if(rpcmCarrierStopped(room)||checkRevision!==rpcmCarrierRevision(room)||e?.code==='RPCM_HISTORY_STALE'||!rpcmCarrierScopeCurrent(room,checkEpoch)){if(manual)throw e;return;}
+        if(rpcmCarrierStopped(room)||checkRevision!==rpcmCarrierRevision(room)||e?.code==='RPCM_HISTORY_STALE'||!rpcmCarrierScopeCurrent(room,checkEpoch)){
+          if(e?.code==='RPCM_HISTORY_STALE'&&!manual&&!sameUser&&room.pending===p){
+            for(const item of (room.pending.items||[])){
+              const prior=beforeReanchor.items.find(x=>x.slotId===item.slotId);
+              if(prior&&Number(item.usedTurns)===Number(prior.usedTurns||0)+1)item.usedTurns=Number(prior.usedTurns||0);
+            }
+          }
+          if(manual)throw e;return;
+        }
         const cleanupConfirmed=false;
         rpcmCarrierIssue(room,'handoff',e,latestAssistantId);
         const failedCurrent = room.pending;
