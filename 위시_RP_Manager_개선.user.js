@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         🪽위시 RP Manager(키메라 버전)
 // @namespace    local.rp.context.manager
-// @version      0.17.97.33
+// @version      0.17.97.35
 // @description  [키메라 버전] 장기 RP의 현재상태·날짜로그·인물·타임라인·자료집을 관리하고, 검수형 AI 생성·컨텍스트 주입·통합 백업·기존 백업 이사를 지원합니다.
 // @author       딩가딩가
 // @license      All Rights Reserved
@@ -182,7 +182,7 @@ const wrpmStartup=(()=>{
       host=document.createElement('div');host.id='wish-rpcm-startup-status';
       const root=host.attachShadow({mode:'open'}),style=document.createElement('style'),card=document.createElement('section'),title=document.createElement('strong'),text=document.createElement('span'),close=document.createElement('button');
       style.textContent=':host{all:initial}section{box-sizing:border-box;width:280px;border:1px solid #a8afc0;border-radius:12px;background:#202638;color:#f1f3f8;padding:12px;font:13px/1.5 system-ui;box-shadow:0 4px 20px #0005}strong,span{display:block}span{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:5px}button{font:inherit;margin-top:8px;padding:5px 9px;border:1px solid #a8afc0;border-radius:6px;background:#343c51;color:#fff;cursor:pointer}';
-      title.textContent='WISH 0.17.97.33 · 키메라 버전 실행 상태';text.setAttribute('role','status');text.setAttribute('aria-live','polite');close.type='button';close.textContent='닫기';close.onclick=()=>{dismissed=true;host?.remove();host=null;stop();};
+      title.textContent='WISH 0.17.97.35 · 키메라 버전 실행 상태';text.setAttribute('role','status');text.setAttribute('aria-live','polite');close.type='button';close.textContent='닫기';close.onclick=()=>{dismissed=true;host?.remove();host=null;stop();};
       card.append(title,text,close);root.append(style,card);document.documentElement.append(host);
       for(const [k,v]of Object.entries({position:'fixed',right:'16px',top:'200px','z-index':'2147483647',display:'block',visibility:'visible',opacity:'1',width:'280px',height:'auto'}))host.style.setProperty(k,v,'important');
     }
@@ -1157,13 +1157,13 @@ const wrpmFullBackupV2 = (() => {
   // 버전별 키를 쓰면 구버전과 신버전이 동시에 설치됐을 때 둘 다 실행될 수 있습니다.
   // 모든 버전이 공유하는 고정 키로 중복 실행을 막습니다.
   if(window.__WISH_RP_MANAGER_LOADED__){wrpmStartup.status('duplicate','다른 RP Manager가 실행 중입니다. 버전: '+String(window.__WISH_RP_MANAGER_LOADED__.version||'알 수 없음'));return;}
-  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.17.97.33(키메라 버전)', loadedAt: Date.now() };
+  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.17.97.35(키메라 버전)', loadedAt: Date.now() };
   // 같은 페이지에 남아 있는 v0.8.10 복사본이 뒤늦게 시작되는 경우도 차단합니다.
   window.__RP_MANAGER_0810_LOADED__ = true;
 
   const APP = {
     name: '🪽위시 RP Manager(키메라 버전)',
-    version: '0.17.97.33',
+    version: '0.17.97.35',
     releaseStage: '키메라 버전',
     buildLabel: '',
     dbName: 'RPContextManagerDB',
@@ -6153,7 +6153,10 @@ try {
     const keys=[...new Set(checked.blocks.filter(block=>!block.isUnknown).map(block=>block.dateKey))];
     const snapshot=rpcmAiDateTargetState(room,keys);
     for(const [key,blocks] of JSON.parse(snapshot)){
-      if(!blocks.length)continue;
+      if(!blocks.length){
+        if(coverage?.existingDates?.includes(key)||Object.hasOwn(coverage?.dates||{},key)){const error=new Error('생성 뒤 기존 날짜 기록이 삭제됐습니다. 원본과 초안을 유지하고 적용을 보류합니다: '+key);error.code='RPCM_DATE_INPUT_INCOMPLETE';throw error;}
+        continue;
+      }
       const digest=await fullRebuildSha256(JSON.stringify(blocks));
       if(coverage?.version!==1||String(coverage.roomId||'')!==String(room.chatId||'')||coverage.dates?.[key]!==digest){
         const error=new Error('기존 날짜 기록이 AI 입력에 모두 포함됐는지 확인할 수 없습니다. 해당 날짜의 적용을 보류하고 원본과 초안을 유지합니다: '+key);
@@ -6161,6 +6164,13 @@ try {
       }
     }
     return {keys,snapshot};
+  }
+
+  // 합친 초안의 existingDates: 이전 초안 값 + 저장된 방(room) 날짜. generationRoom(이전 초안이 섞인 방)은 쓰지 않는다(원작 0.17.97 7633행).
+  // startLog: 생성 시작 때의 저장본 날짜기록. 2차 생성 중 지워진 날짜도 유지해 되살아나지 않게 한다(원작에는 없는 보강).
+  function rpcmCombineAiDraftExistingDates(room,previous,startLog='') {
+    const keysOf=text=>parseDatedLogBlocks(String(text||'')).filter(block=>!block.isUnknown).map(block=>block.dateKey);
+    return [...new Set([...(previous?.dateInputCoverage?.existingDates||[]),...keysOf(startLog),...keysOf(aiFixedSlot(room,'logSummary')?.content)])];
   }
 
   function recentExistingLogContext(logText, room = state.currentRoom, maxBlocks = AI_SUMMARY_RECENT_LOG_BLOCKS, maxChars = AI_SUMMARY_RECENT_LOG_CHARS) {
@@ -6216,6 +6226,8 @@ try {
   function rpcmErrorAdvice(error) {
     const raw=String(error?.message||error||'알 수 없는 오류');
     const lower=raw.toLowerCase();
+    if (/permission denied to access property ["'“”]then["'“”]/.test(lower))
+      return {kind:'브라우저·확장 스크립트 호환',steps:'파이어폭스(Firefox)의 페이지와 확장 스크립트 사이에서 발생한 호환 오류입니다. RP Manager를 최신 버전으로 설치한 뒤 크랙 페이지를 새로고침해 주세요. 기존 자료를 초기화하거나 삭제하지 마세요.'};
     if (/app.?check|firebaseappcheck|attestation|recaptcha enterprise/.test(lower))
       return {kind:'Firebase App Check 인증',steps:'API 설정에서 AppCheck 디버그 토큰을 복사하고 Firebase Console → App Check → 해당 앱 → 디버그 토큰 관리에 등록하세요. 현재 브라우저의 토큰과 등록한 토큰이 같은지 확인한 뒤 연결 테스트하세요. API 키만 다시 입력해도 해결되지 않습니다.'};
     if (/quotaexceedederror|the quota has been exceeded|storage quota|indexeddb.*한도|저장공간.*초과/.test(lower))
@@ -6803,7 +6815,7 @@ ${dialogueText}`;
         const included=sent.filter(block=>!block.isUnknown&&block.dateKey===key).map(block=>block.raw);
         if(JSON.stringify(originals)===JSON.stringify(included))dates[key]=await fullRebuildSha256(JSON.stringify(originals));
       }
-      dateInputCoverage={version:1,roomId:String(room.chatId||''),dates};
+      dateInputCoverage={version:1,roomId:String(room.chatId||''),existingDates:[...new Set(current.filter(block=>!block.isUnknown).map(block=>block.dateKey))],dates};
     }
 
     const draft = {
@@ -16013,7 +16025,7 @@ ${dialogueText}`;
   function openStorageRecovery(){
     document.querySelector('#rpcm-full-rebuild-dialog')?.remove();const backdrop=document.createElement('div');backdrop.id='rpcm-full-rebuild-dialog';
     const button=(attr,label,help,primary=false)=>`<button class="rpcm-btn ${primary?'primary':'secondary'}" data-storage-${attr} title="${esc(help)}">${label}</button>`;
-    backdrop.innerHTML=`<section class="rpcm-update-dialog rpcm-full-rebuild-dialog rpcm-storage-dialog" role="dialog" aria-modal="true" aria-label="저장소 점검·복구"><header><h2 style="margin:0">저장소 점검·복구</h2><button class="rpcm-update-dialog-close" style="margin-left:auto" aria-label="닫기">${rpcmUiIcon('close')}</button></header><div class="rpcm-update-result-body"><p>사이트 저장소에는 RP 원본, 확장 저장소에는 설정과 비상 사본을 보관합니다. 전체 백업 JSON은 양쪽 자료를 하나의 파일로 받습니다. 내용이 다른 과거 사본은 지우거나 자동 합치지 않고 복구 자료로 보존합니다.</p><p data-storage-status role="status">저장소 확인 중…</p><div class="rpcm-update-actions">${button('export','전체 백업 JSON','모든 방·설정집·설정과 현재 탭의 작업 초안, 최근/직전 복구 사본을 한 파일로 받습니다. API 키는 제외합니다.',true)}${button('verify','백업 파일 확인','저장한 전체 JSON을 시험 DB에 복원하고 다시 읽어 검사합니다. 현재 자료는 덮어쓰지 않습니다.')}${button('usage','사용량 보기','어떤 원본·사본이 얼마나 공간을 쓰는지 색상 막대와 B/KB/MB로 확인합니다. 자료를 바꾸지 않습니다.')}</div><details style="margin:16px 0"><summary>용량 관리 · 버튼 설명</summary><p>용량 줄이기는 저장방식을 바꾸는 작업이고, 복구 사본 불러오기는 선택한 방의 내용을 되돌리는 작업입니다.</p><div class="rpcm-update-actions">${button('persist','자동 삭제 방지 요청','공간 부족 때 브라우저가 사이트 데이터를 자동 정리하지 않도록 요청합니다. 승인은 브라우저가 결정합니다. 사용자의 사이트/프로필 삭제는 막지 않으며 외부 백업을 대신하지 않습니다.')}</div></details><div class="rpcm-update-actions"><label title="최근과 직전은 서로 다른 시점의 복구 사본입니다. 같은 방 ID에는 선택한 사본을 덮어쓰며 두 시점을 자동 합치지 않습니다.">복구 시점 <select data-storage-version><option value="current">최근 사본</option><option value="previous">직전 사본</option></select></label>${button('restore','복구할 자료 선택','선택한 시점의 비상 사본을 현재 방·설정집과 비교한 뒤 필요한 것만 원래 ID에 복원합니다. 적용 전 전체 퇴피 파일을 준비합니다. 다른 방 자료를 현재 방에 복사하는 기능은 아닙니다. 그 용도는 자료 이동·보관의 ‘다른 방에서 가져오기’를 사용하세요.')}</div><div data-storage-usage-result hidden></div></div><footer><button class="rpcm-btn secondary rpcm-update-dialog-close">닫기</button></footer></section>`;
+    backdrop.innerHTML=`<section class="rpcm-update-dialog rpcm-full-rebuild-dialog rpcm-storage-dialog" role="dialog" aria-modal="true" aria-label="저장소 점검·복구"><header><h2 style="margin:0">저장소 점검·복구</h2><button class="rpcm-update-dialog-close" style="margin-left:auto" aria-label="닫기">${rpcmUiIcon('close')}</button></header><div class="rpcm-update-result-body"><p>사이트 저장소에는 RP 원본, 확장 저장소에는 설정과 비상 사본을 보관합니다. 전체 백업 JSON은 양쪽 자료를 하나의 파일로 받습니다. 내용이 다른 과거 사본은 지우거나 자동 합치지 않고 복구 자료로 보존합니다.</p><p data-storage-status role="status">저장소 확인 중…</p><div class="rpcm-update-actions">${button('export','전체 백업 JSON','모든 방·설정집·설정과 현재 탭의 작업 초안, 최근/직전 복구 사본을 한 파일로 받습니다. API 키는 제외합니다.',true)}${button('verify','백업 파일 확인','저장한 전체 JSON을 시험 DB에 복원하고 다시 읽어 검사합니다. 현재 자료는 덮어쓰지 않습니다.')}${button('usage','사용량 보기','어떤 원본·사본이 얼마나 공간을 쓰는지 색상 막대와 B/KB/MB로 확인합니다. 자료를 바꾸지 않습니다.')}</div><details style="margin:16px 0"><summary>브라우저 자동 삭제 방지</summary><div class="rpcm-update-actions">${button('persist','자동 삭제 방지 요청','공간 부족 때 브라우저가 사이트 데이터를 자동 정리하지 않도록 요청합니다. 승인은 브라우저가 결정합니다. 사용자의 사이트/프로필 삭제는 막지 않으며 외부 백업을 대신하지 않습니다.')}</div></details><div class="rpcm-update-actions"><label title="최근과 직전은 서로 다른 시점의 복구 사본입니다. 같은 방 ID에는 선택한 사본을 덮어쓰며 두 시점을 자동 합치지 않습니다.">복구 시점 <select data-storage-version><option value="current">최근 사본</option><option value="previous">직전 사본</option></select></label>${button('restore','복구할 자료 선택','선택한 시점의 비상 사본을 현재 방·설정집과 비교한 뒤 필요한 것만 원래 ID에 복원합니다. 적용 전 전체 퇴피 파일을 준비합니다. 다른 방 자료를 현재 방에 복사하는 기능은 아닙니다. 그 용도는 자료 이동·보관의 ‘다른 방에서 가져오기’를 사용하세요.')}</div><div data-storage-usage-result hidden></div></div><footer><button class="rpcm-btn secondary rpcm-update-dialog-close">닫기</button></footer></section>`;
     const status=backdrop.querySelector('[data-storage-status]');let busy=false;
     const run=async(button,work)=>{if(busy)return;busy=true;const controls=[...backdrop.querySelectorAll('[data-storage-export],[data-storage-verify],[data-storage-usage],[data-storage-persist],[data-storage-restore],[data-storage-version]')];controls.forEach(x=>x.disabled=true);try{await work();}catch(error){status.textContent='작업 미완료: '+error.message;}finally{busy=false;controls.forEach(x=>x.disabled=false);}};
     const refresh=async()=>{try{const [core,data,persisted]=await Promise.all([rpcmStrictCoreBackup(),rescuePayload(),navigator.storage?.persisted?.()]);status.textContent=`현재 RP ${core.rooms.length}개 · 설정집 ${core.characterLibraries.length}개 / 최근 복구 RP ${data.rooms.length}개 · 설정집 ${data.characterLibraries.length}개 · 자동 삭제 방지 ${persisted===true?'승인됨':persisted===false?'미승인':'미확인'}${data.errors.length?' · 복구 사본 검증 오류 '+data.errors.length+'개':''}`;}catch(error){status.textContent='저장소 확인 미완료: '+error.message;}};
@@ -23041,7 +23053,7 @@ ${dialogueText}`;
         if(index<0&&expandedReconnect.index<0){
           scanGaps.set(roomKey,{checkpoint:lastId,lastHead:head,nextProbeAt:Date.now()+30*60*1000,warned:true});
           if(cached?.checkpoint!==lastId){
-            console.warn('[WRPM 0.17.97.33] 자동 스캔 기준 턴 미발견: checkpoint 보존',roomKey);
+            console.warn('[WRPM] 자동 스캔 기준 턴 미발견: checkpoint 보존',roomKey);
             if(room===state.currentRoom)notify('자동 스캔의 이전 기준 턴을 최근 50개에서 찾지 못했습니다. 기존 기준점은 보존하고 최신 장면부터 재개합니다. 과거 미검토 구간이 있을 수 있습니다.','warn',6500);
           }
           gapScene=true;
@@ -23132,7 +23144,7 @@ ${dialogueText}`;
             'auto-scan:'+key,conflicts);
           if(resolved.has)room[key]=resolved.value;else delete room[key];
         }
-        if(conflicts.length)console.warn('[WRPM 임시8] 자동 스캔 롤백 중 동시 편집 충돌: 사용자 최신값 보존',conflicts);
+        if(conflicts.length)console.warn('[WRPM] 자동 스캔 롤백 중 동시 편집 충돌: 사용자 최신값 보존',conflicts);
       }
       throw error;
     }
@@ -25446,6 +25458,7 @@ function renderedContextScope(node) {
         attemptedSettings=next;
         if (currentInputPlan?.risk?.level === 'blocked') throw new Error('가져올 내용이 안전 한도를 넘었습니다. 화면의 권장 최대 턴 이하로 줄여 주세요.');
         setBusy(true, '요약 준비 중…');
+        const startLog = String(aiFixedSlot(room, 'logSummary')?.content || '');
         const generationRoom = await aiRoomWithPendingDraft(room, previousDraft);
         const freshDraft = await generateAiSummaryDraft(generationRoom, next, draftSecrets.get(next.provider) || '', message => setBusy(true, message), room);
         if(state.currentRoom!==room||state.routeEpoch!==generationEpoch||String(room.chatId||'')!==generationRoomId||String(apiChatIdOf(room)||'')!==generationApiChatId)throw rpcmHistoryStale('AI 요약 생성 중 방·분기가 바뀌었습니다. 결과를 현재 방에 적용하지 않았습니다.');
@@ -25474,7 +25487,7 @@ function renderedContextScope(node) {
           }
           const dates={...(previousDraft.dateInputCoverage?.dates||{})};
           for(const block of freshBlocks)if(!priorKeys.has(block.dateKey)&&freshDraft.dateInputCoverage?.dates?.[block.dateKey])dates[block.dateKey]=freshDraft.dateInputCoverage.dates[block.dateKey];
-          freshDraft.dateInputCoverage={version:1,roomId:String(room.chatId||''),dates};
+          freshDraft.dateInputCoverage={version:1,roomId:String(room.chatId||''),existingDates:rpcmCombineAiDraftExistingDates(room,previousDraft,startLog),dates};
           freshDraft.logSummary = mergePendingDateSummary(previousDraft.logSummary, freshDraft.logSummary, room, freshOverflowOnly);
           if (!freshDraft.currentState) freshDraft.currentState = String(previousDraft.currentState || '');
           if(String(previousDraft.currentState||'').trim()){if(Object.prototype.hasOwnProperty.call(previousDraft,'baseCurrentState'))freshDraft.baseCurrentState=String(previousDraft.baseCurrentState||'');else delete freshDraft.baseCurrentState;}
@@ -41519,7 +41532,7 @@ reason은 각 항목에서 무엇을 줄이거나 합쳤는지와 그 이유를 
               <button class="rpcm-mini" id="rpcm-save">현재 편집 저장</button>
               <button class="rpcm-mini" id="rpcm-room-transfer-backup">현재 방 복사용 JSON</button>
               <button class="rpcm-mini" id="rpcm-backup">전체 백업 JSON</button>
-              <button class="rpcm-mini" id="rpcm-storage-recovery" title="사용량 확인, 전체 백업과 선택 복구, 용량 관리를 한곳에서 합니다.">저장소 점검·복구</button><button class="rpcm-mini" id="rpcm-full-diagnostics" title="${esc(rpcmStorageDiagnosticHelp())}">저장 상태 확인</button><button class="rpcm-mini" id="rpcm-full-verify" title="${esc(rpcmBackupFileHelp())}">백업 파일 확인</button>
+              <button class="rpcm-mini" id="rpcm-storage-recovery" title="사용량 확인, 전체 백업과 선택 복구, 자동 삭제 방지 요청을 한곳에서 합니다.">저장소 점검·복구</button><button class="rpcm-mini" id="rpcm-full-diagnostics" title="${esc(rpcmStorageDiagnosticHelp())}">저장 상태 확인</button><button class="rpcm-mini" id="rpcm-full-verify" title="${esc(rpcmBackupFileHelp())}">백업 파일 확인</button>
               <button class="rpcm-mini" id="rpcm-import-live" title="이 브라우저에 저장된 다른 방의 RP Manager 자료(기억·자료집·인물 등) 하나를 지금 열어 둔 방으로 복사합니다. 백업 파일이 필요 없습니다.">다른 방에서 가져오기</button>
               <button class="rpcm-mini" id="rpcm-import" title="백업 JSON 파일을 골라 원래 방에 복원하거나 현재 방에 복사합니다.">백업 불러오기</button>
               <button class="rpcm-mini" id="rpcm-reset-area">영역별 초기화</button>
