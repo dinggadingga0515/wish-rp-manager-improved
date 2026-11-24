@@ -24074,9 +24074,10 @@ function renderedContextScope(node) {
       const walker=document.createTreeWalker(editor,NodeFilter.SHOW_TEXT),parts=[];let node,text='';
       while((node=walker.nextNode())){parts.push({node,start:text.length,end:text.length+node.nodeValue.length});text+=node.nodeValue;}
       const token='RP_CONTEXT_MANAGER_START',endToken='RP_CONTEXT_MANAGER_END';
-      let start=text.indexOf('<!--'+token);if(start<0)start=text.indexOf(token);
-      const end=text.indexOf(endToken,start<0?0:start);if(start<0||end<start||text.indexOf(token,text.indexOf(token)+token.length)>=0||text.indexOf(endToken,end+endToken.length)>=0)return null;
-      let finish=end+endToken.length;if(text.slice(finish,finish+3)==='-->')finish+=3;
+      const sMark=text.includes('<!--'+token)?'<!--'+token:token,eMark=text.includes(endToken+'-->')?endToken+'-->':endToken;
+      let start=text.indexOf(sMark);
+      const end=text.indexOf(eMark,start<0?0:start);if(start<0||end<start||text.indexOf(sMark,start+sMark.length)>=0||text.indexOf(eMark,end+eMark.length)>=0)return null;
+      const finish=end+eMark.length;
       if(text.slice(finish).trim())return null;
       if(start>0&&text[start-1]==='\\')start--;
       let bodyEnd=start;while(bodyEnd>0&&/\s/.test(text[bodyEnd-1]))bodyEnd--;
