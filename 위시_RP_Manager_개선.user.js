@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         🪽위시 RP Manager(키메라 버전)
 // @namespace    local.rp.context.manager
-// @version      0.17.97.35
+// @version      0.17.97.40
 // @description  [키메라 버전] 장기 RP의 현재상태·날짜로그·인물·타임라인·자료집을 관리하고, 검수형 AI 생성·컨텍스트 주입·통합 백업·기존 백업 이사를 지원합니다.
 // @author       딩가딩가
 // @license      All Rights Reserved
@@ -182,7 +182,7 @@ const wrpmStartup=(()=>{
       host=document.createElement('div');host.id='wish-rpcm-startup-status';
       const root=host.attachShadow({mode:'open'}),style=document.createElement('style'),card=document.createElement('section'),title=document.createElement('strong'),text=document.createElement('span'),close=document.createElement('button');
       style.textContent=':host{all:initial}section{box-sizing:border-box;width:280px;border:1px solid #a8afc0;border-radius:12px;background:#202638;color:#f1f3f8;padding:12px;font:13px/1.5 system-ui;box-shadow:0 4px 20px #0005}strong,span{display:block}span{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:5px}button{font:inherit;margin-top:8px;padding:5px 9px;border:1px solid #a8afc0;border-radius:6px;background:#343c51;color:#fff;cursor:pointer}';
-      title.textContent='WISH 0.17.97.35 · 키메라 버전 실행 상태';text.setAttribute('role','status');text.setAttribute('aria-live','polite');close.type='button';close.textContent='닫기';close.onclick=()=>{dismissed=true;host?.remove();host=null;stop();};
+      title.textContent='WISH 0.17.97.40 · 키메라 버전 실행 상태';text.setAttribute('role','status');text.setAttribute('aria-live','polite');close.type='button';close.textContent='닫기';close.onclick=()=>{dismissed=true;host?.remove();host=null;stop();};
       card.append(title,text,close);root.append(style,card);document.documentElement.append(host);
       for(const [k,v]of Object.entries({position:'fixed',right:'16px',top:'200px','z-index':'2147483647',display:'block',visibility:'visible',opacity:'1',width:'280px',height:'auto'}))host.style.setProperty(k,v,'important');
     }
@@ -1157,13 +1157,13 @@ const wrpmFullBackupV2 = (() => {
   // 버전별 키를 쓰면 구버전과 신버전이 동시에 설치됐을 때 둘 다 실행될 수 있습니다.
   // 모든 버전이 공유하는 고정 키로 중복 실행을 막습니다.
   if(window.__WISH_RP_MANAGER_LOADED__){wrpmStartup.status('duplicate','다른 RP Manager가 실행 중입니다. 버전: '+String(window.__WISH_RP_MANAGER_LOADED__.version||'알 수 없음'));return;}
-  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.17.97.35(키메라 버전)', loadedAt: Date.now() };
+  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.17.97.40(키메라 버전)', loadedAt: Date.now() };
   // 같은 페이지에 남아 있는 v0.8.10 복사본이 뒤늦게 시작되는 경우도 차단합니다.
   window.__RP_MANAGER_0810_LOADED__ = true;
 
   const APP = {
     name: '🪽위시 RP Manager(키메라 버전)',
-    version: '0.17.97.35',
+    version: '0.17.97.40',
     releaseStage: '키메라 버전',
     buildLabel: '',
     dbName: 'RPContextManagerDB',
@@ -11586,6 +11586,7 @@ ${dialogueText}`;
       if (anchorChanged) {
         room.storyTimelineLastReviewedMessageId = String(snapshot.effectiveAnchor);
         room.storyTimelineAnchorRecoveredAt = nowIso();
+        rpcmSyncTimelineCheckpointEvidence(room, snapshot.allTurns);
       }
       const before = Number(room.storyTimelineUnreviewedTurnCount || 0);
       const after = snapshot.turns.length;
@@ -13705,9 +13706,12 @@ ${dialogueText}`;
     try { localStorage.setItem(APP.modalPosKey, JSON.stringify(p)); } catch (_) {}
   }
 
-  function notify(text, type = 'info', timeout = 3500) {
+  // action={label,run}이 있으면 토스트를 눌러 해당 창을 열 수 있다(클릭 시 run 실행). 없으면 기존 동작과 같다.
+  function notify(text, type = 'info', timeout = 3500, action = null) {
+    const actionable = !!(action && typeof action.run === 'function');
     if(type==='error') { text=rpcmActionableError(text);timeout=Math.max(timeout,8500); }
-    if(type==='error'&&state.currentRoom)noticeUpsert(state.currentRoom,{
+    if(actionable) timeout=Math.max(timeout,10000);
+    if(type==='error'&&state.currentRoom&&!aiPersonOverflowText(text))noticeUpsert(state.currentRoom,{
       type:'error',title:'작업을 완료하지 못했어요',message:String(text||'오류가 발생했습니다.'),
       targetArea:'tools',severity:'error',screen:false,dedupeKey:`error:${simpleHash(String(text||''))}`
     });
@@ -13724,10 +13728,24 @@ ${dialogueText}`;
     document.body.append(wrap);
     wrap.appendChild(node);
     requestAnimationFrame(() => node.classList.add('show'));
-    setTimeout(() => {
+    const hide = () => {
       node.classList.remove('show');
       setTimeout(() => node.remove(), 250);
-    }, timeout);
+    };
+    if (actionable) {
+      node.classList.add('rpcm-action');node.style.pointerEvents='auto';node.style.cursor='pointer';node.tabIndex=0;node.setAttribute('role','button');
+      const hint=document.createElement('span');hint.style.cssText='display:block;margin-top:4px;font-size:12px;opacity:.85;text-decoration:underline';hint.textContent='▶ '+String(action.label||'눌러서 열기');node.append(hint);
+      const go=async()=>{try{await action.run();}catch(error){notify('열지 못했습니다: '+String(error?.message||error),'error');}finally{node.remove();}};
+      node.onclick=go;node.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();go();}};
+    }
+    setTimeout(actionable ? function expire() { if (node.matches(':hover,:focus-within')) setTimeout(expire, 2000); else hide(); } : hide, timeout);
+  }
+
+  // 알림 토스트의 '눌러서 열기'용: 메인 창이 닫혀 있으면 열고 해당 화면으로 이동한다.
+  async function rpcmOpenManagerView(view) {
+    if (!state.modal?.isConnected) await openModal();
+    if (!state.modal?.isConnected) return;
+    showWorkView(state.modal,view,false);
   }
 
   const noticePopupSeen=new Map();
@@ -13893,7 +13911,7 @@ ${dialogueText}`;
       const row=aiMemoryConfig(room).areas[area];
       if(row.draft)noticeUpsert(room,{type:'draft',title:row.draft.invalid?.changed?`${info.label} 초안 작성 중 내용이 바뀌었어요`:row.draft.invalid?`${info.label} 결과에 형식 오류가 있어요`:`${info.label} AI 초안이 도착했어요`,message:row.draft.invalid?`${row.draft.invalid.error} 자동 생성이 멈춰 있어요. 검토창에서 고치거나 버려 주세요.`:`완료 RP ${Number(row.draft.turnCount)||0}턴을 검토했습니다. 저장 전 변경 내용을 확인해 주세요.`,targetArea:'tools',targetRef:area,dedupeKey:`ai-memory:draft:${area}`});
       else noticeResolve(room,`ai-memory:draft:${area}`);
-      if(row.error&&!noticePausedAiMemoryError(room,{dedupeKey:`ai-memory:error:${area}`}))noticeUpsert(room,{type:'error',title:`${info.label} AI 작업을 확인해 주세요`,message:String(row.error).slice(0,250),targetArea:'tools',targetRef:area,dedupeKey:`ai-memory:error:${area}`,severity:'warning'});
+      if(row.error&&!noticePausedAiMemoryError(room,{dedupeKey:`ai-memory:error:${area}`}))noticeUpsert(room,{type:'error',title:area==='personInfo'&&aiPersonOverflowText(row.error)?AI_PERSON_OVERFLOW_TITLE:`${info.label} AI 작업을 확인해 주세요`,message:String(row.error).slice(0,250),targetArea:'tools',targetRef:area,dedupeKey:`ai-memory:error:${area}`,severity:'warning'});
       else if(!row.error)noticeResolve(room,`ai-memory:error:${area}`);
     }
     const inbox=(room.aiReviewInbox||[]).filter(item=>item?.status==='pending');
@@ -13986,7 +14004,11 @@ ${dialogueText}`;
     document.querySelectorAll('.rpcm-notice-guidance').forEach(node=>node.remove());
     document.querySelectorAll('.rpcm-notice-next-action').forEach(node=>node.classList.remove('rpcm-notice-next-action'));
   }
+  function noticeIsPersonOverflow(item){return item?.dedupeKey==='ai-memory:error:personInfo'&&aiPersonOverflowText(item.message);}
+  function noticeIsAreaTooBig(item){return String(item?.dedupeKey||'').startsWith('ai-memory:error:')&&String(item?.message||'').includes('안전 입력량을 넘');}
   function noticeActionLabel(item){
+    if(noticeIsPersonOverflow(item))return '인물 골라서 정리';
+    if(noticeIsAreaTooBig(item))return '수동 작업자료 열기 (전면 재구축으로 압축 권장)';
     if(item.dedupeKey==='manual:waiting')return '대기 작업 이어가기';
     if(item.dedupeKey?.startsWith('manual:integrity:'))return '해당 저장본 점검';
     if(item.dedupeKey?.startsWith('ai-memory:applied:'))return '변경 비교 · 되돌리기';
@@ -14064,6 +14086,8 @@ ${dialogueText}`;
       openAiReviewInboxDialog(room,pending?.jobId||'');
       show({root:'#rpcm-ai-review-backdrop',target:'.rpcm-ai-review-dialog',next:pending?'왼쪽에서 대기 결과를 선택하고 오른쪽 내용을 확인하세요. 적용할 결과만 검토 후 저장하세요.':'대기 중인 결과가 없습니다. 이미 처리한 결과는 기록에서 확인할 수 있습니다.'});return;
     }
+    if(noticeIsPersonOverflow(item)){openAiMemoryPersonSelectDialog(room,item.message);return;}
+    if(noticeIsAreaTooBig(item)&&Object.hasOwn(AI_MEMORY_AREAS,ref)){const task=AI_MEMORY_AREAS[ref].manual;return noticeOpenDestination(room,{...item,type:'update',targetArea:'update',targetRef:task,dedupeKey:`update:${task}`,message:''});}
     if(key.startsWith('ai-memory:error:')&&Object.hasOwn(AI_MEMORY_AREAS,ref)){
       work('tools');show({target:`[data-ai-memory-area="${CSS.escape(ref)}"]`,next:'아래 실패 내용을 확인하세요. 연결·모델 문제는 API 설정에서 고친 뒤, 이 항목의 ‘바로 실행’으로 다시 시도할 수 있습니다. 다시 실행하면 API를 호출합니다.',action:'[data-ai-memory-run]'});return;
     }
@@ -15482,7 +15506,7 @@ ${dialogueText}`;
         }
       }
       if (restoredPolicy || needsStoryLogMigration || oldPersonBuiltin || oldLoreBuiltin || oldTimelineBuiltin) await saveRoom(room);
-      if(restoredPolicy&&room.rpcmTemp48PolicyRestore.missing.length)notify('이 방의 이전 설정 백업이 일부 없어 저장된 방별 설정을 유지했습니다. 자동 반영·알림 설정을 확인해 주세요.','warn',8000);
+      if(restoredPolicy&&room.rpcmTemp48PolicyRestore.missing.length)notify('이 방의 이전 설정 백업이 일부 없어 저장된 방별 설정을 유지했습니다. 자동 반영·알림 설정을 확인해 주세요.','warn',8000,{label:'설정 열기',run:()=>rpcmOpenManagerView('preferences')});
       return room;
     }
 
@@ -15989,7 +16013,7 @@ ${dialogueText}`;
     try{await rescueSeedDeletionMarkers();const [rooms,libraries]=await Promise.all([getAllRooms(),getAllCharacterLibraries()]);rescueRuntime.queue=rescueRuntime.queue.catch(()=>{}).then(async()=>{for(const [kind,values] of [['room',rooms],['library',libraries]])for(const value of values){const id=String(kind==='room'?value.chatId:value.scopeId);try{await rescueStore(kind,value);rescueRecordError(kind,id,'');}catch(error){rescueRuntime.seeded=false;rescueRecordError(kind,id,String(error.message||error));}}if(typeof wrpmStorageMaintenanceV11!=='undefined')await wrpmStorageMaintenanceV11.settlePackedSources().catch(()=>{});}).catch(error=>{rescueRuntime.seeded=false;rescueRecordError('seed','all',String(error.message||error));});
       const index=await rescueListEntries();
       const missing=index.filter(row=>!row.deletedAt&&(row.kind==='room'?!rooms.some(room=>String(room.chatId)===row.id):!libraries.some(lib=>String(lib.scopeId)===row.id)));
-      if(missing.length)notify(`사이트 저장소에서 찾지 못한 비상 보관본 ${missing.length}개가 있습니다. 자료 관리 → 도구·복사·백업·복원 → 저장소 점검·복구에서 확인하세요.`,'warn',10000);}catch(error){rescueRuntime.seeded=false;rescueRuntime.error=error.message;}
+      if(missing.length)notify(`사이트 저장소에서 찾지 못한 비상 보관본 ${missing.length}개가 있습니다. 자료 관리 → 도구·복사·백업·복원 → 저장소 점검·복구에서 확인하세요.`,'warn',10000,{label:'저장소 점검·복구 열기',run:openStorageRecovery});}catch(error){rescueRuntime.seeded=false;rescueRuntime.error=error.message;}
   }
   async function rescueMarkDeleted(kind,id,throwOnError=false){
     await flushRescueCopies();let failure=null;
@@ -17918,6 +17942,7 @@ ${dialogueText}`;
           if (reviewSnapshot.anchorRecovered && reviewSnapshot.effectiveAnchor) {
             room.storyTimelineLastReviewedMessageId = String(reviewSnapshot.effectiveAnchor);
             room.storyTimelineAnchorRecoveredAt = nowIso();
+            rpcmSyncTimelineCheckpointEvidence(room, reviewSnapshot.allTurns);
             dirty = true;
             await saveRoom(room);
             notify('이전 타임라인 검토 기준을 최근 검토 기록에서 자동 복구했습니다.', 'success', 4800);
@@ -18108,7 +18133,7 @@ ${dialogueText}`;
             ? `기존 타임라인이 현재 RP까지 이미 반영되어 있을 때만 진행하세요.\n\n현재 위치를 새 검토 기준으로 설정하면 지금까지의 RP는 새 갱신 범위에 다시 포함되지 않습니다. 미반영 RP가 남아 있다면 취소하고 ‘전체 다시 읽기’를 선택하세요.`
             : `기존 타임라인이 현재 RP까지 이미 반영되어 있나요?\n\n현재까지 ${reviewSnapshot?.turns?.length || 0}턴을 검토 완료 기준으로 잡고 새 RP부터 계산합니다.`;
           if (!reviewSnapshot?.latestKey || !confirm(warning)) return;
-          room.storyTimelineLastReviewedMessageId = reviewSnapshot.latestKey; room.storyTimelineLastReviewedAt = nowIso(); room.storyTimelineUnreviewedTurnCount = 0; dirty = true;
+          room.storyTimelineLastReviewedMessageId = reviewSnapshot.latestKey; rpcmSyncTimelineCheckpointEvidence(room, reviewSnapshot.allTurns); room.storyTimelineLastReviewedAt = nowIso(); room.storyTimelineUnreviewedTurnCount = 0; dirty = true;
           await saveRoom(room); await refreshReviewSnapshot(); notify('현재 RP를 타임라인 검토 기준점으로 설정했습니다.', 'success'); return;
         }
         if (action === 'recover-with-rebuild') {
@@ -23402,7 +23427,7 @@ ${dialogueText}`;
   async function restorePendingNow(room, reason = 'manual') {
     const result=await rpcmDrainCarrierCleanup(room);
     renderModalIfOpen();
-    if(result.remaining){notify('주입 OFF · 서버 잔여 주입 정리 대기 · 처리·오류 기록을 확인해 주세요.','warn',6500);return {restored:false,reason:'cleanup_pending'};}
+    if(result.remaining){notify('주입 OFF · 서버 잔여 주입 정리 대기 · 처리·오류 기록을 확인해 주세요.','warn',6500,{label:'처리·오류 기록 열기',run:()=>openRpcmIssueLogDialog(room)});return {restored:false,reason:'cleanup_pending'};}
     if(reason==='manual')notifyInjectionEnded(room,'manual');
     return {restored:true,reason:'ok'};
   }
@@ -27512,7 +27537,7 @@ function renderedContextScope(node) {
   function bindWishScrollChaining() {
     if(wishScrollChainingBound)return;
     wishScrollChainingBound=true;
-    const roots='#rpcm-overlay,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,[class*="rpcm-"][class*="-backdrop"],.wish-rpcore-refiner-ui';
+    const roots='#rpcm-overlay,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog,[class*="rpcm-"][class*="-backdrop"],.wish-rpcore-refiner-ui';
     document.addEventListener('wheel',event=>{
       if(event.defaultPrevented||event.ctrlKey||event.metaKey||!event.deltaY||Math.abs(event.deltaX)>Math.abs(event.deltaY))return;
       const target=event.target instanceof Element?event.target:event.target?.parentElement;
@@ -27625,24 +27650,24 @@ function renderedContextScope(node) {
 @media(max-width:680px){#rpcm-modal .rpcm-audit-entry>summary{flex-wrap:wrap;gap:10px}#rpcm-modal .rpcm-audit-entry>summary>.rpcm-badge-row{width:100%}#rpcm-modal .rpcm-context-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}#rpcm-modal .rpcm-audit-heading{align-items:center}#rpcm-modal .rpcm-update-card-title>.rpcm-badge-row{width:100%}}
 
 /* v0.17.5: all owned dialogs share the Wish theme, including lazy editors. */
-html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui){
+html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui){
   --rpcm-bg:var(--wish-bg);--rpcm-sheet:var(--wish-sheet);--rpcm-card:var(--wish-card);--rpcm-card-2:var(--wish-card-2);--rpcm-fg:var(--wish-fg);--rpcm-fg-2:var(--wish-fg-2);--rpcm-muted:var(--wish-muted);--rpcm-line:var(--wish-line);--rpcm-line-soft:var(--wish-line-2);--rpcm-accent:var(--wish-accent);--rpcm-accent-soft:var(--wish-accent-soft);--rpcm-accent-line:var(--wish-accent-line);
   color:var(--wish-fg);font-family:'Pretendard','Noto Sans KR',-apple-system,BlinkMacSystemFont,'Apple SD Gothic Neo',sans-serif;
 }
-html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui) *{-webkit-text-stroke:0!important;text-shadow:none!important}
-html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui) :is([role="dialog"],.rpcm-lib-dialog,.rpcm-lore-dialog){animation:none!important;filter:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;color:var(--wish-fg)!important;background:var(--wish-sheet)!important;border-color:var(--wish-line)!important}
+html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui) *{-webkit-text-stroke:0!important;text-shadow:none!important}
+html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui) :is([role="dialog"],.rpcm-lib-dialog,.rpcm-lore-dialog){animation:none!important;filter:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;color:var(--wish-fg)!important;background:var(--wish-sheet)!important;border-color:var(--wish-line)!important}
 html body #rpcm-modal{animation:none!important}
-html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui) :where(button,input:not([type="checkbox"]):not([type="radio"]),textarea,select){
+html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui) :where(button,input:not([type="checkbox"]):not([type="radio"]),textarea,select){
   box-sizing:border-box;color:var(--wish-fg-2)!important;border-color:var(--wish-line)!important;outline:none;background:var(--wish-card)!important;font-family:inherit;border-radius:9px;
 }
-html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui) button:where(:not([role="switch"]):not(.rpcm-switch):not(.rpcm-person-pin):not(.m3-person-open):not(.m3-person-meta):not([data-topview]):not([data-workview]):not([data-person-core-tab])){font-size:12px;line-height:1.4;min-height:32px;padding:7px 11px;border-width:1px;border-style:solid}
-html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui) :is(button,input,textarea,select):disabled{opacity:1!important;color:var(--wish-muted)!important;-webkit-text-fill-color:var(--wish-muted)!important;background:var(--wish-card-2)!important;border-color:var(--wish-line)!important;cursor:not-allowed}
-html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui) :is(button.primary,button.rpcm-add-primary,button.rr-primary,#rpcm-person-apply):not(:disabled){color:var(--wish-accent-ink)!important;background:var(--wish-accent)!important;border-color:var(--wish-accent)!important}
-html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui) :is(button,input,textarea,select,summary):focus-visible{outline:2px solid var(--wish-accent)!important;outline-offset:2px}
-html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui) :is(input,textarea)::placeholder{color:var(--wish-muted)!important;opacity:1!important}
-html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,.rpcm-ltm-backdrop) :is(p,label,small,em,legend){color:var(--wish-fg-2)!important}
-html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,.rpcm-ltm-backdrop) :is(h1,h2,h3,h4,strong){color:var(--wish-fg)!important}
-html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,.rpcm-ltm-backdrop) :is(header,footer,fieldset){border-color:var(--wish-line)!important}
+html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui) button:where(:not([role="switch"]):not(.rpcm-switch):not(.rpcm-person-pin):not(.m3-person-open):not(.m3-person-meta):not([data-topview]):not([data-workview]):not([data-person-core-tab])){font-size:12px;line-height:1.4;min-height:32px;padding:7px 11px;border-width:1px;border-style:solid}
+html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui) :is(button,input,textarea,select):disabled{opacity:1!important;color:var(--wish-muted)!important;-webkit-text-fill-color:var(--wish-muted)!important;background:var(--wish-card-2)!important;border-color:var(--wish-line)!important;cursor:not-allowed}
+html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui) :is(button.primary,button.rpcm-add-primary,button.rr-primary,#rpcm-person-apply):not(:disabled){color:var(--wish-accent-ink)!important;background:var(--wish-accent)!important;border-color:var(--wish-accent)!important}
+html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui) :is(button,input,textarea,select,summary):focus-visible{outline:2px solid var(--wish-accent)!important;outline-offset:2px}
+html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog,.rpcm-ltm-backdrop,.wish-rpcore-refiner-ui) :is(input,textarea)::placeholder{color:var(--wish-muted)!important;opacity:1!important}
+html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog,.rpcm-ltm-backdrop) :is(p,label,small,em,legend){color:var(--wish-fg-2)!important}
+html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog,.rpcm-ltm-backdrop) :is(h1,h2,h3,h4,strong){color:var(--wish-fg)!important}
+html body :is(#rpcm-modal,[id^="rpcm-"][id$="-backdrop"],#rpcm-full-rebuild-dialog,#rpcm-ai-memory-baseline-dialog,#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog,.rpcm-ltm-backdrop) :is(header,footer,fieldset){border-color:var(--wish-line)!important}
 html body #rpcm-notice-badge{background:var(--wish-accent)!important;color:var(--wish-accent-ink)!important}
 html body :is(#rpcm-person-preview-backdrop,#rpcm-story-dialog-backdrop) :is(span,div){color:var(--wish-fg-2)!important}
 html body #rpcm-modal :is(.rpcm-section-desc,.rpcm-story-title,.rpcm-story-desc,.rpcm-story-count,.rpcm-story-number){color:var(--wish-fg-2)!important}
@@ -28080,15 +28105,15 @@ html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-work-content>*{max-width:948px;m
 #rpcm-section-people .rpcm-person-advanced[hidden]{display:none!important}
 #rpcm-section-people .rpcm-person-advanced>summary{display:flex;align-items:center;justify-content:space-between;gap:8px}
 #rpcm-section-people .rpcm-person-core-editor-close{border:1px solid var(--wish-line);border-radius:8px;padding:5px 9px;background:var(--wish-card);color:var(--wish-fg-2);cursor:pointer;font-size:11px}
-:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog){position:fixed;inset:0;z-index:2147483647;display:grid;place-items:center;padding:16px;background:var(--wish-scrim)}
-:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .rpcm-person-dialog-card{width:min(540px,96vw);max-height:90vh;overflow:auto;--m3-card:var(--wish-card);--m3-card2:var(--wish-card-2);--m3-line:var(--wish-line);--m3-fg:var(--wish-fg);--m3-fg2:var(--wish-fg-2);--m3-muted:var(--wish-muted);--m3-accent:var(--wish-accent);--m3-accent-ink:var(--wish-accent-ink);--m3-r-ctl:8px}
-:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-sheet{border:1px solid var(--m3-line);border-radius:14px;background:var(--wish-sheet);color:var(--m3-fg);box-shadow:var(--wish-shell-shadow);overflow:hidden}
-:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-sheet>header,:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-sheet>footer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 16px;background:var(--m3-card);border-color:var(--m3-line)}
-:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-sheet>header{border-bottom:1px solid var(--m3-line)}:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-sheet>footer{border-top:1px solid var(--m3-line);justify-content:flex-end}
-:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-t{display:grid;gap:3px}:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-t b{font-size:15px}:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-t small{font-size:11px;color:var(--m3-muted)}
-:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-dialog-body{display:grid;gap:12px;padding:16px}:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-fld{display:grid;gap:5px;color:var(--m3-fg2);font-size:12px}:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-fld input{box-sizing:border-box;width:100%;padding:9px;border:1px solid var(--m3-line);border-radius:var(--m3-r-ctl);background:var(--m3-card2);color:var(--m3-fg)}
-:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-toggle{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--m3-line);border-radius:var(--m3-r-ctl);background:var(--m3-card2);font-size:12px;color:var(--m3-fg2);cursor:pointer}:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-toggle>span{flex:1;min-width:0}:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-toggle>input[type=checkbox]{width:18px;height:18px;min-width:18px;margin:0;flex:none;accent-color:var(--m3-accent);cursor:pointer}
-:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-btn{padding:7px 12px;border:1px solid var(--m3-line);border-radius:var(--m3-r-ctl);background:var(--m3-card);color:var(--m3-fg2);cursor:pointer}:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-btn.primary{background:var(--m3-accent);color:var(--m3-accent-ink);border-color:var(--m3-accent)}
+:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog){position:fixed;inset:0;z-index:2147483647;display:grid;place-items:center;padding:16px;background:var(--wish-scrim)}
+:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog) .rpcm-person-dialog-card{width:min(540px,96vw);max-height:90vh;overflow:auto;--m3-card:var(--wish-card);--m3-card2:var(--wish-card-2);--m3-line:var(--wish-line);--m3-fg:var(--wish-fg);--m3-fg2:var(--wish-fg-2);--m3-muted:var(--wish-muted);--m3-accent:var(--wish-accent);--m3-accent-ink:var(--wish-accent-ink);--m3-r-ctl:8px}
+:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog) .m3-sheet{border:1px solid var(--m3-line);border-radius:14px;background:var(--wish-sheet);color:var(--m3-fg);box-shadow:var(--wish-shell-shadow);overflow:hidden}
+:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog) .m3-sheet>header,:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog) .m3-sheet>footer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 16px;background:var(--m3-card);border-color:var(--m3-line)}
+:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog) .m3-sheet>header{border-bottom:1px solid var(--m3-line)}:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog) .m3-sheet>footer{border-top:1px solid var(--m3-line);justify-content:flex-end}
+:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog) .m3-t{display:grid;gap:3px}:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog) .m3-t b{font-size:15px}:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog) .m3-t small{font-size:11px;color:var(--m3-muted)}
+:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog) .m3-dialog-body{display:grid;gap:12px;padding:16px}:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog) .m3-fld{display:grid;gap:5px;color:var(--m3-fg2);font-size:12px}:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog) .m3-fld input{box-sizing:border-box;width:100%;padding:9px;border:1px solid var(--m3-line);border-radius:var(--m3-r-ctl);background:var(--m3-card2);color:var(--m3-fg)}
+:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog) .m3-toggle{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--m3-line);border-radius:var(--m3-r-ctl);background:var(--m3-card2);font-size:12px;color:var(--m3-fg2);cursor:pointer}:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog) .m3-toggle>span{flex:1;min-width:0}:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog) .m3-toggle>input[type=checkbox]{width:18px;height:18px;min-width:18px;margin:0;flex:none;accent-color:var(--m3-accent);cursor:pointer}
+:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog) .m3-btn{padding:7px 12px;border:1px solid var(--m3-line);border-radius:var(--m3-r-ctl);background:var(--m3-card);color:var(--m3-fg2);cursor:pointer}:is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog) .m3-btn.primary{background:var(--m3-accent);color:var(--m3-accent-ink);border-color:var(--m3-accent)}
 @media(max-width:680px){#rpcm-person-core .m3-tabs button{font-size:11px;padding:8px 1px}#rpcm-person-core .m3-who{flex-basis:138px}#rpcm-person-core .m3-sechead .m3-actions{width:100%;justify-content:flex-end}#rpcm-person-core .m3-injection-group{display:grid;grid-template-columns:auto repeat(4,minmax(0,1fr));width:100%}}
 @media(max-width:680px){.rpcm-rebuild-domain-head{align-items:flex-start}.rpcm-rebuild-domain-detail .rpcm-update-diff-columns{grid-template-columns:1fr}}
 #rpcm-lore-dialog-backdrop,#rpcm-lore-copy-backdrop{position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;padding:18px;box-sizing:border-box;background:var(--wish-scrim)}
@@ -29783,6 +29808,15 @@ Existing REF must come from this packet. NEW REF are temporary, and a NEW_P pack
   function rpcmTurnAnchorAssistant(turn){return String(turn?.anchorAssistantText??turn?.assistantText??'');}
   function rpcmTurnAnchorText(turn){return String(turn?.anchorText??turn?.text??'');
   }
+  // 타임라인 기준점이 삭제·리롤 복구로 바뀌면 수동 기준점의 USER 검증 근거도 같은 턴으로 맞춘다.
+  // 옛 근거가 남으면 기준 ID는 살아 있어도 'USER 메시지 ID를 찾지 못함'으로 계속 막힌다.
+  function rpcmSyncTimelineCheckpointEvidence(room,turns){
+    const saved=room.manualUpdateCheckpoints?.timeline;
+    if(!saved?.anchorEvidence||!Array.isArray(turns))return;
+    const turn=turns[rpcmFindTurnIndex(turns,String(room.storyTimelineLastReviewedMessageId||''))];
+    const evidence=turn?rpcmManualAnchorEvidence(room,turn):null;
+    if(evidence)saved.anchorEvidence=evidence;else delete saved.anchorEvidence;
+  }
   function manualCheckpointForTask(room, task) {
     const saved = room.manualUpdateCheckpoints?.[task] || {};
     // Legacy checkpoints must keep their old serialized shape: otherwise existing
@@ -30037,9 +30071,9 @@ Existing REF must come from this packet. NEW REF are temporary, and a NEW_P pack
     box.innerHTML=`<section role="dialog" aria-modal="true" aria-label="AI 기억정리 시작점"><h3>${esc(AI_MEMORY_AREAS[area].label)} 시작점</h3><p>최근 완료 턴부터 표시합니다. 선택한 턴 다음부터 자동 생성합니다.</p><select aria-label="시작점 RP"><option value="">처음부터</option></select><p data-status role="status">최근 RP 조회 중…</p><button type="button" data-older>이전 턴 더 불러오기</button><div><button type="button" data-close>취소</button><button type="button" data-save disabled>시작점 저장</button></div></section>`;
     document.body.appendChild(box);let loaded=[],busy=false;
     box.querySelector('[data-close]').onclick=()=>box.remove();
-    const more=async()=>{if(busy||pager.done)return;busy=true;box.querySelector('[data-older]').disabled=true;try{let batch=[];for(let i=0;i<3&&!batch.length&&!pager.done;i++)batch=await pager.next();if(!box.isConnected)return;loaded=batch.concat(loaded);const select=box.querySelector('select'),chosen=select.dataset.loaded?select.value:row.baseline;select.dataset.loaded='1';const visible=loaded.slice(0,200),existingIndex=rpcmFindTurnIndex(loaded,chosen),existing=existingIndex>=0?loaded[existingIndex]:null,chosenStable=existing?aiMemoryStableTurnKey(existing):chosen;if(existing&&!visible.includes(existing))visible.push(existing);select.innerHTML='<option value="">처음부터</option>'+visible.slice().reverse().map(turn=>`<option value="${esc(aiMemoryStableTurnKey(turn))}">${esc('USER '+turn.userText.replace(/\s+/g,' ').slice(0,42)+' / AI '+turn.assistantText.replace(/\s+/g,' ').slice(0,42))}</option>`).join('');if(existing&&visible.includes(existing))select.value=chosenStable;else if(!chosen&&!row.baseline)select.value=aiMemoryStableTurnKey(visible.at(-1));else if(chosen){select.insertAdjacentHTML('afterbegin',`<option value="${esc(chosen)}" disabled>기존 시작점 · 이전 턴을 불러와 확인하세요</option>`);select.value=chosen;}box.querySelector('[data-status]').textContent=`완료 턴 ${loaded.length}개 조회 · 선택 목록 최대 200개${pager.done?' · 원문 시작 도달':''}`;box.querySelector('[data-save]').disabled=false;}catch(error){box.querySelector('[data-status]').textContent=error.message;box.querySelector('[data-save]').disabled=true;box.dataset.loadError='1';}finally{busy=false;if(box.isConnected)box.querySelector('[data-older]').disabled=pager.done||box.dataset.loadError==='1';}};
+    const more=async()=>{if(busy||pager.done)return;busy=true;box.querySelector('[data-older]').disabled=true;try{let batch=[];for(let i=0;i<3&&!batch.length&&!pager.done;i++)batch=await pager.next();if(!box.isConnected)return;loaded=batch.concat(loaded);const select=box.querySelector('select'),firstLoad=!select.dataset.loaded,chosen=select.dataset.loaded?select.value:String(row.cursor||row.baseline||'');select.dataset.loaded='1';const visible=loaded,existingIndex=rpcmFindTurnIndex(loaded,chosen),existing=existingIndex>=0?loaded[existingIndex]:null,chosenStable=existing?aiMemoryStableTurnKey(existing):chosen;select.innerHTML='<option value="">처음부터</option>'+visible.slice().reverse().map(turn=>`<option value="${esc(aiMemoryStableTurnKey(turn))}">${esc('USER '+turn.userText.replace(/\s+/g,' ').slice(0,42)+' / AI '+turn.assistantText.replace(/\s+/g,' ').slice(0,42))}</option>`).join('');if(existing&&visible.includes(existing))select.value=chosenStable;else if(firstLoad&&!chosen)select.value=aiMemoryStableTurnKey(visible.at(-1));else if(chosen){select.insertAdjacentHTML('afterbegin',`<option value="${esc(chosen)}" disabled>기존 시작점 · 불러온 RP에 없음 · 삭제된 턴이면 다른 턴을 고르세요</option>`);select.value=chosen;}box.querySelector('[data-status]').textContent=`완료 턴 ${loaded.length}개 조회 · 최신 턴부터 표시${pager.done?' · 원문 시작 도달':''}`;box.querySelector('[data-save]').disabled=false;}catch(error){box.querySelector('[data-status]').textContent=error.message;box.querySelector('[data-save]').disabled=true;box.dataset.loadError='1';}finally{busy=false;if(box.isConnected)box.querySelector('[data-older]').disabled=pager.done||box.dataset.loadError==='1';}};
     box.querySelector('[data-older]').onclick=more;
-    box.querySelector('[data-save]').onclick=async event=>{if(row.draft&&!confirm('검토 대기 초안을 버리고 시작점을 바꿀까요?'))return;event.currentTarget.disabled=true;try{const key=box.querySelector('select').value,selected=key?loaded[rpcmFindTurnIndex(loaded,key)]:null;if(key&&!selected)throw new Error('선택한 RP를 다시 불러와 주세요.');if(key){const check=await loadRpcmCompletedRange(room,[key]);if(aiMemoryAnchorFingerprint(check[rpcmFindTurnIndex(check,key)])!==aiMemoryAnchorFingerprint(selected))throw new Error('선택한 RP 원문이 바뀌었습니다. 다시 열어 주세요.');}const previous=structuredClone(row),anchors=structuredClone(room.aiMemorySourceAnchors||{});Object.assign(row,{baseline:key,cursor:'',failedEnd:'',lastAttemptKey:'',plannedStart:'',plannedEnd:'',draft:null,error:'',status:key?'시작점 지정됨':'처음부터 지정됨'});aiMemorySetAnchorEvidence(room,area,selected,true);try{await saveRoom(room);}catch(error){Object.assign(row,previous);room.aiMemorySourceAnchors=anchors;throw error;}box.remove();invalidateAiMemoryHistory();aiMemoryRuntime.lastCounts.delete(String(room.chatId));renderModalIfOpen();void aiMemoryPoll(room,true);}catch(error){box.querySelector('[data-status]').textContent=error.message;event.currentTarget.disabled=false;}};
+    box.querySelector('[data-save]').onclick=async event=>{if(row.draft&&!confirm('검토 대기 초안을 버리고 시작점을 바꿀까요?'))return;event.currentTarget.disabled=true;try{const key=box.querySelector('select').value,selected=key?loaded[rpcmFindTurnIndex(loaded,key)]:null;if(key&&!selected)throw new Error('기존 시작점을 불러온 RP에서 찾지 못했습니다. 삭제된 턴이면 목록에서 다른 시작점을 고르세요.');if(key){const check=await loadRpcmCompletedRange(room,[key]);if(aiMemoryAnchorFingerprint(check[rpcmFindTurnIndex(check,key)])!==aiMemoryAnchorFingerprint(selected))throw new Error('선택한 RP 원문이 바뀌었습니다. 다시 열어 주세요.');}const previous=structuredClone(row),anchors=structuredClone(room.aiMemorySourceAnchors||{});Object.assign(row,{baseline:key,cursor:'',failedEnd:'',lastAttemptKey:'',plannedStart:'',plannedEnd:'',draft:null,error:'',status:key?'시작점 지정됨':'처음부터 지정됨'});aiMemorySetAnchorEvidence(room,area,selected,true);try{await saveRoom(room);}catch(error){Object.assign(row,previous);room.aiMemorySourceAnchors=anchors;throw error;}box.remove();invalidateAiMemoryHistory();aiMemoryRuntime.lastCounts.delete(String(room.chatId));renderModalIfOpen();void aiMemoryPoll(room,true);}catch(error){box.querySelector('[data-status]').textContent=error.message;event.currentTarget.disabled=false;}};
     await more();
   }
 
@@ -31926,13 +31960,13 @@ function rpcmRenderContinuityTools(overlay,room){
   }
 
   // shortcut: 이름의 어느 부분도 안 나오고 별칭으로만 등장한 인물은 이번 회차 갱신에서 빠진다(카드는 유지). 별칭 자료가 생기면 함께 비교한다.
-  function aiMemoryPersonFocus(room,fresh,index) {
+  function aiMemoryPersonFocus(room,fresh,index,selection=null) {
     const text=fresh.map(turn=>turn.text).join('\n').toLocaleLowerCase(),player=String(room.personPlayerName||'').trim().toLocaleLowerCase();
     const named=name=>{const full=String(name||'').trim().toLocaleLowerCase();return !!full&&(full===player||text.includes(full)||full.split(/[\s()·・]+/).some(part=>part.length>=2&&(text.includes(part)||/^[가-힣]{3,}$/.test(part)&&(text.includes(part.slice(1))||part.length>=4&&text.includes(part.slice(2))))));};
-    const focused=card=>named(card.person);
+    const focused=selection?card=>selection.names.has(String(card.person||'').trim()):card=>named(card.person);
     const view={...room,knowledgeCards:(room.knowledgeCards||[]).filter(focused),personStateRecords:(room.personStateRecords||[]).filter(focused)};
     const rows=index.filter(focused),kept=new Set(rows.map(row=>row.person));
-    return {existing:manualExistingResult(view,'personInfo'),index:rows,omitted:[...new Set(index.map(row=>row.person))].filter(name=>name&&!kept.has(name))};
+    return {existing:manualExistingResult(view,'personInfo'),index:rows,omitted:[...new Set(index.map(row=>row.person))].filter(name=>name&&!kept.has(name)),newNames:selection?[...selection.newNames]:[]};
   }
   // shortcut: 원문에 날짜가 안 나오는 회상은 옛 날짜를 볼 수 없다. 그 날짜를 출력하면 적용 단계에서 막히므로 기록은 지워지지 않는다.
   function aiMemoryLogFocus(room,fresh) {
@@ -31974,14 +32008,14 @@ function rpcmRenderContinuityTools(overlay,room){
     const guideMeta = manualGuideMetadata(room, task, guide);
     const guideBlock = manualPacketGuideBlock(guideMeta, packetMode);
     const memoBlock = userCanonMemoBlock(snapshotRoom);
-    const personFocus=selection.aiMemoryFocus&&task==='personInfo'&&personOutputMode==='DELTA'?aiMemoryPersonFocus(snapshotRoom,fresh,personCardIndex):null;
+    const personFocus=selection.aiMemoryFocus&&task==='personInfo'&&personOutputMode==='DELTA'?aiMemoryPersonFocus(snapshotRoom,fresh,personCardIndex,selection.personSelection||null):null;
     const logFocus=selection.aiMemoryFocus&&task==='logSummary'?aiMemoryLogFocus(snapshotRoom,fresh):null;
     const sourceStart = String(fresh[0].key), sourceEnd = String(fresh.at(-1).key);
     const sourceManifest = fresh.map(turn => ({ messageId:String(turn.key), contentHash:simpleHash(turn.text) }));
-    const packetBase = `[RP_MANAGER_TASK]\nTASK=${task}\nMODE=${mode}\nPACKET_MODE=${packetMode}\nSOURCE_RANGE=${rangeMode}\nSOURCE_START=${sourceStart}\nSOURCE_END=${sourceEnd}\nTURN_COUNT=${fresh.length}\nFULL_OUTPUT=${task==='personInfo'&&personOutputMode==='DELTA'?'NO':info.fullOutput?'YES':'NO'}${task==='personInfo'?`\nPERSON_OUTPUT_MODE=${personOutputMode}`:''}\nFACT_SOURCE=THIS_PACKET_ONLY\nROOM_SCOPE=${String(room.chatId || '')}${task === 'timeline' || task === 'logSummary' ? `\nACTIVE_TIMELINE=${activeLogTimelineLabel(snapshotRoom)}` : ''}\nGUIDE_NAME=${guideMeta.name}\nGUIDE_VERSION=${guideMeta.version}\nGUIDE_HASH=${guideMeta.hash}\nGUIDE_SOURCE=${guideMeta.source}\n[/RP_MANAGER_TASK]${guideBlock}${memoBlock ? `\n\n${memoBlock}` : ''}\n\n[EXISTING_RESULT]\n${logFocus?logFocus.existing:personFocus?personFocus.existing:existing}\n[/EXISTING_RESULT]${task==='personInfo'?`\n\n[PERSON_CARD_INDEX]\n${JSON.stringify(personFocus?personFocus.index:personCardIndex)}\n[/PERSON_CARD_INDEX]`:''}${personFocus?.omitted.length?`\n\n[PERSON_NOT_IN_THIS_PACKET]\n이번 RP에 이름이 나오지 않아 기존 카드를 생략한 인물입니다. 카드는 그대로 유지되니 이 인물의 카드는 출력하지 마세요.\n${personFocus.omitted.join(', ')}\n[/PERSON_NOT_IN_THIS_PACKET]`:''}${logFocus?.omitted.length?`\n\n[LOG_DATES_NOT_IN_THIS_PACKET]\n기존 기록이 있지만 본문을 보내지 않은 날짜입니다. 기록은 그대로 유지되니 이 날짜의 블록은 출력하지 마세요.\n${logFocus.omitted.join(', ')}\n[/LOG_DATES_NOT_IN_THIS_PACKET]`:''}\n\n[REFERENCE_DATA]\n${manualReferenceData(snapshotRoom, task)}\n[/REFERENCE_DATA]\n\n[SOURCE_MANIFEST]\n${JSON.stringify(sourceManifest, null, 2)}\n[/SOURCE_MANIFEST]\n\n[NEW_RP]\n${formatAiDialogueTurns(fresh)}\n[/NEW_RP]\n\n[OUTPUT_CONTRACT]\n${manualOutputContract(task,personOutputMode)}\n[/OUTPUT_CONTRACT]`;
+    const packetBase = `[RP_MANAGER_TASK]\nTASK=${task}\nMODE=${mode}\nPACKET_MODE=${packetMode}\nSOURCE_RANGE=${rangeMode}\nSOURCE_START=${sourceStart}\nSOURCE_END=${sourceEnd}\nTURN_COUNT=${fresh.length}\nFULL_OUTPUT=${task==='personInfo'&&personOutputMode==='DELTA'?'NO':info.fullOutput?'YES':'NO'}${task==='personInfo'?`\nPERSON_OUTPUT_MODE=${personOutputMode}`:''}\nFACT_SOURCE=THIS_PACKET_ONLY\nROOM_SCOPE=${String(room.chatId || '')}${task === 'timeline' || task === 'logSummary' ? `\nACTIVE_TIMELINE=${activeLogTimelineLabel(snapshotRoom)}` : ''}\nGUIDE_NAME=${guideMeta.name}\nGUIDE_VERSION=${guideMeta.version}\nGUIDE_HASH=${guideMeta.hash}\nGUIDE_SOURCE=${guideMeta.source}\n[/RP_MANAGER_TASK]${guideBlock}${memoBlock ? `\n\n${memoBlock}` : ''}\n\n[EXISTING_RESULT]\n${logFocus?logFocus.existing:personFocus?personFocus.existing:existing}\n[/EXISTING_RESULT]${task==='personInfo'?`\n\n[PERSON_CARD_INDEX]\n${JSON.stringify(personFocus?personFocus.index:personCardIndex)}\n[/PERSON_CARD_INDEX]`:''}${personFocus?.omitted.length?`\n\n[PERSON_NOT_IN_THIS_PACKET]\n이번 RP에 이름이 나오지 않아 기존 카드를 생략한 인물입니다. 카드는 그대로 유지되니 이 인물의 카드는 출력하지 마세요.\n${personFocus.omitted.join(', ')}\n[/PERSON_NOT_IN_THIS_PACKET]`:''}${personFocus?.newNames?.length?`\n\n[PERSON_NEW_IN_THIS_RP]\n이번 RP에 새로 등장한 것으로 확인된 인물입니다. 기존 카드가 없으면 지침에 따라 새 인물 카드를 추가하세요.\n${personFocus.newNames.join(', ')}\n[/PERSON_NEW_IN_THIS_RP]`:''}${logFocus?.omitted.length?`\n\n[LOG_DATES_NOT_IN_THIS_PACKET]\n기존 기록이 있지만 본문을 보내지 않은 날짜입니다. 기록은 그대로 유지되니 이 날짜의 블록은 출력하지 마세요.\n${logFocus.omitted.join(', ')}\n[/LOG_DATES_NOT_IN_THIS_PACKET]`:''}\n\n[REFERENCE_DATA]\n${manualReferenceData(snapshotRoom, task)}\n[/REFERENCE_DATA]\n\n[SOURCE_MANIFEST]\n${JSON.stringify(sourceManifest, null, 2)}\n[/SOURCE_MANIFEST]\n\n[NEW_RP]\n${formatAiDialogueTurns(fresh)}\n[/NEW_RP]\n\n[OUTPUT_CONTRACT]\n${manualOutputContract(task,personOutputMode)}\n[/OUTPUT_CONTRACT]`;
     const packetBody = withManualFullBuildNotice(packetBase.replace('[/RP_MANAGER_TASK]',`[/RP_MANAGER_TASK]\n\n${aiMemoryHistoryForPacket(room,task,startIndex,endIndex,turns)}`), selection.fullBuild);
     const packet = packetBody+rpcmDateHintBlock(room,fresh,Math.max(0,(selection.dryRun?112000:585000)-packetBody.length));
-    if (packet.length > 600000 && !selection.fileExport) throw manualPacketSizeError(packet.length, rangeMode === 'full');
+    if (selection.packetLimit ? packet.length > selection.packetLimit : packet.length > 600000 && !selection.fileExport) throw manualPacketSizeError(packet.length, rangeMode === 'full');
     const draft = { createdAt:Date.now(), startMessageId:sourceStart, endMessageId:sourceEnd,
       endAnchorEvidence:rpcmManualAnchorEvidence(room,fresh.at(-1)),turnCount:fresh.length,sourceManifest,sourceHash:simpleHash(JSON.stringify(sourceManifest)),guideSource:guide.source,guideHash:guideMeta.hash,packetMode,packet,rangeMode, startIndex, endIndex, checkpointIndex, fullBuild:selection.fullBuild || null };
     const completeDraft = { ...draft, logOmittedKeys:logFocus?.omittedKeys||null, personOutputMode, personCardIndex, checkpoint, existing, guideText:guide.text, timelineRun, activeTimeline:activeLogTimelineLabel(snapshotRoom), anchorTurn:anchorIndex >= 0 ? [String(turns[anchorIndex].key), String(turns[anchorIndex].text)] : null, sourceTurns:fresh.map(turn => [String(turn.key), String(turn.text)]), historyTurns };
@@ -36068,15 +36102,15 @@ RP 원문과 사용자 확정 메모를 사실 근거로 삼는다. Crack의 미
       html body #rpcm-modal .rpcm-header-menu>summary,
       html body #rpcm-modal .rpcm-footer :is(#rpcm-arm,.rpcm-footer-preview){background:var(--wish-card-2)!important;color:var(--wish-fg)!important;opacity:1!important;border-color:var(--wish-line)!important}
       html[data-rpcm-theme=dark] #rpcm-fab,body[data-theme=dark] #rpcm-fab{--rpcm-hold-stroke:#F5B5D6;--rpcm-hold-glow:rgba(245,181,214,.45)}
-      :is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog){position:fixed!important;inset:0!important;width:100vw!important;height:100dvh!important;box-sizing:border-box!important;display:grid!important;place-items:center!important;padding:18px!important;background:var(--wish-scrim)!important;transform:none!important}
-      :is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .rpcm-person-dialog-card{position:relative!important;inset:auto!important;width:min(540px,100%)!important;max-height:calc(100dvh - 36px)!important;height:auto!important;margin:0!important;transform:none!important;display:block!important;overflow:auto!important;font:13px/1.6 'Pretendard',-apple-system,sans-serif;color:var(--wish-fg)!important}
-      :is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-sheet{width:100%!important;box-sizing:border-box!important;position:relative!important;inset:auto!important;transform:none!important;background:var(--wish-sheet)!important;border-radius:16px!important}
-      :is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-toggle{display:flex!important;align-items:center!important;justify-content:space-between;background:transparent!important;border:0!important;border-top:1px solid var(--wish-line)!important;padding:12px 0!important}
-      :is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-toggle input[type=checkbox]{appearance:auto!important;display:block!important;position:static!important;opacity:1!important;visibility:visible!important;width:18px!important;height:18px!important;min-height:18px!important;accent-color:var(--wish-accent)!important}
-      :is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-toggle input:before{content:none!important}
-      :is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-fld input{min-height:38px!important;height:auto!important;font:inherit!important;background:var(--wish-card)!important;border:1px solid var(--wish-line)!important;color:var(--wish-fg)!important}
-      :is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) :is(input,button):focus-visible{outline:2px solid var(--wish-accent-line)!important;outline-offset:2px!important;box-shadow:none!important}
-      :is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog) .m3-btn{font-family:inherit;font-size:12px;font-weight:600;line-height:1.4;background:var(--wish-accent-soft)!important;border-color:var(--wish-accent-line)!important;color:var(--wish-accent-strong)!important;min-height:34px}
+      :is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog){position:fixed!important;inset:0!important;width:100vw!important;height:100dvh!important;box-sizing:border-box!important;display:grid!important;place-items:center!important;padding:18px!important;background:var(--wish-scrim)!important;transform:none!important}
+      :is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog) .rpcm-person-dialog-card{position:relative!important;inset:auto!important;width:min(540px,100%)!important;max-height:calc(100dvh - 36px)!important;height:auto!important;margin:0!important;transform:none!important;display:block!important;overflow:auto!important;font:13px/1.6 'Pretendard',-apple-system,sans-serif;color:var(--wish-fg)!important}
+      :is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog) .m3-sheet{width:100%!important;box-sizing:border-box!important;position:relative!important;inset:auto!important;transform:none!important;background:var(--wish-sheet)!important;border-radius:16px!important}
+      :is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog) .m3-toggle{display:flex!important;align-items:center!important;justify-content:space-between;background:transparent!important;border:0!important;border-top:1px solid var(--wish-line)!important;padding:12px 0!important}
+      :is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog) .m3-toggle input[type=checkbox]{appearance:auto!important;display:block!important;position:static!important;opacity:1!important;visibility:visible!important;width:18px!important;height:18px!important;min-height:18px!important;accent-color:var(--wish-accent)!important}
+      :is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog) .m3-toggle input:before{content:none!important}
+      :is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog) .m3-fld input{min-height:38px!important;height:auto!important;font:inherit!important;background:var(--wish-card)!important;border:1px solid var(--wish-line)!important;color:var(--wish-fg)!important}
+      :is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog) :is(input,button):focus-visible{outline:2px solid var(--wish-accent-line)!important;outline-offset:2px!important;box-shadow:none!important}
+      :is(#rpcm-person-core-dialog,#rpcm-person-delete-dialog,#rpcm-person-hidden-dialog,#rpcm-person-select-dialog) .m3-btn{font-family:inherit;font-size:12px;font-weight:600;line-height:1.4;background:var(--wish-accent-soft)!important;border-color:var(--wish-accent-line)!important;color:var(--wish-accent-strong)!important;min-height:34px}
       #rpcm-modal .rpcm-ltm-auto-card{padding:20px!important}
       #rpcm-modal .rpcm-ltm-auto-card header{display:flex;align-items:center;justify-content:space-between;gap:14px;border:0!important;background:transparent!important;margin-bottom:8px}
       #rpcm-modal .rpcm-ltm-auto-card h3{font-size:17px!important;font-weight:650;margin:3px 0}
@@ -39819,22 +39853,91 @@ reason은 각 항목에서 무엇을 줄이거나 합쳤는지와 그 이유를 
     }
     return {...prepared,candidate};
   }
+  // T39: 인물정보만 상한이 다르다. 절대 상한 80만 자(Gemini 입력·응답시간 안전선), 한 번에 보내는 승인 기준은 원문×2+6만 자(6만은 추정값).
+  const AI_PERSON_ABS_LIMIT=800000;
+  const AI_PERSON_OVERFLOW_MARK='등장인물 카드가 커서 한 번에 보내면';
+  const AI_PERSON_OVERFLOW_TITLE='인물정보: 등장인물이 많아 한 번에 정리하지 못했어요';
+  const AI_PERSON_EMPTY_OUTPUT='[[WISH_PERSON_V1]]\n[[/WISH_PERSON_V1]]';
+  function aiPersonApprovalLimit(rawLength){return rawLength*2+60000;}
+  function aiPersonOverflowText(text){return String(text||'').includes(AI_PERSON_OVERFLOW_MARK);}
+  function aiPersonOverflowError(length,approval,turnCount){
+    const error=new Error(`${AI_PERSON_OVERFLOW_MARK} 비용이 더 큽니다(이번 범위 ${turnCount}턴 · 약 ${formatCount(length)}자 / 기준 ${formatCount(Math.min(approval,AI_PERSON_ABS_LIMIT))}자). 변화가 있는 인물만 골라 정리할 수 있어요. 비용은 아직 들지 않았습니다.`);
+    error.code='RPCM_PERSON_OVERFLOW';
+    return error;
+  }
+  function aiMemoryBiggestBlock(draft){
+    const size=value=>typeof value==='string'?value.length:JSON.stringify(value??'').length;
+    const blocks=[['기존 결과',size(draft.existing)],['지침',size(draft.guideText)],['새 RP 원문',(draft.sourceTurns||[]).reduce((sum,turn)=>sum+String(turn[1]).length,0)]];
+    const [name,length]=blocks.sort((a,b)=>b[1]-a[1])[0];
+    return `${name} ${formatCount(length)}자`;
+  }
+  function aiPersonSelectionParse(text,names){
+    const raw=String(text||''),start=raw.indexOf('{'),end=raw.lastIndexOf('}');
+    let data=null;
+    try{data=start>=0&&end>start?JSON.parse(raw.slice(start,end+1)):null;}catch(_){data=null;}
+    if(!data||!Array.isArray(data.changed)||!Array.isArray(data.new))throw new Error('인물 선별 응답 형식 오류: {"changed":[...],"new":[...]} JSON이 필요합니다. 2차 호출은 하지 않았습니다.');
+    const known=new Map(names.map(name=>[name.toLocaleLowerCase(),name])),changed=new Set(),added=[];
+    for(const value of data.changed){const name=known.get(String(value||'').trim().toLocaleLowerCase());if(name)changed.add(name);}
+    for(const value of data.new){const label=String(value||'').trim(),name=known.get(label.toLocaleLowerCase());if(name)changed.add(name);else if(label&&!added.includes(label))added.push(label);}
+    return {names:changed,newNames:added};
+  }
+  // 1차: 이번 범위 원문과 인물 이름만 보내 변화가 있는 인물을 고른다(카드 본문은 보내지 않는다).
+  async function aiMemoryPersonPreselect(room,fresh,provider,settings,secret,onRetry){if(!manualPersonStableIndex(room))throw new Error('인물 카드 ID가 비었거나 중복되어 골라서 정리를 쓸 수 없습니다. 수동 작업자료의 전면 재구축으로 기존 카드를 정리해 주세요. 비용은 들지 않았습니다.');
+    const names=[...new Set(manualPersonCardIndex(room).map(row=>String(row.person||'').trim()).filter(Boolean))];
+    const instruction='당신은 RP Manager의 인물 선별기입니다. [PERSON_NAMES]는 기존 인물 카드가 있는 이름이고 [NEW_RP]는 이번에 새로 쌓인 RP 원문입니다. 이번 RP에서 실제로 행동·발화·인지 변화가 있었던 기존 인물 이름은 changed에, 카드가 아직 없는 새 인물 이름은 new에 담아 JSON 객체 하나로만 출력하세요. 예: {"changed":["이름"],"new":["이름"]}. 이름은 목록 표기를 그대로 쓰고 설명·코드펜스·다른 키는 쓰지 마세요. 변화가 없으면 {"changed":[],"new":[]}.';
+    const prompt=`[PERSON_NAMES]\n${JSON.stringify(names)}\n[/PERSON_NAMES]\n\n[NEW_RP]\n${formatAiDialogueTurns(fresh)}\n[/NEW_RP]`;
+    const result=await callAiSummaryProvider(provider,settings,secret,instruction,prompt,4096,onRetry,{feature:'summary',room,allowEmptyText:false});
+    if(AI_OUTPUT_TRUNCATED_RE.test(String(result.finishReason||'')))throw new Error('인물 선별 응답이 출력 한도에서 끊겼습니다(형식 오류로 처리). 2차 호출은 하지 않았습니다.');
+    return aiPersonSelectionParse(result.text,names);
+  }
+  // 넘침 오류·알림 카드의 '인물 골라서 정리' 승인 창. 취소하면 아무것도 바뀌지 않고 비용도 없다.
+  function openAiMemoryPersonSelectDialog(room,message){
+    document.querySelector('#rpcm-person-select-dialog')?.remove();
+    const match=String(message||'').match(/이번 범위 (\d+)턴 · 약 ([\d,]+)자/),scope=match?`범위 ${match[1]}턴, 약 ${match[2]}자. `:'';
+    const backdrop=document.createElement('div');backdrop.id='rpcm-person-select-dialog';
+    backdrop.innerHTML=`<div class="rpcm-person-dialog-card m3-ui" role="dialog" aria-modal="true" aria-label="인물 골라서 정리"><div class="m3-sheet"><header><div class="m3-t"><b>인물 카드가 너무 커서 한 번에 보낼 수 없습니다</b><small>비용은 아직 들지 않았습니다.</small></div><button type="button" class="m3-btn" data-person-select-close aria-label="닫기" data-rpcm-close="icon">×</button></header><div class="m3-dialog-body"><p>${esc(scope)}API를 한 번 더 불러 이번 RP에서 실제로 행동·발화·인지 변화가 있었던 인물만 고른 뒤 그 인물 카드만 정리합니다. 고르지 않은 인물 카드는 그대로 유지됩니다. (이번 회차 호출 2회)</p></div><footer><button type="button" class="m3-btn" data-person-select-cancel title="아무것도 바꾸지 않고 닫습니다. 비용은 들지 않습니다.">취소</button><button type="button" class="m3-btn primary" data-person-select-confirm title="API를 2번 호출해 변화가 있는 인물만 정리합니다.">골라서 정리</button></footer></div></div>`;
+    const close=()=>backdrop.remove();
+    backdrop.querySelector('[data-person-select-close]').onclick=close;
+    backdrop.querySelector('[data-person-select-cancel]').onclick=close;
+    backdrop.onclick=event=>{if(event.target===backdrop)close();};
+    backdrop.onkeydown=event=>{if(event.key==='Escape')close();};
+    backdrop.querySelector('[data-person-select-confirm]').onclick=async()=>{
+      close();
+      if(state.currentRoom!==room)return;
+      notify('인물 선별을 시작합니다. API를 2번 호출합니다.','info');
+      try{await aiMemoryGenerateSplit(room,'personInfo',{force:true,personSelect:true});}
+      catch(error){notify(`AI 기억정리 실패: ${error.message}`,'error',6500);}
+    };
+    document.body.appendChild(backdrop);
+  }
   async function aiMemoryPacketPlan(room,area,turns,options={}) {
+    const person=area==='personInfo',limit=person?AI_PERSON_ABS_LIMIT:120000;
+    const {startIndex,maxEnd}=aiMemoryPlanBounds(room,area,turns,options);
+    let bundle=null,endIndex=maxEnd,last=null;
+    for(;endIndex>=startIndex;endIndex--){
+      try{
+        const candidate=await buildManualUpdatePacket(room,AI_MEMORY_AREAS[area].manual,'standalone',{mode:'custom',startKey:turns[startIndex].key,endKey:turns[endIndex].key,loadedTurns:turns,dryRun:true,aiMemoryFocus:true,priorCheckpoint:aiMemoryIgnoredManualAnchor(room,area),...(person?{packetLimit:options.personSelection?AI_PERSON_ABS_LIMIT:Infinity,personSelection:options.personSelection||null}:{})});
+        last=candidate;
+        const length=candidate.draft.packet.length;
+        // 인물정보: 한 번에 보내는 패킷이 승인 기준을 넘으면 보내지 않는다(API 호출 전 로컬 검사). 턴을 줄이면 기준이 더 빨리 줄어 소용없어 바로 알린다.
+        if(person&&!options.personSelection){
+          const approval=aiPersonApprovalLimit(formatAiDialogueTurns(turns.slice(startIndex,endIndex+1)).length);
+          if(length>approval)throw aiPersonOverflowError(length,approval,endIndex-startIndex+1);
+        }
+        if(length>limit)continue;
+        bundle=candidate;break;
+      }catch(error){if(error.code!=='RPCM_FULL_SPLIT_REQUIRED'&&!/안전 표시 한도/.test(error.message))throw error;}
+    }
+    if(!bundle&&person&&!options.personSelection&&last)throw aiPersonOverflowError(last.draft.packet.length,limit,1);
+    if(!bundle)throw new Error(`한 턴 또는 지침·기존 결과가 API 안전 입력량을 넘습니다${last?` (1턴 ${formatCount(last.draft.packet.length)}자 / 상한 ${formatCount(limit)}자 · 가장 큰 항목: ${aiMemoryBiggestBlock(last.draft)})`:''}. 수동 작업자료의 전면 재구축으로 기존 결과를 압축해 주세요.`);
+    return {startIndex,endIndex,bundle};
+  }
+  function aiMemoryPlanBounds(room,area,turns,options={}) {
     const row=aiMemoryConfig(room).areas[area];
     const pending=aiMemoryPending(room,area,turns);
     const startIndex=options.force ? Math.max(0,Number(options.startIndex??pending.index+1)) : pending.index+1;
     if(startIndex>=turns.length)throw new Error('기준점 이후 완료된 새 RP 턴이 없습니다. 이전 범위 재검토는 수동 업데이트의 범위 지정을 사용하세요.');
-    const maxEnd=Math.min(turns.length-1,startIndex+Math.max(row.interval,1)-1,options.endLimit??Infinity);
-    let bundle=null,endIndex=maxEnd;
-    for(;endIndex>=startIndex;endIndex--){
-      try{
-        const candidate=await buildManualUpdatePacket(room,AI_MEMORY_AREAS[area].manual,'standalone',{mode:'custom',startKey:turns[startIndex].key,endKey:turns[endIndex].key,loadedTurns:turns,dryRun:true,aiMemoryFocus:true,priorCheckpoint:aiMemoryIgnoredManualAnchor(room,area)});
-        if(candidate.draft.packet.length>120000)continue;
-        bundle=candidate;break;
-      }catch(error){if(error.code!=='RPCM_FULL_SPLIT_REQUIRED'&&!/안전 표시 한도/.test(error.message))throw error;}
-    }
-    if(!bundle)throw new Error('한 턴 또는 지침·기존 결과가 API 안전 입력량을 넘습니다. 수동 작업자료 범위를 사용해 주세요.');
-    return {startIndex,endIndex,bundle};
+    return {startIndex,maxEnd:Math.min(turns.length-1,startIndex+Math.max(row.interval,1)-1,options.endLimit??Infinity)};
   }
   const RPCM_REF_MEMORY_CACHE_INDEX_KEY='RPCM_RUNTIME_REF_MEMORY_CACHE_INDEX_V1';
   const RPCM_REF_MEMORY_CACHE_DATA_PREFIX='RPCM_RUNTIME_REF_MEMORY_CACHE_V1:';
@@ -40178,6 +40281,30 @@ reason은 각 항목에서 무엇을 줄이거나 합쳤는지와 그 이유를 
   }
   // T28 끝: 교정 저장 합치기
 
+  // 0.17.97.40: 출력이 한도에서 끊긴 단독 영역은 초안을 저장하지 않고, 범위를 절반(최소 1턴)으로 줄여 다시 정리하도록 분할 오류를 돌려준다. 최대 2회.
+  function aiMemorySplitError(truncated,pairedArea,startIndex,endIndex,options) {
+    const count=endIndex-startIndex+1,half=Math.floor(count/2);
+    if(!truncated||pairedArea||count<2||(options.splitDepth||0)>=2)return null;
+    const error=new Error(`출력이 길어 범위를 ${half}턴으로 줄여 다시 정리합니다.`);
+    error.code='RPCM_AI_OUTPUT_SPLIT';error.splitEnd=startIndex+half-1;
+    return error;
+  }
+  async function aiMemoryGenerateSplit(room,area,options={}) {
+    try{return await aiMemoryGenerate(room,area,options);}
+    catch(error){
+      if(error?.code!=='RPCM_AI_OUTPUT_SPLIT')throw error;
+      notify(error.message,'info');
+      // 앞 범위에서 고른 '새 인물' 힌트가 줄어든 범위에 섞이지 않도록 인물 선별은 줄어든 범위로 다시 한다.
+      const {personSelection,...rest}=options;
+      try{return await aiMemoryGenerateSplit(room,area,{...rest,endLimit:error.splitEnd,splitDepth:(options.splitDepth||0)+1});}
+      catch(retryError){
+        // 재시도 직전 검사(저장 중·방 변경 등)는 생성 함수의 기록 구간 밖에서 던져 상태가 '생성 중'으로 남는다. 실패를 행에 남긴다.
+        const row=aiMemoryConfig(room)?.areas?.[area];
+        if(row&&!row.draft&&row.status!=='실패'&&row.status!=='기준점 확인 필요'){row.status='실패';row.error=String(retryError.message||retryError);}
+        throw retryError;
+      }
+    }
+  }
   async function aiMemoryGenerate(room,area,options={}) {
     if(areaResetPaused(room))throw new Error('영역 초기화 창을 닫은 뒤 다시 시도해 주세요.');
     if(!AI_MEMORY_AREAS[area])throw new Error('알 수 없는 기억 항목입니다.');
@@ -40208,6 +40335,14 @@ reason은 각 항목에서 무엇을 줄이거나 합쳤는지와 그 이유를 
       const turns=options.force?allTurns:settled;
       if(options.force&&turns.length!==settled.length)notify('응답교정 확인 전인 RP를 명시한 수동 실행에 사용합니다.','warn');
       if(!turns.length)throw new Error('완료된 USER+AI 턴이 없습니다.');
+      if(options.personSelect&&area==='personInfo'&&!options.personSelection){
+        // T39 1차: 이번 범위 원문과 인물 이름만 보내 변화가 있는 인물을 고른다. 2차 패킷은 선택된 인물 카드만 싣는다.
+        const bounds=aiMemoryPlanBounds(room,area,turns,options);
+        row.status='인물 선별 중';aiMemoryRefreshStatusUi(room);
+        const selection=await aiMemoryPersonPreselect(room,turns.slice(bounds.startIndex,bounds.maxEnd+1),provider,settings,secret,message=>{row.status=message;});
+        if(state.currentRoom!==room)throw new Error('선별 중 방이 바뀌었습니다. 결과를 저장하지 않았습니다.');
+        options={...options,personSelection:selection};
+      }
       const {startIndex,endIndex,bundle}=await aiMemoryPacketPlan(room,area,turns,options);
       if(options.pairArea && AI_MEMORY_AREAS[area].manual==='currentItems' && AI_MEMORY_AREAS[options.pairArea]?.manual==='currentItems'){
         const other=aiMemoryConfig(room).areas[options.pairArea];
@@ -40243,14 +40378,17 @@ reason은 각 항목에서 무엇을 줄이거나 합쳤는지와 그 이유를 
         }
       };
       checkAttemptPolicy();
-      for(const key of targets){const target=aiMemoryConfig(room).areas[key];if(!options.force&&aiMemoryReadyCount(room,key,turns)<target.interval)throw new Error('자동 생성 주기가 바뀌었습니다. 다음 수집 주기에 다시 확인합니다.');}
+      for(const key of targets){const target=aiMemoryConfig(room).areas[key];if(!options.force&&!options.splitDepth&&aiMemoryReadyCount(room,key,turns)<target.interval)throw new Error('자동 생성 주기가 바뀌었습니다. 다음 수집 주기에 다시 확인합니다.');}
       for(const key of targets)aiMemoryConfig(room).areas[key].lastAttemptKey=aiMemoryStableTurnKey(turns.at(-1));
       await saveRoom(room);
       checkAttemptPolicy();
       row.status='API 생성 중';aiMemoryRefreshStatusUi(room);
-      const result=await callAiSummaryProvider(provider,settings,secret,instruction,bundle.draft.packet,16384,message=>{for(const key of targets)aiMemoryConfig(room).areas[key].status=message;},{feature:area==='timeline'?'timeline':'summary',room,allowEmptyText:false});
+      // 선별 결과 changed·new가 모두 비면 2차 호출 없이 '변경 없음' 출력으로 기존 검토 흐름(변경 없음·검토 완료)에 넘긴다.
+      const result=options.personSelection&&!options.personSelection.names.size&&!options.personSelection.newNames.length?{text:AI_PERSON_EMPTY_OUTPUT,finishReason:'stop',model,usage:null}:await callAiSummaryProvider(provider,settings,secret,instruction,bundle.draft.packet,16384,message=>{for(const key of targets)aiMemoryConfig(room).areas[key].status=message;},{feature:area==='timeline'?'timeline':'summary',room,allowEmptyText:false});
       if(state.currentRoom!==room)throw new Error('생성 중 방이 바뀌었습니다. 결과를 저장하지 않았습니다.');
       const truncated=AI_OUTPUT_TRUNCATED_RE.test(String(result.finishReason||''))?'AI 출력이 출력 한도에서 끊겼습니다. 뒷부분이 없습니다.':'';
+      const splitError=aiMemorySplitError(truncated,pairedArea,startIndex,endIndex,options);
+      if(splitError)throw splitError;
       let combined=null,broken=truncated;
       if(pairedArea&&!broken)try{combined=aiMemoryOutputValues(area,result.text);}catch(error){broken=String(error.message||error);}
       const sharedCallId=pairedArea?`currentItems_${Date.now()}_${Math.random().toString(36).slice(2)}`:'';
@@ -40281,7 +40419,7 @@ reason은 각 항목에서 무엇을 줄이거나 합쳤는지와 그 이유를 
       if(waiting.length)aiMemoryAnnounceDrafts(room,waiting);
       if(!accepted.length)throw rejected[0]?.error||new Error('AI 초안 검증 실패');
       return accepted.find(draft=>draft.area===area)||accepted[0];
-    }catch(error){const current=aiMemoryConfig(room).areas[area];if(!current.draft){if(error?.code==='RPCM_AI_ANCHOR_UNVERIFIED'){
+    }catch(error){const current=aiMemoryConfig(room).areas[area];if(!current.draft&&error?.code!=='RPCM_AI_OUTPUT_SPLIT'){if(error?.code==='RPCM_AI_ANCHOR_UNVERIFIED'){
         current.status='기준점 확인 필요';current.error=String(error.message||error);
       }else{current.status='실패';current.error=String(error.message||error);current.failedEnd=String((aiMemoryRuntime.lastCounts.get(String(room.chatId))||{}).lastKey||current.failedEnd||'');}}if(pairedRow&&!pairedRow.draft&&pairedRow.status!=='실패'){pairedRow.status='대기';pairedRow.plannedStart='';pairedRow.plannedEnd='';}try{if(state.currentRoom===room)await saveRoom(room);}catch(_){}aiMemoryRefreshStatusUi(room);throw error;}
     finally{aiMemoryRuntime.busy=false;aiMemoryRuntime.roomId='';}
@@ -40328,7 +40466,7 @@ reason은 각 항목에서 무엇을 줄이거나 합쳤는지와 그 이유를 
         const peer=area==='currentState'?'importantItems':area==='importantItems'?'currentState':'';
         const peerRow=peer&&aiMemoryConfig(room).areas[peer];
         const pairArea=peerRow?.enabled&&!peerRow.draft&&peerRow.failedEnd!==counts.lastKey&&aiMemoryReadyCount(room,peer,turns)>=peerRow.interval&&aiMemoryAnchorReadyForAutomation(room,peer)?peer:'';
-        await aiMemoryGenerate(room,area,pairArea?{pairArea}:{});
+        await aiMemoryGenerateSplit(room,area,pairArea?{pairArea}:{});
         break;
       }
       aiMemoryRefreshStatusUi(room);
@@ -40384,9 +40522,10 @@ reason은 각 항목에서 무엇을 줄이거나 합쳤는지와 그 이유를 
           if(!turns.length)continue;
           const entry={area,turns,...await aiMemoryPacketPlan(room,area,turns)};
           const size=()=>{const q=aiBundleRequest([...entries,entry]);return q.prompt.length+q.instruction.length;};
+          const bundleLimit=[...entries,entry].every(item=>item.area==='personInfo')?Infinity:AI_BUNDLE_LIMIT; // 인물정보만이면 계획 단계 상한(승인 기준·80만)을 따른다
           // 첫 항목만 RP 범위를 줄여 맞춘다(지침·기존 자료는 줄이지 않는다). 뒤 항목은 전체 범위로 안 들어가면 다음 주기로 미뤄 짧은 범위 반복을 막는다.
-          while(!entries.length&&size()>AI_BUNDLE_LIMIT&&entry.endIndex>entry.startIndex)Object.assign(entry,await aiMemoryPacketPlan(room,area,turns,{endLimit:entry.endIndex-1}));
-          if(size()>AI_BUNDLE_LIMIT){if(entries.length)continue;throw new Error(`${AI_MEMORY_AREAS[area].label}: 한 턴·지침·기존 자료가 API 안전 입력량을 넘습니다. 수동 범위로 정리해 주세요.`);}
+          while(!entries.length&&size()>bundleLimit&&entry.endIndex>entry.startIndex)Object.assign(entry,await aiMemoryPacketPlan(room,area,turns,{endLimit:entry.endIndex-1}));
+          if(size()>bundleLimit){if(entries.length)continue;throw new Error(`${AI_MEMORY_AREAS[area].label}: 한 턴·지침·기존 자료가 API 안전 입력량을 넘습니다. 수동 범위로 정리해 주세요.`);}
           entries.push(entry);
         }catch(error){failedAreas.set(area,error);}
       }
@@ -40399,7 +40538,7 @@ reason은 각 항목에서 무엇을 줄이거나 합쳤는지와 그 이유를 
         handedOff=true;aiMemoryRuntime.busy=false;aiMemoryRuntime.roomId='';
         const peer=entries.find(entry=>entry.area==='importantItems');
         if(force&&options.stats)options.stats.requests++;
-        return await aiMemoryGenerate(room,entries[0].area,{...(entries[0].area==='currentState'&&peer?{pairArea:'importantItems'}:{}),...(force?{force:true}:{})});
+        return await aiMemoryGenerateSplit(room,entries[0].area,{...(entries[0].area==='currentState'&&peer?{pairArea:'importantItems'}:{}),...(force?{force:true}:{})});
       }
       // 준비 턴 수는 시도 기준점(lastAttemptKey) 갱신 전에 한 번만 센다. 갱신 뒤 다시 세면 0턴으로 오판한다.
       const readyAtPlan=new Map(entries.map(({area,turns})=>[area,aiMemoryReadyCount(room,area,turns)]));
@@ -40766,7 +40905,7 @@ reason은 각 항목에서 무엇을 줄이거나 합쳤는지와 그 이유를 
       if(noChange){if(room.pending)candidate.pending=structuredClone(room.pending);if(area==='personInfo')candidate.personLastImportSummary=room.personLastImportSummary;}
       target.checkedSourceHash=String(source.sourceHash||'');target.checkedResultHash=await longTermHash(aiMemoryAreaSnapshot(candidate,area));
       if(source.endAnchorEvidence){candidate.aiMemorySourceAnchors||={};candidate.aiMemorySourceAnchors[area]=structuredClone(source.endAnchorEvidence);}
-      target.cursor=draft.endKey;target.lastAttemptKey=String(row.lastAttemptKey||draft.endKey);target.failedEnd='';target.lastCheckedStart=draft.startKey;target.lastCheckedEnd=draft.endKey;target.checkedAt=nowIso();if(!noChange){target.lastAppliedStart=draft.startKey;target.lastAppliedEnd=draft.endKey;target.appliedAt=target.checkedAt;}target.lastCheckNoChange=noChange;target.draft=null;target.status=noChange?'변경 없음 · 검토 완료':automatic?'자동 반영 완료':'적용 완료';target.autoApplyError='';target.error='';target.plannedStart='';target.plannedEnd='';
+      target.cursor=draft.endKey;target.lastAttemptKey=String(draft.endKey);target.failedEnd='';target.lastCheckedStart=draft.startKey;target.lastCheckedEnd=draft.endKey;target.checkedAt=nowIso();if(!noChange){target.lastAppliedStart=draft.startKey;target.lastAppliedEnd=draft.endKey;target.appliedAt=target.checkedAt;}target.lastCheckNoChange=noChange;target.draft=null;target.status=noChange?'변경 없음 · 검토 완료':automatic?'자동 반영 완료':'적용 완료';target.autoApplyError='';target.error='';target.plannedStart='';target.plannedEnd='';
       timer.begin('receipt');
       if(!noChange)await rpcmAttachBranchReceipt(candidate,room,area,source.historyPrefix,'ai-memory');
       candidate.updatedAt=nowIso();
@@ -41118,7 +41257,7 @@ reason은 각 항목에서 무엇을 줄이거나 합쳤는지와 그 이유를 
       try{await saveRoom(room);}
       catch(error){row.interval=previous;input.value=String(previous);notify('자동 정리 주기 저장 실패: '+error.message,'error');}
     })));
-    overlay.querySelectorAll('[data-ai-memory-run]').forEach(button=>button.addEventListener('click',async()=>{button.disabled=true;try{const area=button.dataset.aiMemoryRun,row=aiMemoryConfig(room).areas[area];if(row.draft&&!confirm('기존 미적용 초안을 버리고 새로 생성할까요?'))return;await aiMemoryGenerate(room,area,{force:true,replaceDraft:true});}catch(error){notify(`AI 기억정리 실패: ${error.message}`,'error',6500);}finally{if(button.isConnected)button.disabled=false;}}));
+    overlay.querySelectorAll('[data-ai-memory-run]').forEach(button=>button.addEventListener('click',async()=>{button.disabled=true;try{const area=button.dataset.aiMemoryRun,row=aiMemoryConfig(room).areas[area];if(row.draft&&!confirm('기존 미적용 초안을 버리고 새로 생성할까요?'))return;await aiMemoryGenerateSplit(room,area,{force:true,replaceDraft:true});}catch(error){if(error.code==='RPCM_PERSON_OVERFLOW'){openAiMemoryPersonSelectDialog(room,error.message);return;}notify(`AI 기억정리 실패: ${error.message}`,'error',6500);}finally{if(button.isConnected)button.disabled=false;}}));
     overlay.querySelectorAll('[data-ai-bundle-interval]').forEach(input=>input.addEventListener('change',()=>savePolicyControl(async()=>{
       const rows=AI_MEMORY_BUNDLE_GROUPS[input.dataset.aiBundleInterval].areas.map(area=>aiMemoryConfig(room).areas[area]),value=Number(input.value),previous=rows.map(row=>row.interval);
       if(!Number.isInteger(value)||value<1||value>100){notify('주기는 1~100 완료 턴으로 지정해 주세요.','warn');return;}
@@ -44905,6 +45044,7 @@ reason은 각 항목에서 무엇을 줄이거나 합쳤는지와 그 이유를 
     hooks:{label:'약속·갈등·진행 중 후크',stage:6,rule:'Check materially relevant active promises/plans/contracts/missions/goals and unresolved hooks/conflicts. Flag behavior requiring these to have vanished, been resolved or rolled back without an event. Do not force reminders of every hook; interpretive arc changes are CONTINUITY_DRIFT.'},
     loreItems:{label:'자료집·물품 등 현재값',stage:7,rule:'Use relevant world/item/outfit/place/organization reference values, respecting newer direct RP and Current State. Old date logs and long-term memories are past callbacks, not authority to revive superseded values. Repair only confirmed current-value contradictions.'},
   });
+  const REVIEW_INTERPRETIVE_CATEGORIES = ['relationships','character','hooks'];
   const REVIEW_VERDICTS = Object.freeze(['PASS','RESPONSE_ERROR','CONTINUITY_DRIFT','MEMORY_STALE','AMBIGUOUS']);
   const REVIEW_VERDICT_LABELS = Object.freeze({PASS:'문제 없음',RESPONSE_ERROR:'응답 오류',CONTINUITY_DRIFT:'연속성 이탈 · 검토 필요',MEMORY_STALE:'저장 기억 검토 필요',AMBIGUOUS:'근거 불충분'});
   function normalizeReviewTopics(value,legacyUserCheck=true){
@@ -46427,7 +46567,7 @@ async function rpcmRefinerRawMessagesOnce(limit = 20, readOptions = null) {
       if(category!=='legacy'&&!REVIEW_TOPICS[category])throw new Error('알 수 없는 검사 항목이 반환되었습니다.');
       const verdict=raw==='CONTINUITY_DRIFT'&&!item?.verdict?'CONTINUITY_DRIFT':String(item?.verdict||raw).toUpperCase();
       if(!['RESPONSE_ERROR','CONTINUITY_DRIFT'].includes(verdict))throw new Error('수정 항목의 판정이 올바르지 않습니다.');
-      const interpretive=['relationships','character','hooks'].includes(category)||item?.severity==='interpretive';
+      const interpretive=REVIEW_INTERPRETIVE_CATEGORIES.includes(category)||item?.severity==='interpretive';
       return {
         category,verdict:interpretive?'CONTINUITY_DRIFT':verdict,severity:interpretive?'interpretive':item?.severity==='confirmed'?'confirmed':'unconfirmed',
         reason:String(item?.reason||value.reason||'교정 필요'),evidence:String(item?.evidence||value.evidence||''),
@@ -46453,7 +46593,7 @@ async function rpcmRefinerRawMessagesOnce(limit = 20, readOptions = null) {
     if(result.replacements.some(x=>x.verdict==='CONTINUITY_DRIFT'))result.verdict='CONTINUITY_DRIFT';
     // Legacy full text remains a manual proposal, never an automatic replacement.
     if(!legacy||!enabledReviewTopics(config).length)delete result.refined_text;
-    if(!result.replacements.length&&!result.refined_text&&!(raw==='CONTINUITY_DRIFT'&&enabledReviewTopics(config).some(key=>['relationships','character','hooks'].includes(key)))){result.verdict='PASS';result.reason='선택한 검사 항목에 적용할 수정이 없습니다.';}
+    if(!result.replacements.length&&!result.refined_text&&!(raw==='CONTINUITY_DRIFT'&&enabledReviewTopics(config).some(key=>REVIEW_INTERPRETIVE_CATEGORIES.includes(key)))){result.verdict='PASS';result.reason='선택한 검사 항목에 적용할 수정이 없습니다.';}
     return result;
   }
   function validateReviewUnits(original,parsed,config=settings){
@@ -46736,6 +46876,13 @@ async function rpcmRefinerRawMessagesOnce(limit = 20, readOptions = null) {
       groups.get(key).units.push(unit);
     }
     return [...groups.values()].sort((a,b)=>Math.min(...a.units.map(x=>x.start))-Math.min(...b.units.map(x=>x.start)));
+  }
+  // 제안창 항목의 기본 체크. 관계·캐릭터·후크는 해석 영역이라 직접 확인하도록 끄고, 사실·말투 등은 AI가 연속성 이탈로 표시해도 켠다.
+  // 카테고리를 알 수 없는 옛 형식(legacy)은 기존 규칙(연속성 이탈이면 끔)을 유지한다. 자동 적용 판정과는 무관하다.
+  function correctionDefaultChecked(group,overallVerdict) {
+    if(REVIEW_INTERPRETIVE_CATEGORIES.includes(group.category))return false;
+    if(group.category==='legacy')return group.verdict!=='CONTINUITY_DRIFT'&&(group.verdict||overallVerdict)!=='CONTINUITY_DRIFT';
+    return true;
   }
   function reindexCorrectionGroups(groups) {
     const issues=(Array.isArray(groups)?groups:[]).map((group,index)=>{
@@ -47706,7 +47853,7 @@ async function rpcmRefinerRawMessagesOnce(limit = 20, readOptions = null) {
         <input data-policy hidden aria-label="교정 예외 적용 범위" placeholder="허용할 표현과 적용할 장면을 직접 입력하세요"></div>
         <footer class="rr-confirm-foot"><div class="rr-foot-note"><span data-selection-count></span><span>같은 오류에 묶인 변경은 함께 적용됩니다.</span></div><div class="rr-confirm-actions"><button data-act="keep">원본 유지</button><button data-act="memory">기억 오류로 표시</button><button data-act="review" hidden>최신 응답 다시 검수</button><button data-act="copy">교정본 복사</button><button data-act="manual">직접 수정</button><button data-act="apply" class="rr-primary">선택한 수정 적용</button></div></footer>`;
       box.querySelector('[data-reason]').textContent=reason;
-      box.querySelector('[data-verdict]').textContent=(REVIEW_VERDICT_LABELS[parsed?.verdict]||'교정 제안')+(parsed?.verdict==='CONTINUITY_DRIFT'?' · 연속성 수정은 직접 확인 후 선택하세요.':'');
+      box.querySelector('[data-verdict]').textContent=(REVIEW_VERDICT_LABELS[parsed?.verdict]||'교정 제안')+(parsed?.verdict==='CONTINUITY_DRIFT'?' · 관계·캐릭터·후크 등 해석 수정은 직접 확인 후 선택하세요.':'');
       const reviewChatId=getChatId();
       let groups=[],units=[],checks=[],selectionTouched=false,autoOffLayer=null;
       const list=box.querySelector('[data-changes]'),preview=box.querySelector('[data-change-preview]'),manualWrap=box.querySelector('[data-manual-editor-wrap]'),ta=box.querySelector('[data-manual-editor]'),manualBtn=box.querySelector('[data-act="manual"]'),apply=box.querySelector('[data-act="apply"]'),allBtn=box.querySelector('[data-act="all"]');
@@ -47727,7 +47874,7 @@ async function rpcmRefinerRawMessagesOnce(limit = 20, readOptions = null) {
           renderCorrectionComparison(compare,unit.from,unit.to);host.append(compare);
         });
         card.querySelector('details p').textContent=[group.evidenceSource,group.evidence||parsed?.evidence||'근거 출처가 제공되지 않았습니다. 원문과 저장 기억을 직접 확인해 주세요.'].filter(Boolean).join('\n');
-        const check=card.querySelector('input');check.checked=selected?!!selected[index]:group.verdict!=='CONTINUITY_DRIFT'&&(group.verdict||parsed?.verdict)!=='CONTINUITY_DRIFT';check.onchange=()=>{selectionTouched=true;renderSelection();};list.append(card);return check;
+        const check=card.querySelector('input');check.checked=selected?!!selected[index]:correctionDefaultChecked(group,parsed?.verdict);check.onchange=()=>{selectionTouched=true;renderSelection();};list.append(card);return check;
       });
       box.querySelector('[data-total-count]').textContent=`수정 이슈 ${groups.length}개 · 실제 변경 ${units.length}개`;
       if(!groups.length){const empty=document.createElement('p');empty.className='rr-empty-changes';empty.textContent='자동으로 적용할 수정 구간을 찾지 못했습니다. 판정 근거를 확인하거나 직접 수정 모드를 사용할 수 있습니다.';list.append(empty);}
@@ -47859,7 +48006,7 @@ async function rpcmRefinerRawMessagesOnce(limit = 20, readOptions = null) {
         finally{busy=false;if(!closed){controls.forEach((node,index)=>node.disabled=disabled[index]);button.textContent=label;setIssueSelectionLocked(editMode);updateApplyState();}}
       };
       box.querySelector('[data-act="keep"]').onclick=()=>keep(false);box.querySelector('[data-act="memory"]').onclick=()=>keep(true);
-      // 사용자가 이슈 선택을 건드리지 않았는데 연속성 이탈 등으로 자동 해제된 이슈가 있으면 적용 전에 한 번 알린다.
+      // 사용자가 이슈 선택을 건드리지 않았는데 관계·캐릭터·후크 등으로 자동 해제된 이슈가 있으면 적용 전에 한 번 알린다.
       const confirmAutoOffApply=count=>new Promise(resolve=>{
         const layer=document.createElement('div'),dlg=document.createElement('div');autoOffLayer=layer;
         layer.style.cssText='position:absolute;inset:0;z-index:5;display:flex;align-items:center;justify-content:center;padding:16px;background:var(--rr-scrim)';
